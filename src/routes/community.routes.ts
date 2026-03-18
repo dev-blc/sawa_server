@@ -2,12 +2,14 @@ import { Router } from 'express';
 import { authenticate } from '../middleware/authenticate';
 import { asyncHandler } from '../utils/asyncHandler';
 import {
-  listCommunities,
+  getAllCommunities,
+  getMyCommunities,
   createCommunity,
-  getCommunity,
+  getCommunityDetail,
   joinCommunity,
   leaveCommunity,
-  myCommunities,
+  validateCreateCommunity,
+  validateJoinCommunity,
 } from '../controllers/community.controller';
 
 const router = Router();
@@ -15,19 +17,19 @@ const router = Router();
 router.use(authenticate);
 
 // GET /api/v1/communities
-router.get('/', asyncHandler(listCommunities));
+router.get('/', asyncHandler(getAllCommunities));
 
 // GET /api/v1/communities/mine
-router.get('/mine', asyncHandler(myCommunities));
+router.get('/mine', asyncHandler(getMyCommunities));
 
 // POST /api/v1/communities
-router.post('/', asyncHandler(createCommunity));
+router.post('/', validateCreateCommunity, asyncHandler(createCommunity));
 
 // GET /api/v1/communities/:id
-router.get('/:id', asyncHandler(getCommunity));
+router.get('/:id', asyncHandler(getCommunityDetail));
 
 // POST /api/v1/communities/:id/join
-router.post('/:id/join', asyncHandler(joinCommunity));
+router.post('/:id/join', validateJoinCommunity, asyncHandler(joinCommunity));
 
 // POST /api/v1/communities/:id/leave
 router.post('/:id/leave', asyncHandler(leaveCommunity));

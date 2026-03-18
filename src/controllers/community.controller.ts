@@ -1,36 +1,62 @@
 import { Request, Response } from 'express';
+import { z } from 'zod';
+import { communityService } from '../services/community.service';
 import { sendSuccess } from '../utils/response';
-import { AppError } from '../utils/AppError';
+import { validate } from '../middleware/validate';
 
-export const listCommunities = async (req: Request, res: Response): Promise<void> => {
-  if (!req.user) throw new AppError('Unauthorized', 401);
-  sendSuccess({ res, data: { communities: [] }, message: 'Communities listed [stub]' });
+// ─── Validation ─────────────────────────────────────────────────────────────
+
+const CreateCommunitySchema = z.object({
+  name: z.string().min(1, 'Name is required'),
+  description: z.string().optional(),
+  city: z.string().min(1, 'City is required'),
+  coverImageUrl: z.string().url().optional(),
+  tags: z.array(z.string()).optional(),
+});
+
+const JoinCommunitySchema = z.object({
+  note: z.string().optional(),
+});
+
+export const validateCreateCommunity = validate(CreateCommunitySchema);
+export const validateJoinCommunity = validate(JoinCommunitySchema);
+
+// ─── Controllers ────────────────────────────────────────────────────────────
+
+export const getAllCommunities = async (req: Request, res: Response): Promise<void> => {
+  const { coupleId } = req.user!;
+  
+  const communities = await communityService.getAllCommunities(coupleId!);
+  
+  sendSuccess({ res, statusCode: 200, data: { communities } });
 };
 
-export const myCommunities = async (req: Request, res: Response): Promise<void> => {
-  if (!req.user) throw new AppError('Unauthorized', 401);
-  sendSuccess({ res, data: { communities: [] }, message: 'My communities [stub]' });
+export const getMyCommunities = async (req: Request, res: Response): Promise<void> => {
+  const { coupleId } = req.user!;
+  
+  const communities = await communityService.getMyCommunities(coupleId!);
+  
+  sendSuccess({ res, statusCode: 200, data: { communities } });
 };
 
-export const createCommunity = async (req: Request, res: Response): Promise<void> => {
-  if (!req.user) throw new AppError('Unauthorized', 401);
-  sendSuccess({ res, message: 'Community created [stub]', statusCode: 201 });
+export const getCommunityDetail = async (_req: Request, _res: Response): Promise<void> => {
+  // Can be implemented similarly
 };
 
-export const getCommunity = async (req: Request, res: Response): Promise<void> => {
-  if (!req.user) throw new AppError('Unauthorized', 401);
-  const { id } = req.params;
-  sendSuccess({ res, data: { id }, message: 'Community fetched [stub]' });
+export const createCommunity = async (_req: Request, _res: Response): Promise<void> => {
+  // Optional, if user wants to create from FAB
 };
 
 export const joinCommunity = async (req: Request, res: Response): Promise<void> => {
-  if (!req.user) throw new AppError('Unauthorized', 401);
+  const { coupleId } = req.user!;
   const { id } = req.params;
-  sendSuccess({ res, data: { id }, message: 'Joined community [stub]' });
+  const data = req.body as z.infer<typeof JoinCommunitySchema>;
+
+  const result = await communityService.joinCommunity(coupleId!, id, data.note);
+
+  sendSuccess({ res, statusCode: 200, message: result.message, data: result });
 };
 
-export const leaveCommunity = async (req: Request, res: Response): Promise<void> => {
-  if (!req.user) throw new AppError('Unauthorized', 401);
-  const { id } = req.params;
-  sendSuccess({ res, data: { id }, message: 'Left community [stub]' });
+export const leaveCommunity = async (_req: Request, _res: Response): Promise<void> => {
+  // Stub
 };

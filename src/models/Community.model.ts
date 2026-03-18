@@ -3,32 +3,30 @@ import mongoose, { Schema, Document, Types } from 'mongoose';
 export interface ICommunity extends Document {
   name: string;
   description?: string;
-  coverImageUrl?: string;
-  members: Types.ObjectId[];
-  admins: Types.ObjectId[];
-  isPrivate: boolean;
+  city: string;
+  coverImageUrl: string;
+  members: Types.ObjectId[]; // ref: Couple
+  admins: Types.ObjectId[]; // ref: Couple
+  joinRequests: Types.ObjectId[]; // ref: Couple (pending requests)
   maxMembers: number;
   tags: string[];
-  createdBy: Types.ObjectId;
   createdAt: Date;
   updatedAt: Date;
 }
 
 const CommunitySchema = new Schema<ICommunity>(
   {
-    name: { type: String, required: true, trim: true, maxlength: 100 },
-    description: { type: String, trim: true, maxlength: 500 },
+    name: { type: String, required: true, trim: true },
+    description: { type: String, trim: true },
+    city: { type: String, required: true },
     coverImageUrl: { type: String },
     members: [{ type: Schema.Types.ObjectId, ref: 'Couple' }],
     admins: [{ type: Schema.Types.ObjectId, ref: 'Couple' }],
-    isPrivate: { type: Boolean, default: false },
+    joinRequests: [{ type: Schema.Types.ObjectId, ref: 'Couple' }],
     maxMembers: { type: Number, default: 50 },
-    tags: [{ type: String, lowercase: true, trim: true }],
-    createdBy: { type: Schema.Types.ObjectId, ref: 'Couple', required: true },
+    tags: [{ type: String }],
   },
-  { timestamps: true },
+  { timestamps: true }
 );
-
-CommunitySchema.index({ tags: 1 });
 
 export const Community = mongoose.model<ICommunity>('Community', CommunitySchema);
