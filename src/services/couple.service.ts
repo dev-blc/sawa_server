@@ -76,21 +76,16 @@ export class CoupleService {
       throw new AppError('Couple not found (setup profile first)', 404);
     }
 
-    // Pretend we uploaded Base64 to a CDN and got back URLs
-    const primaryUrl = data.primaryPhotoBase64
-      ? 'https://picsum.photos/seed/' + coupleId + '-primary/800/800'
-      : undefined;
-
-    const secondaryUrls = (data.secondaryPhotosBase64 ?? []).map((_, i) =>
-      'https://picsum.photos/seed/' + coupleId + '-sec' + i + '/800/800'
-    );
-
-    // If actual base64 length was > 10, it means it's a real base64 upload, else it might just be unchanged
-    if (primaryUrl) {
-      coupleDoc.primaryPhoto = primaryUrl;
+    if (data.primaryPhotoBase64 && data.primaryPhotoBase64.length > 10) {
+      // Check if it's already a data URI or raw base64
+      const prefix = data.primaryPhotoBase64.startsWith('data:') ? '' : 'data:image/jpeg;base64,';
+      coupleDoc.primaryPhoto = prefix + data.primaryPhotoBase64;
     }
+
     if (data.secondaryPhotosBase64 && data.secondaryPhotosBase64.length > 0) {
-      coupleDoc.secondaryPhotos = secondaryUrls;
+      coupleDoc.secondaryPhotos = data.secondaryPhotosBase64
+        .filter(b64 => b64 && b64.length > 10)
+        .map(b64 => (b64.startsWith('data:') ? b64 : 'data:image/jpeg;base64,' + b64));
     }
 
     await coupleDoc.save();
