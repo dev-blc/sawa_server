@@ -31,9 +31,28 @@ const SubmitAnswersSchema = z.object({
   ),
 });
 
+const CompleteOnboardingSchema = z.object({
+  yourName: z.string().min(1, 'Your name is required'),
+  yourEmail: z.string().email('Invalid email').optional().or(z.literal('')),
+  yourDob: z.string().optional().or(z.literal('')),
+  partnerName: z.string().min(1, "Partner's name is required"),
+  partnerEmail: z.string().email('Invalid email').optional().or(z.literal('')),
+  partnerDob: z.string().optional().or(z.literal('')),
+  relationshipStatus: z.string().optional(),
+  primaryPhotoBase64: z.string().optional(),
+  secondaryPhotosBase64: z.array(z.string()).max(3).optional(),
+  answers: z.array(
+    z.object({
+      questionId: z.string(),
+      selectedOptionIds: z.array(z.string()),
+    })
+  ),
+});
+
 export const validateSetupProfile = validate(SetupProfileSchema);
 export const validateUploadPhotos = validate(UploadPhotosSchema);
 export const validateSubmitAnswers = validate(SubmitAnswersSchema);
+export const validateCompleteOnboarding = validate(CompleteOnboardingSchema);
 
 // ─── Controllers ────────────────────────────────────────────────────────────
 
@@ -76,6 +95,21 @@ export const submitAnswers = async (req: Request, res: Response) => {
   await coupleService.submitAnswers(coupleId!, data.answers);
 
   sendSuccess({ res, statusCode: 200, message: 'Onboarding completed successfully' });
+};
+
+/**
+ * POST /api/v1/couples/onboarding/complete
+ * Combines profile, photos, and answers in one single unified flow.
+ */
+export const completeOnboarding = async (req: Request, res: Response) => {
+  const { userId, coupleId } = req.user!;
+  const data = req.body as z.infer<typeof CompleteOnboardingSchema>;
+
+  await coupleService.setupProfile(userId, coupleId!, data);
+  await coupleService.uploadPhotos(coupleId!, data);
+  await coupleService.submitAnswers(coupleId!, data.answers);
+
+  sendSuccess({ res, statusCode: 200, message: 'All Onboarding data completed successfully' });
 };
 
 export const createCouple = async (_req: Request, _res: Response) => {

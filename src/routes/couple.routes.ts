@@ -12,6 +12,8 @@ import {
   validateSetupProfile,
   validateUploadPhotos,
   validateSubmitAnswers,
+  validateCompleteOnboarding,
+  completeOnboarding,
 } from '../controllers/couple.controller';
 
 const router = Router();
@@ -29,6 +31,9 @@ router.post('/onboarding/photos', validateUploadPhotos, asyncHandler(uploadPhoto
 
 // POST /api/v1/couples/onboarding/answers
 router.post('/onboarding/answers', validateSubmitAnswers, asyncHandler(submitAnswers));
+
+// POST /api/v1/couples/onboarding/complete
+router.post('/onboarding/complete', validateCompleteOnboarding, asyncHandler(completeOnboarding));
 
 // POST /api/v1/couples (legacy)
 router.post('/', asyncHandler(createCouple));
