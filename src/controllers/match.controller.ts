@@ -1,29 +1,61 @@
 import { Request, Response } from 'express';
+import { z } from 'zod';
+import { matchService } from '../services/match.service';
 import { sendSuccess } from '../utils/response';
-import { AppError } from '../utils/AppError';
+import { validate } from '../middleware/validate';
 
-export const getSuggestions = async (req: Request, res: Response): Promise<void> => {
-  if (!req.user) throw new AppError('Unauthorized', 401);
-  // TODO Phase 3: matching algorithm based on couple answers & preferences
-  sendSuccess({ res, data: { suggestions: [] }, message: 'Suggestions fetched [stub]' });
+// ─── Validation ─────────────────────────────────────────────────────────────
+
+const MatchActionSchema = z.object({
+  targetCoupleId: z.string().min(1, 'Target couple ID is required'),
+});
+
+export const validateMatchAction = validate(MatchActionSchema);
+
+// ─── Controllers ────────────────────────────────────────────────────────────
+
+/**
+ * GET /api/v1/matches/discovery
+ * Fetches the discovery feed of un-interacted couples for the requesting couple.
+ */
+export const getDiscoveryFeed = async (req: Request, res: Response): Promise<void> => {
+  const { coupleId } = req.user!;
+  
+  const couples = await matchService.getDiscoveryFeed(coupleId!);
+  
+  sendSuccess({ res, statusCode: 200, data: { couples } });
 };
 
-export const getAcceptedMatches = async (req: Request, res: Response): Promise<void> => {
-  if (!req.user) throw new AppError('Unauthorized', 401);
-  // TODO Phase 3
-  sendSuccess({ res, data: { matches: [] }, message: 'Accepted matches [stub]' });
+/**
+ * POST /api/v1/matches/say-hello
+ * Send a hello/like to a couple.
+ */
+export const sayHello = async (req: Request, res: Response): Promise<void> => {
+  const { coupleId } = req.user!;
+  const { targetCoupleId } = req.body as z.infer<typeof MatchActionSchema>;
+  
+  const result = await matchService.sayHello(coupleId!, targetCoupleId);
+  
+  sendSuccess({ res, statusCode: 200, message: 'Hello sent', data: result });
 };
 
-export const acceptMatch = async (req: Request, res: Response): Promise<void> => {
-  if (!req.user) throw new AppError('Unauthorized', 401);
-  const { matchId } = req.params;
-  // TODO Phase 3: update Match status, emit socket event
-  sendSuccess({ res, data: { matchId }, message: 'Match accepted [stub]' });
+/**
+ * POST /api/v1/matches/skip
+ * Skip/pass on a couple so they don't appear in the feed again.
+ */
+export const skipCouple = async (req: Request, res: Response): Promise<void> => {
+  const { coupleId } = req.user!;
+  const { targetCoupleId } = req.body as z.infer<typeof MatchActionSchema>;
+  
+  const result = await matchService.skipCouple(coupleId!, targetCoupleId);
+  
+  sendSuccess({ res, statusCode: 200, message: 'Profile skipped', data: result });
 };
 
-export const rejectMatch = async (req: Request, res: Response): Promise<void> => {
-  if (!req.user) throw new AppError('Unauthorized', 401);
-  const { matchId } = req.params;
-  // TODO Phase 3: update Match status
-  sendSuccess({ res, data: { matchId }, message: 'Match rejected [stub]' });
+export const getMatches = async (_req: Request, _res: Response): Promise<void> => {
+  // Return all matched or pending couples
+};
+
+export const getInsights = async (_req: Request, _res: Response): Promise<void> => {
+  // Returns insights comparing the logged in couple with a target couple
 };

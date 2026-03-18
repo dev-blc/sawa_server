@@ -96,3 +96,14 @@
 **Git**
 - Initialized git repo, connected to `https://github.com/krnkiran22/sawa_server.git`
 - Initial commit pushed on `main` branch
+
+## [0.2.0] - 2026-03-18
+### Added
+- Couple Model updated with exact fields from frontend onboarding flow.
+- Added `/api/v1/couples/onboarding/profile` for Phase 2 basic details (both users + relation).
+- Added `/api/v1/couples/onboarding/photos` for mock uploading base64 profile pictures.
+- Added `/api/v1/couples/onboarding/answers` for saving couple onboarding preferences/questions.
+
+### Changed
+- `entityId` fully refactored and renamed to `coupleId` across both the Backend and Mobile App codebases to match original naming intention.
+- Mobile frontend screens (ProfileSetupScreen, StoryPhotoScreen, QuestionScreen) wired to the APIs, persisting true data without any UI changes.
