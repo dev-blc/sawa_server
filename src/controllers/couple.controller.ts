@@ -105,11 +105,19 @@ export const completeOnboarding = async (req: Request, res: Response) => {
   const { userId, coupleId } = req.user!;
   const data = req.body as z.infer<typeof CompleteOnboardingSchema>;
 
-  await coupleService.setupProfile(userId, coupleId!, data);
-  await coupleService.uploadPhotos(coupleId!, data);
-  await coupleService.submitAnswers(coupleId!, data.answers);
+  console.log(`[CoupleController] completeOnboarding START for coupleId: ${coupleId}`);
 
-  sendSuccess({ res, statusCode: 200, message: 'All Onboarding data completed successfully' });
+  try {
+    await coupleService.setupProfile(userId, coupleId!, data);
+    await coupleService.uploadPhotos(coupleId!, data);
+    await coupleService.submitAnswers(coupleId!, data.answers);
+
+    console.log(`[CoupleController] completeOnboarding SUCCESS for coupleId: ${coupleId}`);
+    sendSuccess({ res, statusCode: 200, message: 'All Onboarding data completed successfully' });
+  } catch (err) {
+    console.error(`[CoupleController] completeOnboarding FAILED:`, err);
+    throw err;
+  }
 };
 
 export const createCouple = async (_req: Request, _res: Response) => {
