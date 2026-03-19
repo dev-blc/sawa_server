@@ -14,7 +14,7 @@ export interface INotification extends Document {
 
 const NotificationSchema = new Schema<INotification>(
   {
-    recipient: { type: Schema.Types.ObjectId, ref: 'Couple', required: true },
+    recipient: { type: Schema.Types.Mixed, ref: 'Couple', required: true },
     sender: { type: Schema.Types.ObjectId, ref: 'Couple' },
     type: {
       type: String,
