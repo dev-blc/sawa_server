@@ -52,8 +52,10 @@ export const skipCouple = async (req: Request, res: Response): Promise<void> => 
   sendSuccess({ res, statusCode: 200, message: 'Profile skipped', data: result });
 };
 
-export const getMatches = async (_req: Request, _res: Response): Promise<void> => {
-  // Return all matched or pending couples
+export const getMatches = async (req: Request, res: Response): Promise<void> => {
+  const { coupleId } = req.user!;
+  const matches = await matchService.getMatches(coupleId!);
+  sendSuccess({ res, statusCode: 200, data: { matches } });
 };
 
 export const getInsights = async (_req: Request, _res: Response): Promise<void> => {

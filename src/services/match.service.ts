@@ -91,24 +91,27 @@ export class MatchService {
        return { isMatch: false };
     }
 
-    // Check if they already liked us (a match)
-    const reverseMatch = await Match.findOne({ couple1: targetCouple._id, couple2: me._id, status: 'pending' });
-    
-    if (reverseMatch) {
-      // It's a match!
-      reverseMatch.status = 'accepted';
-      reverseMatch.actionBy = me._id;
-      await reverseMatch.save();
+    // Find if any match exists between us in any direction
+    let existingMatch = await Match.findOne({
+      $or: [
+        { couple1: me._id, couple2: targetCouple._id },
+        { couple1: targetCouple._id, couple2: me._id }
+      ]
+    });
 
-      // create forward match for easier querying
-      await Match.create({
-        couple1: me._id,
-        couple2: targetCouple._id,
-        status: 'accepted',
-        actionBy: me._id,
-      });
-
-      return { isMatch: true };
+    if (existingMatch) {
+      // If it was skipped by us before, we can't like it now (unless we reset)
+      // But for this logic, we check if it was pending and NOT by us
+      if (existingMatch.status === 'pending' && existingMatch.actionBy.toString() !== me._id.toString()) {
+         // Mutual like!
+         existingMatch.status = 'accepted';
+         existingMatch.actionBy = me._id;
+         await existingMatch.save();
+         return { isMatch: true };
+      }
+      
+      // If we already liked them, or already accepted
+      return { isMatch: existingMatch.status === 'accepted' };
     }
 
     // Otherwise, create a pending like
@@ -149,6 +152,25 @@ export class MatchService {
     });
 
     return { skipped: true };
+  }
+
+  /**
+   * Get all accepted matches for a couple
+   */
+  async getMatches(requestingCoupleId: string) {
+    const me = await Couple.findOne({ coupleId: requestingCoupleId });
+    if (!me) throw new AppError('Profile not found', 404);
+
+    // Find all matches where we are either couple1 or couple2 and status is accepted
+    const matches = await Match.find({
+      $or: [{ couple1: me._id }, { couple2: me._id }],
+      status: 'accepted'
+    }).populate('couple1').populate('couple2');
+
+    return matches.map(m => {
+      // Return the OPPOSITE couple
+      return m.couple1._id.toString() === me._id.toString() ? m.couple2 : m.couple1;
+    });
   }
 }
 
