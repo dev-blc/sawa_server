@@ -174,6 +174,12 @@ export class CommunityService {
     community.members.push(me._id as any);
     await community.save();
 
+    // ─── Phase 2: System Message & Notification ───
+    // You could also create a Message record of type 'system' or 'couple-joined' here
+    // but for now we'll just return success and let the client know.
+    // In a real socket app, the server would emit 'chat:message' to the room now.
+
+
     return { status: 'joined', message: note ? 'Join request sent with note' : 'Joined community' };
   }
 
@@ -216,7 +222,7 @@ export class CommunityService {
     const me = await Couple.findOne({ coupleId: requestingCoupleId });
     if (!me) throw new AppError('Profile not found', 404);
 
-    const c = await Community.findById(communityId).populate('members');
+    const c = await Community.findById(communityId).populate('members').populate('joinRequests');
     if (!c) throw new AppError('Community not found', 404);
 
     const isMember = c.members.some(m => m._id.toString() === me._id.toString());
@@ -232,12 +238,21 @@ export class CommunityService {
       isMember,
       isAdmin,
       members: (c.members as any).map((m: any) => ({
-        id: m.coupleId,
+        id: m._id, // Internal ID for keys
+        coupleId: m.coupleId, // Business ID for profile navigation
         name: m.profileName,
         city: m.location?.city || 'Unknown',
         accent: '#DBCBA6',
         image: m.primaryPhoto,
-      }))
+      })),
+      joinRequests: isAdmin ? (c.joinRequests as any).map((m: any) => ({
+        id: m._id,
+        coupleId: m.coupleId,
+        name: m.profileName,
+        city: m.location?.city || 'Unknown',
+        accent: '#3CA6C7',
+        image: m.primaryPhoto,
+      })) : []
     };
   }
 
@@ -256,6 +271,52 @@ export class CommunityService {
 
     await Community.findByIdAndDelete(communityId);
     return { success: true };
+  }
+
+  async getInviteableCouples(requestingCoupleId: string, communityId: string) {
+    const me = await Couple.findOne({ coupleId: requestingCoupleId });
+    if (!me) throw new AppError('Profile not found', 404);
+
+    const community = await Community.findById(communityId);
+    if (!community) throw new AppError('Community not found', 404);
+
+    // 1. Get all accepted matches (friends)
+    const matches = await Match.find({
+      $or: [{ couple1: me._id }, { couple2: me._id }],
+      status: 'accepted'
+    }).populate('couple1').populate('couple2');
+
+    // 2. Find internal notifications that are pending invites for this community
+    // Using simple heuristic: community notification from 'me' with this communityId
+    const pendingInvites = await Notification.find({
+      sender: me._id,
+      type: 'community',
+      'data.communityId': new mongoose.Types.ObjectId(communityId),
+    });
+
+    const invitedIds = pendingInvites.map(n => n.recipient.toString());
+
+    return matches.map(m => {
+      const other = m.couple1._id.equals(me._id) ? (m.couple2 as any) : (m.couple1 as any);
+      const otherId = other._id.toString();
+      
+      let status: 'available' | 'invited' | 'member' = 'available';
+      
+      if (community.members.some(mid => mid.toString() === otherId)) {
+        status = 'member';
+      } else if (invitedIds.includes(otherId)) {
+        status = 'invited';
+      }
+
+      return {
+        id: other._id,
+        coupleId: other.coupleId,
+        name: other.profileName,
+        city: other.location?.city || 'India',
+        image: other.primaryPhoto,
+        status
+      };
+    });
   }
 }
 

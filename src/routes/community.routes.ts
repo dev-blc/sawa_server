@@ -10,6 +10,7 @@ import {
   leaveCommunity,
   inviteToCommunity,
   deleteCommunity,
+  getInviteableCouples, // This is already present in the original file
   validateCreateCommunity,
   validateJoinCommunity,
 } from '../controllers/community.controller';
@@ -41,5 +42,8 @@ router.post('/:id/leave', asyncHandler(leaveCommunity));
 
 // DELETE /api/v1/communities/:id
 router.delete('/:id', asyncHandler(deleteCommunity));
+
+// GET /api/v1/communities/:id/inviteable
+router.get('/:id/inviteable', asyncHandler(getInviteableCouples));
 
 export default router;

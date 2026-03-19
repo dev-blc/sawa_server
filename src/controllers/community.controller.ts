@@ -102,3 +102,12 @@ export const deleteCommunity = async (req: Request, res: Response): Promise<void
 
   sendSuccess({ res, statusCode: 200, message: 'Community deleted successfully' });
 };
+
+export const getInviteableCouples = async (req: Request, res: Response): Promise<void> => {
+  const { coupleId } = req.user!;
+  const { id } = req.params;
+
+  const couples = await communityService.getInviteableCouples(coupleId!, id);
+
+  sendSuccess({ res, statusCode: 200, data: { couples } });
+};
