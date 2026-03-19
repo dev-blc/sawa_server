@@ -12,6 +12,7 @@ const CreateCommunitySchema = z.object({
   city: z.string().min(1, 'City is required'),
   coverImageUrl: z.string().url().optional(),
   tags: z.array(z.string()).optional(),
+  invitedCoupleIds: z.array(z.string()).optional(),
 });
 
 const JoinCommunitySchema = z.object({
@@ -39,8 +40,13 @@ export const getMyCommunities = async (req: Request, res: Response): Promise<voi
   sendSuccess({ res, statusCode: 200, data: { communities } });
 };
 
-export const getCommunityDetail = async (_req: Request, _res: Response): Promise<void> => {
-  // Can be implemented similarly
+export const getCommunityDetail = async (req: Request, res: Response): Promise<void> => {
+  const { coupleId } = req.user!;
+  const { id } = req.params;
+
+  const community = await communityService.getCommunityDetail(coupleId!, id);
+
+  sendSuccess({ res, statusCode: 200, data: { community } });
 };
 
 export const createCommunity = async (req: Request, res: Response): Promise<void> => {
@@ -53,6 +59,7 @@ export const createCommunity = async (req: Request, res: Response): Promise<void
     city: data.city,
     coverImageUrl: data.coverImageUrl,
     tags: data.tags || [],
+    invitedCoupleIds: data.invitedCoupleIds || [],
   });
 
   sendSuccess({ 
@@ -75,4 +82,23 @@ export const joinCommunity = async (req: Request, res: Response): Promise<void> 
 
 export const leaveCommunity = async (_req: Request, _res: Response): Promise<void> => {
   // Stub
+};
+
+export const inviteToCommunity = async (req: Request, res: Response): Promise<void> => {
+  const { coupleId } = req.user!;
+  const { id } = req.params; // communityId
+  const { invitedCoupleIds } = req.body;
+
+  const result = await communityService.inviteToCommunity(coupleId!, id, invitedCoupleIds || []);
+
+  sendSuccess({ res, statusCode: 200, data: result, message: 'Invites sent successfully' });
+};
+
+export const deleteCommunity = async (req: Request, res: Response): Promise<void> => {
+  const { coupleId } = req.user!;
+  const { id } = req.params;
+
+  await communityService.deleteCommunity(coupleId!, id);
+
+  sendSuccess({ res, statusCode: 200, message: 'Community deleted successfully' });
 };

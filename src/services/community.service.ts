@@ -3,6 +3,8 @@ import { Community } from '../models/Community.model';
 import { Couple } from '../models/Couple.model';
 import { AppError } from '../utils/AppError';
 import { logger } from '../utils/logger';
+import { Notification } from '../models/Notification.model';
+import { Match } from '../models/Match.model';
 
 // Initial Seed data (mirrors the frontend static mock data shape)
 const INITIAL_COMMUNITIES = [
@@ -113,10 +115,42 @@ export class CommunityService {
     if (!me) throw new AppError('Profile not found', 404);
 
     const community = await Community.create({
-      ...data,
+      name: data.name,
+      description: data.description,
+      city: data.city,
+      coverImageUrl: data.coverImageUrl,
+      tags: data.tags,
       admins: [me._id],
       members: [me._id],
     });
+
+    // Send notifications to invited couples
+    if (data.invitedCoupleIds && data.invitedCoupleIds.length > 0) {
+      for (const targetCoupleId of data.invitedCoupleIds) {
+        try {
+          // Verify they are matched/connected matches
+          const match = await Match.findOne({
+            $or: [
+              { couple1: me._id, couple2: targetCoupleId, status: 'accepted' },
+              { couple1: targetCoupleId, couple2: me._id, status: 'accepted' }
+            ]
+          });
+
+          if (match) {
+            await Notification.create({
+              recipient: targetCoupleId,
+              sender: me._id,
+              type: 'community',
+              title: 'Community Invitation',
+              message: `${me.profileName} invited you to join their community: ${community.name}`,
+              data: { communityId: community._id, name: community.name }
+            });
+          }
+        } catch (err) {
+          logger.error(`[CommunityService] Failed to notify couple ${targetCoupleId}: ${err}`);
+        }
+      }
+    }
 
     return {
        id: community._id,
@@ -141,6 +175,87 @@ export class CommunityService {
     await community.save();
 
     return { status: 'joined', message: note ? 'Join request sent with note' : 'Joined community' };
+  }
+
+  async inviteToCommunity(requestingCoupleId: string, communityId: string, invitedCoupleIds: string[]) {
+    const me = await Couple.findOne({ coupleId: requestingCoupleId });
+    if (!me || !me.profileName) throw new AppError('Profile not found', 404);
+
+    const community = await Community.findById(communityId);
+    if (!community) throw new AppError('Community not found', 404);
+
+    if (invitedCoupleIds.length > 0) {
+      for (const targetCoupleId of invitedCoupleIds) {
+        try {
+          const match = await Match.findOne({
+            $or: [
+              { couple1: me._id, couple2: targetCoupleId, status: 'accepted' },
+              { couple1: targetCoupleId, couple2: me._id, status: 'accepted' }
+            ]
+          });
+
+          if (match) {
+            await Notification.create({
+              recipient: targetCoupleId,
+              sender: me._id,
+              type: 'community',
+              title: 'Community Invitation',
+              message: `${me.profileName} invited you to join their community: ${community.name}`,
+              data: { communityId: community._id, name: community.name }
+            });
+          }
+        } catch (err) {
+          logger.error(`[CommunityService] Failed to notify couple ${targetCoupleId}: ${err}`);
+        }
+      }
+    }
+    return { success: true };
+  }
+
+  async getCommunityDetail(requestingCoupleId: string, communityId: string) {
+    const me = await Couple.findOne({ coupleId: requestingCoupleId });
+    if (!me) throw new AppError('Profile not found', 404);
+
+    const c = await Community.findById(communityId).populate('members');
+    if (!c) throw new AppError('Community not found', 404);
+
+    const isMember = c.members.some(m => m._id.toString() === me._id.toString());
+    const isAdmin = c.admins.some(a => a.toString() === me._id.toString());
+
+    return {
+      id: c._id,
+      title: c.name,
+      about: c.description,
+      city: c.city,
+      couples: c.members.length,
+      imageUri: c.coverImageUrl,
+      isMember,
+      isAdmin,
+      members: (c.members as any).map((m: any) => ({
+        id: m.coupleId,
+        name: m.profileName,
+        city: m.location?.city || 'Unknown',
+        accent: '#DBCBA6',
+        image: m.primaryPhoto,
+      }))
+    };
+  }
+
+  async deleteCommunity(requestingCoupleId: string, communityId: string) {
+    const me = await Couple.findOne({ coupleId: requestingCoupleId });
+    if (!me) throw new AppError('Profile not found', 404);
+
+    const community = await Community.findById(communityId);
+    if (!community) throw new AppError('Community not found', 404);
+
+    // Only actual admins can delete
+    const isAdmin = community.admins.some(a => a.toString() === me._id.toString());
+    if (!isAdmin) {
+      throw new AppError('Only administrators can delete this community', 403);
+    }
+
+    await Community.findByIdAndDelete(communityId);
+    return { success: true };
   }
 }
 

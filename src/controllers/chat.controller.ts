@@ -19,7 +19,7 @@ export const getPrivateMessages = async (req: Request, res: Response): Promise<v
     chatId: new mongoose.Types.ObjectId(matchId),
   })
     .populate('sender', 'coupleId')
-    .populate('senderUser', 'role')
+    .populate('senderUser', 'role phone')
     .sort({ createdAt: 1 })
     .limit(100);
 
@@ -34,6 +34,10 @@ export const getPrivateMessages = async (req: Request, res: Response): Promise<v
       senderCoupleId: m.sender?.coupleId, // The shared string ID (X-Y)
       timestamp: m.createdAt,
       readBy: m.readBy || [],
+      // For images, we would ideally store the avatar in user model or fetch it
+      // For now, let's assume we use a placeholder or the couple's photo if needed
+      // Actually, let's just return a placeholder for individual sender for now
+      senderImage: undefined 
     };
   });
 

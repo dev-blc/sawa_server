@@ -8,6 +8,8 @@ import {
   getCommunityDetail,
   joinCommunity,
   leaveCommunity,
+  inviteToCommunity,
+  deleteCommunity,
   validateCreateCommunity,
   validateJoinCommunity,
 } from '../controllers/community.controller';
@@ -31,7 +33,13 @@ router.get('/:id', asyncHandler(getCommunityDetail));
 // POST /api/v1/communities/:id/join
 router.post('/:id/join', validateJoinCommunity, asyncHandler(joinCommunity));
 
+// POST /api/v1/communities/:id/invite
+router.post('/:id/invite', asyncHandler(inviteToCommunity));
+
 // POST /api/v1/communities/:id/leave
 router.post('/:id/leave', asyncHandler(leaveCommunity));
+
+// DELETE /api/v1/communities/:id
+router.delete('/:id', asyncHandler(deleteCommunity));
 
 export default router;
