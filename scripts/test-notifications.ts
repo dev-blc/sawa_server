@@ -17,13 +17,26 @@ async function sendTestNotifications() {
     const allCouples = await Couple.find({});
     console.log(`Found ${allCouples.length} couples.`);
 
-    const notifications = allCouples.map((c) => ({
-      recipient: c._id,
-      type: 'system',
-      title: 'Welcome to SAWA! 🚀',
-      message: 'This is a test notification to all our wonderful couples. Have fun connecting!',
-      read: false,
-    }));
+    const notifications: any[] = [];
+    allCouples.forEach((c) => {
+      // Send to both Mongoose _id AND the UUID string to be 100% sure the flexible query catches it
+      notifications.push({
+        recipient: c._id,
+        type: 'system',
+        title: 'Welcome to SAWA! 🚀',
+        message: 'This is a test notification to your DB _id.',
+        read: false,
+      });
+      if (c.coupleId) {
+        notifications.push({
+          recipient: c.coupleId,
+          type: 'system',
+          title: 'Hello via UUID! 🍎',
+          message: 'This confirms your UUID-based notifications are working.',
+          read: false,
+        });
+      }
+    });
 
     if (notifications.length > 0) {
       await Notification.insertMany(notifications);
