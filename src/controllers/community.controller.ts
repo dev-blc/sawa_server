@@ -11,7 +11,7 @@ const CreateCommunitySchema = z.object({
   name: z.string().min(1, 'Name is required'),
   description: z.string().optional(),
   city: z.string().min(1, 'City is required'),
-  coverImageUrl: z.string().url().optional(),
+  coverImageUrl: z.string().optional(),
   tags: z.array(z.string()).optional(),
   invitedCoupleIds: z.array(z.string()).optional(),
 });
