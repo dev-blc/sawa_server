@@ -68,17 +68,28 @@ export const registerChatHandlers = (io: SocketIOServer, socket: Socket): void =
 
         // ─── NEW: Send Notification to recipient ───
         // Find the "other" couple in this match
+        // ─── OPTIMIZED: Send Notification only if no unread message notification exists ───
         const match = await Match.findById(data.chatId);
         if (match) {
            const recipientId = match.couple1.equals(couple._id) ? match.couple2 : match.couple1;
-           await Notification.create({
+           
+           const existingUnread = await Notification.findOne({
              recipient: recipientId,
-             sender: couple._id,
              type: 'message',
-             title: `New Message from ${couple.profileName}`,
-             message: data.content.length > 50 ? data.content.substring(0, 47) + '...' : data.content,
-             data: { matchId: data.chatId, coupleName: couple.profileName }
+             'data.matchId': data.chatId,
+             read: false
            });
+
+           if (!existingUnread) {
+             await Notification.create({
+               recipient: recipientId,
+               sender: couple._id,
+               type: 'message',
+               title: `New Message from ${couple.profileName}`,
+               message: `You have new messages from ${couple.profileName}`,
+               data: { matchId: data.chatId, coupleName: couple.profileName }
+             });
+           }
         }
 
       } catch (err) {
@@ -110,6 +121,12 @@ export const registerChatHandlers = (io: SocketIOServer, socket: Socket): void =
         chatId: data.chatId,
         readByCoupleId: socket.coupleId
       });
+
+      // ─── NEW: Clear message notifications when chat is read ───
+      await Notification.updateMany(
+        { recipient: couple._id, type: 'message', 'data.matchId': data.chatId },
+        { $set: { read: true } }
+      );
 
       logger.debug(`Chat ${data.chatId} marked as read by ${socket.coupleId}`);
     } catch (err) {

@@ -175,9 +175,20 @@ export class CommunityService {
     await community.save();
 
     // ─── Phase 2: System Message & Notification ───
-    // You could also create a Message record of type 'system' or 'couple-joined' here
-    // but for now we'll just return success and let the client know.
-    // In a real socket app, the server would emit 'chat:message' to the room now.
+    const io = (global as any).io;
+    if (io) {
+      const systemMessage = {
+        _id: new mongoose.Types.ObjectId(),
+        chatId: community._id,
+        chatType: 'group',
+        senderCoupleId: 'system',
+        content: `${me.profileName} joined the community`,
+        contentType: 'text',
+        timestamp: new Date().toISOString(),
+        isSystem: true
+      };
+      io.to(`chat:${community._id}`).emit('chat:message', systemMessage);
+    }
 
 
     return { status: 'joined', message: note ? 'Join request sent with note' : 'Joined community' };
@@ -227,6 +238,14 @@ export class CommunityService {
 
     const isMember = c.members.some(m => m._id.toString() === me._id.toString());
     const isAdmin = c.admins.some(a => a.toString() === me._id.toString());
+    
+    // Check if there's a pending invitation for this couple
+    const invitation = await Notification.findOne({
+      recipient: me._id,
+      type: 'community',
+      'data.communityId': c._id,
+      read: false
+    });
 
     return {
       id: c._id,
@@ -237,6 +256,7 @@ export class CommunityService {
       imageUri: c.coverImageUrl,
       isMember,
       isAdmin,
+      isInvited: !!invitation,
       members: (c.members as any).map((m: any) => ({
         id: m._id, // Internal ID for keys
         coupleId: m.coupleId, // Business ID for profile navigation

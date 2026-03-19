@@ -16,7 +16,8 @@ const start = async (): Promise<void> => {
   const httpServer = http.createServer(app);
 
   // 4. Attach Socket.io
-  createSocketServer(httpServer);
+  const io = createSocketServer(httpServer);
+  (global as any).io = io;
 
   // 5. Start listening
   httpServer.listen(env.PORT, () => {
