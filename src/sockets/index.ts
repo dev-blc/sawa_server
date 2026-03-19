@@ -3,6 +3,7 @@ import { Server as SocketIOServer, Socket } from 'socket.io';
 import { env } from '../config/env';
 import { logger } from '../utils/logger';
 import { verifyAccessToken } from '../utils/jwt';
+import { User } from '../models/User.model';
 import { registerChatHandlers } from './chat.socket';
 import { registerMatchHandlers } from './match.socket';
 
@@ -27,10 +28,19 @@ export const createSocketServer = (httpServer: HTTPServer): SocketIOServer => {
 
   // ─── JWT Auth Middleware ─────────────────────────────────────────────────────
   io.use((socket: Socket, next) => {
-    const token = socket.handshake.auth?.token as string | undefined;
+    let token = socket.handshake.auth?.token as string | undefined;
+    if (!token) {
+      token = socket.handshake.query?.token as string | undefined;
+    }
 
     if (!token) {
+      logger.warn(`❌ Socket ${socket.id} connection rejected: Token missing`);
       return next(new Error('Authentication token missing'));
+    }
+
+    // Handle "Bearer " prefix if present
+    if (token.startsWith('Bearer ')) {
+      token = token.slice(7);
     }
 
     try {
@@ -39,20 +49,18 @@ export const createSocketServer = (httpServer: HTTPServer): SocketIOServer => {
       socket.coupleId = payload.coupleId;
 
       // Fetch user name and role for display
-      import('../models/User.model').then(async ({ User }) => {
-        try {
-          const user = await User.findById(payload.userId);
-          if (user) {
-            socket.userName = user.name || 'Unknown';
-            socket.userRole = user.role;
-          }
-          next();
-        } catch (err) {
-          next();
+      User.findById(payload.userId).then((user) => {
+        if (user) {
+          socket.userName = user.name || 'Unknown';
+          socket.userRole = user.role;
         }
+        next();
+      }).catch(() => {
+        next();
       });
 
-    } catch {
+    } catch (err: any) {
+      logger.warn(`❌ Socket ${socket.id} auth failed: ${err.message}`);
       next(new Error('Invalid authentication token'));
     }
   });
@@ -60,7 +68,10 @@ export const createSocketServer = (httpServer: HTTPServer): SocketIOServer => {
 
   // ─── Connection ─────────────────────────────────────────────────────────────
   io.on('connection', (socket: Socket) => {
-    logger.info(`Socket connected: ${socket.id} (user: ${socket.userId})`);
+    logger.info(`✨ Socket Connected: ${socket.id}`);
+    logger.info(`👤 User: ${socket.userName} (${socket.userId})`);
+    logger.info(`💑 Couple ID: ${socket.coupleId}`);
+    logger.info(`🛡️  Role: ${socket.userRole}`);
 
     registerChatHandlers(io, socket);
     registerMatchHandlers(io, socket);

@@ -98,14 +98,48 @@ export class CoupleService {
    * Submit questionnaire answers and mark onboarding COMPLETE
    */
   async submitAnswers(coupleId: string, answers: IOnboardingAnswer[]) {
-    const coupleDoc = await Couple.findOne({ coupleId });
+    const coupleDoc = await Couple.findOne({ coupleId })
+      .populate('partner1')
+      .populate('partner2');
+
     if (!coupleDoc) {
       throw new AppError('Couple not found', 404);
     }
 
     coupleDoc.answers = answers;
     coupleDoc.isProfileComplete = true; // Onboarding is officially complete
-    
+
+    // ─── AI BIO GENERATION ──────────────────────────────────────────────────
+    try {
+      logger.info(`[CoupleService] Generating AI bio for coupleId: ${coupleId}`);
+
+      // We'll map the answers to a text format for the AI
+      // In a real app, you'd fetch the actual question text here.
+      // For now, we'll use a placeholder mapping based on question IDs.
+      const questionMap: Record<string, string> = {
+        q1: 'What is your current focus as a couple?',
+        q2: 'What kind of social activities do you enjoy?',
+        q3: 'What are you looking for on SAWA?',
+        q4: 'How would you describe your weekend vibe?',
+      };
+
+      const qaData = answers.map((a) => ({
+        question: questionMap[a.questionId] || 'About us',
+        answers: a.selectedOptionIds,
+      }));
+
+      const { generateCoupleBio } = require('../utils/ai');
+      const aiBio = await generateCoupleBio(qaData);
+
+      if (aiBio) {
+        coupleDoc.bio = aiBio;
+        logger.info(`[CoupleService] AI bio generated successfully for ${coupleId}`);
+      }
+    } catch (aiErr) {
+      logger.error(`[CoupleService] AI bio generation failed (non-critical):`, aiErr);
+    }
+    // ─────────────────────────────────────────────────────────────────────────
+
     await coupleDoc.save();
     logger.info(`[CoupleService] Onboarding complete for coupleId: ${coupleId}`);
   }

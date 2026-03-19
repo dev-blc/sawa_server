@@ -14,7 +14,7 @@ export const registerChatHandlers = (io: SocketIOServer, socket: Socket): void =
   // Join a chat room (private or group)
   socket.on(SOCKET_EVENTS.CHAT_JOIN, (data: { chatId: string }) => {
     socket.join(`chat:${data.chatId}`);
-    logger.debug(`Socket ${socket.id} joined chat:${data.chatId}`);
+    logger.info(`✅ Socket ${socket.id} (User: ${socket.userId}) joined chat room: chat:${data.chatId}`);
   });
 
   // Leave a chat room
@@ -26,12 +26,15 @@ export const registerChatHandlers = (io: SocketIOServer, socket: Socket): void =
   // Receive message from client — broadcast to room
   socket.on(
     SOCKET_EVENTS.CHAT_MESSAGE,
-    async (data: { chatId: string; content: string; contentType: string; chatType?: 'private' | 'group' }) => {
+    async (data: { chatId: string; content: string; contentType: string; chatType?: 'private' | 'group'; audioDuration?: number; senderIndividualName?: string }) => {
       
       if (!socket.userId || !socket.coupleId) {
          logger.warn(`Unauthorized message attempt from socket ${socket.id}`);
          return;
       }
+
+      // Ensure joining the room (in case of reconnection)
+      socket.join(`chat:${data.chatId}`);
 
       try {
         const user = await User.findById(socket.userId);
@@ -46,9 +49,10 @@ export const registerChatHandlers = (io: SocketIOServer, socket: Socket): void =
           chatId: data.chatId,
           sender: couple._id,
           senderUser: socket.userId,
-          senderName: socket.userName || 'Unknown',
+          senderName: user.name || socket.userName || 'Unknown',
           content: data.content,
           contentType: data.contentType || 'text',
+          audioDuration: data.audioDuration,
         });
 
         // Broadcast to room
@@ -57,10 +61,13 @@ export const registerChatHandlers = (io: SocketIOServer, socket: Socket): void =
           chatId: data.chatId,
           senderCoupleId: socket.coupleId, // Used for local UI side determination (left/right)
           senderUserId: socket.userId,   // Used for showing who in the couple sent it
-          senderName: socket.userName || 'Unknown', // Name to display (X, Y, A, B)
-          senderRole: socket.userRole,         // Used for color determination (blue/pink vs warm/cool)
+          senderName: couple.profileName || user.name || 'Unknown', 
+          senderIndividualName: user.name || socket.userName || 'Unknown',
+          senderRole: socket.userRole,
+          accent: socket.userRole === 'primary' ? '#B9B0A7' : '#2D3C62',
           content: data.content,
           contentType: data.contentType ?? 'text',
+          audioDuration: data.audioDuration,
           timestamp: message.createdAt.toISOString(),
         });
 
@@ -101,6 +108,9 @@ export const registerChatHandlers = (io: SocketIOServer, socket: Socket): void =
   // Mark message as read / "Seen" feature
   socket.on(SOCKET_EVENTS.CHAT_READ, async (data: { chatId: string }) => {
     if (!socket.userId || !socket.coupleId) return;
+    
+    // Ensure joining the room
+    socket.join(`chat:${data.chatId}`);
 
     try {
       const couple = await Couple.findOne({ coupleId: socket.coupleId });

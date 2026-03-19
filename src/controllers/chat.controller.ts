@@ -32,11 +32,10 @@ export const getPrivateMessages = async (req: Request, res: Response): Promise<v
       senderUserId: m.senderUser?._id,
       senderRole: m.senderUser?.role,
       senderCoupleId: m.sender?.coupleId, // The shared string ID (X-Y)
+      senderIndividualName: m.senderName,
       timestamp: m.createdAt,
       readBy: m.readBy || [],
-      // For images, we would ideally store the avatar in user model or fetch it
-      // For now, let's assume we use a placeholder or the couple's photo if needed
-      // Actually, let's just return a placeholder for individual sender for now
+      audioDuration: m.audioDuration,
       senderImage: undefined 
     };
   });
@@ -63,6 +62,7 @@ export const sendPrivateMessage = async (req: Request, res: Response): Promise<v
     senderName: user.name || 'Unknown',
     content,
     contentType: contentType || 'text',
+    audioDuration: req.body.audioDuration,
   });
 
   sendSuccess({ res, data: { message }, statusCode: 201 });
@@ -80,7 +80,7 @@ export const getGroupMessages = async (req: Request, res: Response): Promise<voi
     chatType: 'group',
     chatId: new mongoose.Types.ObjectId(communityId),
   })
-    .populate('sender', 'coupleId')
+    .populate('sender', 'coupleId profileName')
     .populate('senderUser', 'role')
     .sort({ createdAt: 1 })
     .limit(100);
@@ -90,12 +90,13 @@ export const getGroupMessages = async (req: Request, res: Response): Promise<voi
       _id: m._id,
       content: m.content,
       contentType: m.contentType,
-      senderName: m.senderName,
-      senderUserId: m.senderUser?._id,
-      senderRole: m.senderUser?.role,
       senderCoupleId: m.sender?.coupleId,
+      senderName: m.sender?.profileName || 'Unknown Couple', // Use couple's profileName
+      senderIndividualName: m.senderName, // individual name (Kiran/Raji)
+      accent: m.senderUser?.role === 'primary' ? '#B9B0A7' : '#2D3C62', // Simplified color logic
       timestamp: m.createdAt,
       readBy: m.readBy || [],
+      audioDuration: m.audioDuration,
     };
   });
 
@@ -121,6 +122,7 @@ export const sendGroupMessage = async (req: Request, res: Response): Promise<voi
     senderName: user.name || 'Unknown',
     content,
     contentType: contentType || 'text',
+    audioDuration: req.body.audioDuration,
   });
 
   sendSuccess({ res, data: { message }, statusCode: 201 });
