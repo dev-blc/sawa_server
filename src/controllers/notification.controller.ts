@@ -17,6 +17,8 @@ export const getNotifications = async (req: Request, res: Response): Promise<voi
     .sort({ createdAt: -1 })
     .limit(50);
 
+  console.log(`[NotificationController] User: ${me.coupleId}, Found ${notifications.length} notifications.`);
+
   sendSuccess({ res, statusCode: 200, data: { notifications } });
 };
 
