@@ -3,6 +3,7 @@ import { Couple } from '../models/Couple.model';
 import { Match } from '../models/Match.model';
 import { AppError } from '../utils/AppError';
 import { logger } from '../utils/logger';
+import { Notification } from '../models/Notification.model';
 
 export class MatchService {
   /**
@@ -104,11 +105,31 @@ export class MatchService {
       // But for this logic, we check if it was pending and NOT by us
       if (existingMatch.status === 'pending' && existingMatch.actionBy.toString() !== me._id.toString()) {
          // Mutual like!
-         existingMatch.status = 'accepted';
-         existingMatch.actionBy = me._id;
-         await existingMatch.save();
-         return { isMatch: true };
-      }
+          existingMatch.status = 'accepted';
+          existingMatch.actionBy = me._id;
+          await existingMatch.save();
+
+          // Create notifications for both
+          await Notification.create({
+            recipient: me._id,
+            sender: targetCouple._id,
+            type: 'match',
+            title: "You've Matched!",
+            message: `You matched with ${targetCouple.profileName}! Say hello.`,
+            data: { matchId: existingMatch._id, coupleName: targetCouple.profileName }
+          });
+
+          await Notification.create({
+            recipient: targetCouple._id,
+            sender: me._id,
+            type: 'match',
+            title: "You've Matched!",
+            message: `You matched with ${me.profileName}! Say hello.`,
+            data: { matchId: existingMatch._id, coupleName: me.profileName }
+          });
+
+          return { isMatch: true };
+       }
       
       // If we already liked them, or already accepted
       return { isMatch: existingMatch.status === 'accepted' };
@@ -169,12 +190,14 @@ export class MatchService {
 
     return matches.map(m => {
       // Find the "other" couple
-      const otherCouple = m.couple1._id.toString() === me._id.toString() ? (m.couple2 as any) : (m.couple1 as any);
+      // m.couple1 is populated, so it's a full document. We check _id.
+      const isMeCouple1 = m.couple1._id.equals(me._id);
+      const otherCouple = isMeCouple1 ? (m.couple2 as any) : (m.couple1 as any);
       
       return {
         _id: m._id, // This is the matchId
         coupleId: otherCouple.coupleId,
-        profileName: otherCouple.profileName,
+        profileName: otherCouple.profileName || 'Unknown Couple',
         primaryPhoto: otherCouple.primaryPhoto,
         location: otherCouple.location,
         status: m.status
