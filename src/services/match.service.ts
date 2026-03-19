@@ -168,8 +168,17 @@ export class MatchService {
     }).populate('couple1').populate('couple2');
 
     return matches.map(m => {
-      // Return the OPPOSITE couple
-      return m.couple1._id.toString() === me._id.toString() ? m.couple2 : m.couple1;
+      // Find the "other" couple
+      const otherCouple = m.couple1._id.toString() === me._id.toString() ? (m.couple2 as any) : (m.couple1 as any);
+      
+      return {
+        _id: m._id, // This is the matchId
+        coupleId: otherCouple.coupleId,
+        profileName: otherCouple.profileName,
+        primaryPhoto: otherCouple.primaryPhoto,
+        location: otherCouple.location,
+        status: m.status
+      };
     });
   }
 
