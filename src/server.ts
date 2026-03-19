@@ -25,6 +25,25 @@ const start = async (): Promise<void> => {
     logger.info(`🌐  API base:     http://localhost:${env.PORT}/api/v1`);
   });
 
+  // ─── Self-Wakeup Logic (Render Keep-Alive) ──────────────────────────────────
+  if (env.RENDER_EXTERNAL_URL) {
+    const WAKEUP_INTERVAL = 10 * 60 * 1000; // 10 minutes
+    setInterval(async () => {
+      try {
+        const url = `${env.RENDER_EXTERNAL_URL}/wakeup`;
+        const res = await fetch(url);
+        if (res.ok) {
+           logger.info(`⏰  Self-wakeup ping successful: ${url}`);
+        } else {
+           logger.warn(`⏰  Self-wakeup ping failed with status ${res.status}`);
+        }
+      } catch (err) {
+        logger.error('⏰  Error during self-wakeup ping:', err);
+      }
+    }, WAKEUP_INTERVAL);
+    logger.info(`⏰  Self-wakeup scheduled every 10 mins for: ${env.RENDER_EXTERNAL_URL}`);
+  }
+
   // ─── Graceful Shutdown ──────────────────────────────────────────────────────
   const shutdown = (signal: string): void => {
     logger.info(`\n⚠️   ${signal} received. Shutting down gracefully...`);

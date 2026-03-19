@@ -30,10 +30,10 @@ export class MatchService {
       logger.info(`[MatchService] Discovery feed too small (${potentialCouples.length}), adding dummy fallbacks`);
       
       const dummyData = [
-        { name: 'Arjun & Meera', photo: 'https://images.unsplash.com/photo-1511285560929-80b456fea0bc?auto=format&fit=crop&q=80' },
-        { name: 'Sameer & Zara', photo: 'https://images.unsplash.com/photo-1533228892549-78356748ed2c?auto=format&fit=crop&q=80' },
-        { name: 'Rohan & Ananya', photo: 'https://images.unsplash.com/photo-1510060938367-e94025ad5323?auto=format&fit=crop&q=80' },
-        { name: 'Ishaan & Maya', photo: 'https://images.unsplash.com/photo-1531746020798-e6953c6e8e04?auto=format&fit=crop&q=80' },
+        { name: 'Arjun & Meera', photo: 'https://picsum.photos/seed/sawa1/800/1200' },
+        { name: 'Sameer & Zara', photo: 'https://picsum.photos/seed/sawa2/800/1200' },
+        { name: 'Rohan & Ananya', photo: 'https://picsum.photos/seed/sawa3/800/1200' },
+        { name: 'Ishaan & Maya', photo: 'https://picsum.photos/seed/sawa4/800/1200' },
       ];
 
       for (const d of dummyData) {
@@ -79,8 +79,17 @@ export class MatchService {
     const me = await Couple.findOne({ coupleId: requestingCoupleId });
     if (!me) throw new AppError('Profile not found', 404);
 
+    // Transient dummy support
+    if (targetCoupleIdStr.startsWith('dummy-') || !mongoose.Types.ObjectId.isValid(targetCoupleIdStr)) {
+      logger.info(`[MatchService] Say Hello for dummy couple ${targetCoupleIdStr} - success (no DB)`);
+      return { isMatch: false };
+    }
+
     const targetCouple = await Couple.findById(targetCoupleIdStr);
-    if (!targetCouple) throw new AppError('Target profile not found', 404);
+    if (!targetCouple) {
+       logger.warn(`[MatchService] sayHello: Target couple ${targetCoupleIdStr} not found in DB. Skipping interaction.`);
+       return { isMatch: false };
+    }
 
     // Check if they already liked us (a match)
     const reverseMatch = await Match.findOne({ couple1: targetCouple._id, couple2: me._id, status: 'pending' });
@@ -120,8 +129,17 @@ export class MatchService {
     const me = await Couple.findOne({ coupleId: requestingCoupleId });
     if (!me) throw new AppError('Profile not found', 404);
 
+    // Transient dummy support
+    if (targetCoupleIdStr.startsWith('dummy-') || !mongoose.Types.ObjectId.isValid(targetCoupleIdStr)) {
+      logger.info(`[MatchService] Skip for dummy couple ${targetCoupleIdStr} - success (no DB)`);
+      return { skipped: true };
+    }
+
     const targetCouple = await Couple.findById(targetCoupleIdStr);
-    if (!targetCouple) throw new AppError('Target profile not found', 404);
+    if (!targetCouple) {
+       logger.warn(`[MatchService] skipCouple: Target couple ${targetCoupleIdStr} not found in DB. Already gone.`);
+       return { skipped: true };
+    }
 
     await Match.create({
       couple1: me._id,

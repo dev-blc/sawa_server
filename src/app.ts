@@ -51,6 +51,15 @@ export const createApp = (): Application => {
     });
   });
 
+  // ─── Wakeup Ping ─────────────────────────────────────────────────────────────
+  app.get('/wakeup', (_req: Request, res: Response) => {
+    res.status(200).json({ 
+      success: true, 
+      message: 'Server is awake',
+      timestamp: new Date().toISOString()
+    });
+  });
+
   // ─── API Routes ──────────────────────────────────────────────────────────────
   app.use('/api/v1', apiRouter);
 

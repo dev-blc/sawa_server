@@ -14,10 +14,10 @@ const MONGODB_URI = process.env.MONGODB_URI || 'mongodb://localhost:27017/sawa';
 const COUPLES = [
   {
     coupleId: 'seed_couple_1',
-    primaryPhoto: 'https://images.unsplash.com/photo-1510060938367-e94025ad5323?ixlib=rb-4.0.3&auto=format&fit=crop&w=800&q=80',
+    primaryPhoto: 'https://picsum.photos/seed/sawa_c1/800/1200',
     secondaryPhotos: [
-      'https://images.unsplash.com/photo-1494774157365-9e04c6720e47?ixlib=rb-4.0.3&auto=format&fit=crop&w=800&q=80',
-      'https://images.unsplash.com/photo-1521404099395-ac99fb8dffa9?ixlib=rb-4.0.3&auto=format&fit=crop&w=800&q=80'
+      'https://picsum.photos/seed/sawa_c1b/800/1200',
+      'https://picsum.photos/seed/sawa_c1c/800/1200'
     ],
     profileName: 'Aisha & Rohan',
     bio: 'Big foodies looking to explore new cafes and host weekend dinners!',
@@ -34,8 +34,8 @@ const COUPLES = [
   },
   {
     coupleId: 'seed_couple_2',
-    primaryPhoto: 'https://images.unsplash.com/photo-1516059129528-94b6330ce4f7?ixlib=rb-4.0.3&auto=format&fit=crop&w=800&q=80',
-    secondaryPhotos: ['https://images.unsplash.com/photo-1520694478166-daaaaaec74b4?ixlib=rb-4.0.3&auto=format&fit=crop&w=800&q=80'],
+    primaryPhoto: 'https://picsum.photos/seed/sawa_c2/800/1200',
+    secondaryPhotos: ['https://picsum.photos/seed/sawa_c2b/800/1200'],
     profileName: 'Priya & Rahul',
     bio: 'Avid travelers and hikers. Always planning the next weekend trip.',
     relationshipStatus: 'Engaged',
@@ -51,7 +51,7 @@ const COUPLES = [
   },
   {
     coupleId: 'seed_couple_3',
-    primaryPhoto: 'https://images.unsplash.com/photo-1542157585-ef20bfcce579?ixlib=rb-4.0.3&auto=format&fit=crop&w=800&q=80',
+    primaryPhoto: 'https://picsum.photos/seed/sawa_c3/800/1200',
     secondaryPhotos: [],
     profileName: 'Simran & Kunal',
     bio: 'Introverted couple who love art, cultural events, and quiet wine nights.',
@@ -68,7 +68,7 @@ const COUPLES = [
   },
   {
     coupleId: 'seed_couple_4',
-    primaryPhoto: 'https://images.unsplash.com/photo-1523438885200-e635ba2c371e?ixlib=rb-4.0.3&auto=format&fit=crop&w=800&q=80',
+    primaryPhoto: 'https://picsum.photos/seed/sawa_c4/800/1200',
     secondaryPhotos: [],
     profileName: 'Kavita & Amit',
     bio: 'Tennis partners and fitness enthusiasts. Looking for other active couples!',
@@ -84,7 +84,7 @@ const COUPLES = [
   },
   {
     coupleId: 'seed_couple_5',
-    primaryPhoto: 'https://images.unsplash.com/photo-1533228892549-78356748ed2c?ixlib=rb-4.0.3&auto=format&fit=crop&w=800&q=80',
+    primaryPhoto: 'https://picsum.photos/seed/sawa_c5/800/1200',
     secondaryPhotos: [],
     profileName: 'Zara & Neel',
     bio: 'Techies by day, musicians by night. Love jam sessions and live gigs.',
@@ -99,7 +99,7 @@ const COUPLES = [
   },
   {
     coupleId: 'seed_couple_6',
-    primaryPhoto: 'https://images.unsplash.com/photo-1517841905240-472988babdf9?ixlib=rb-4.0.3&auto=format&fit=crop&w=800&q=80',
+    primaryPhoto: 'https://picsum.photos/seed/sawa_c6/800/1200',
     secondaryPhotos: [],
     profileName: 'Anjali & Vikram',
     bio: 'Passionate about sustainable living and weekend farming.',
@@ -114,7 +114,7 @@ const COUPLES = [
   },
   {
     coupleId: 'seed_couple_7',
-    primaryPhoto: 'https://images.unsplash.com/photo-1522529599102-193c0d76b5b6?ixlib=rb-4.0.3&auto=format&fit=crop&w=800&q=80',
+    primaryPhoto: 'https://picsum.photos/seed/sawa_c7/800/1200',
     secondaryPhotos: [],
     profileName: 'Sana & Kabir',
     bio: 'Just moved to the city! Looking for friends to explore local board game cafes.',
@@ -129,7 +129,7 @@ const COUPLES = [
   },
   {
     coupleId: 'seed_couple_8',
-    primaryPhoto: 'https://images.unsplash.com/photo-1531746020798-e6953c6e8e04?ixlib=rb-4.0.3&auto=format&fit=crop&w=800&q=80',
+    primaryPhoto: 'https://picsum.photos/seed/sawa_c8/800/1200',
     secondaryPhotos: [],
     profileName: 'Maya & Ishaan',
     bio: 'Photographers who love chasing sunsets and capturing city life.',
@@ -149,21 +149,21 @@ const COMMUNITIES = [
     name: 'Weekend Getaways India',
     description: 'A close-knit group for couples strictly interested in escaping the city traffic to find fresh air and calm mountains.',
     city: 'All Cities',
-    coverImageUrl: 'https://images.unsplash.com/photo-1506869640319-ce1a46062c92?ixlib=rb-4.0.3&auto=format&fit=crop&w=800&q=80',
+    coverImageUrl: 'https://picsum.photos/seed/sawa_comm1/800/1200',
     tags: ['Travel', 'Nature', 'Couples']
   },
   {
     name: 'Bangalore Foodies',
     description: 'We love testing out new microbreweries and hidden culinary gems across Indiranagar, Koramangala and beyond!',
     city: 'Bengaluru',
-    coverImageUrl: 'https://images.unsplash.com/photo-1511988617509-a57c8a288659?ixlib=rb-4.0.3&auto=format&fit=crop&w=800&q=80',
+    coverImageUrl: 'https://picsum.photos/seed/sawa_comm2/800/1200',
     tags: ['Food', 'Drinks', 'Nightlife']
   },
   {
     name: 'Mumbai Art Crawl',
     description: 'Exploring art galleries, experimental theatre, and vibrant cultural exhibitions through the city together.',
     city: 'Mumbai',
-    coverImageUrl: 'https://images.unsplash.com/photo-1542144612-1b3641ec3459?ixlib=rb-4.0.3&auto=format&fit=crop&w=800&q=80',
+    coverImageUrl: 'https://picsum.photos/seed/sawa_comm3/800/1200',
     tags: ['Art', 'Culture', 'Museums']
   }
 ];
@@ -180,7 +180,7 @@ const seedData = async () => {
     // Clean up
     await User.deleteMany({ phone: { $regex: '^seed_' } });
     await Couple.deleteMany({ coupleId: { $regex: '^seed_' } });
-    await Community.deleteMany(); // Reset all communities
+    await Community.deleteMany(); 
 
     logger.info('Cleaned up old seeds.');
 
@@ -188,7 +188,6 @@ const seedData = async () => {
     for (let i = 0; i < COUPLES.length; i++) {
        const cd = COUPLES[i];
        
-       // Create dummy user 1
        const user1 = await User.create({
          phone: `seed_phone1_${i}`,
          name: cd.profileName.split(' & ')[0],
@@ -197,7 +196,6 @@ const seedData = async () => {
          isPhoneVerified: true
        });
 
-       // Create dummy user 2
        const user2 = await User.create({
          phone: `seed_phone2_${i}`,
          name: cd.profileName.split(' & ')[1],
@@ -215,8 +213,6 @@ const seedData = async () => {
 
     logger.info(`Successfully seeded ${COUPLES.length} couples!`);
 
-    // Seed Communities
-    // We will attach the seeded couples to these communities as members to make the counts and visuals cool!
     const allCouples = await Couple.find({ coupleId: { $regex: '^seed_' } });
     for (let i = 0; i < COMMUNITIES.length; i++) {
         const commData = COMMUNITIES[i];
@@ -229,7 +225,6 @@ const seedData = async () => {
     }
 
     logger.info(`Successfully seeded ${COMMUNITIES.length} communities!`);
-
     process.exit(0);
   } catch (error) {
     logger.error('Error during seeding:', error);
