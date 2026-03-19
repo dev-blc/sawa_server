@@ -1,4 +1,5 @@
 import { Request, Response, NextFunction } from 'express';
+import { User } from '../models/User.model';
 import { verifyAccessToken } from '../utils/jwt';
 import { AppError } from '../utils/AppError';
 
@@ -9,6 +10,7 @@ declare global {
       user?: {
         userId: string;
         coupleId?: string;
+        userName?: string;
       };
     }
   }
@@ -18,11 +20,11 @@ declare global {
  * Middleware: Validates JWT Bearer token and attaches user payload to req.user.
  * Add to any protected route.
  */
-export const authenticate = (
+export const authenticate = async (
   req: Request,
   _res: Response,
   next: NextFunction,
-): void => {
+): Promise<void> => {
   const authHeader = req.headers.authorization;
 
   if (!authHeader || !authHeader.startsWith('Bearer ')) {
@@ -36,6 +38,15 @@ export const authenticate = (
   }
 
   const payload = verifyAccessToken(token);
+  
+  // Set basic info from payload
   req.user = { userId: payload.userId, coupleId: payload.coupleId };
+
+  // Fetch name asynchronously to attach if available
+  const user = await User.findById(payload.userId).select('name');
+  if (user) {
+    req.user.userName = user.name;
+  }
+
   next();
 };

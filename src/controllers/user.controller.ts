@@ -1,4 +1,5 @@
 import { Request, Response } from 'express';
+import { User } from '../models/User.model';
 import { sendSuccess } from '../utils/response';
 import { AppError } from '../utils/AppError';
 
@@ -7,8 +8,9 @@ import { AppError } from '../utils/AppError';
  */
 export const getMe = async (req: Request, res: Response): Promise<void> => {
   if (!req.user) throw new AppError('Unauthorized', 401);
-  // TODO Phase 1: fetch user from DB by req.user.userId
-  sendSuccess({ res, data: { userId: req.user.userId }, message: 'User fetched [stub]' });
+  const user = await User.findById(req.user.userId).select('name phone email dob role coupleId');
+  if (!user) throw new AppError('User not found', 404);
+  sendSuccess({ res, data: { user } });
 };
 
 /**

@@ -208,6 +208,7 @@ export class MatchService {
         coupleId: otherCouple.coupleId,
         profileName: otherCouple.profileName || 'Unknown Couple',
         primaryPhoto: otherCouple.primaryPhoto,
+        secondaryPhotos: otherCouple.secondaryPhotos || [],
         location: otherCouple.location,
         status: m.status
       };
