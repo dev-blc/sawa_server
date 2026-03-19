@@ -12,7 +12,7 @@ const INITIAL_COMMUNITIES = [
     city: 'Bangalore',
     maxMembers: 200,
     tags: ['Travel', 'Adventure'],
-    coverImageUrl: 'https://images.unsplash.com/photo-1517868866752-1df6b7cbe390?auto=format&fit=crop&w=800&q=80',
+    coverImageUrl: 'https://images.pexels.com/photos/1271619/pexels-photo-1271619.jpeg?auto=compress&cs=tinysrgb&w=800',
   },
   {
     name: 'Weekend Foodies',
@@ -28,7 +28,7 @@ const INITIAL_COMMUNITIES = [
     city: 'Mumbai',
     maxMembers: 100,
     tags: ['Games', 'Indoor'],
-    coverImageUrl: 'https://images.unsplash.com/photo-1610443209569-a1b4d00d72de?auto=format&fit=crop&w=800&q=80',
+    coverImageUrl: 'https://images.pexels.com/photos/278918/pexels-photo-278918.jpeg?auto=compress&cs=tinysrgb&w=800',
   },
 ];
 
@@ -55,25 +55,31 @@ export class CommunityService {
 
     const comms = await Community.find();
 
-    return comms.map(c => ({
-      id: c._id,
-      title: c.name,
-      about: c.description,
-      city: c.city,
-      couples: c.members.length,
-      imageUri: c.coverImageUrl,
-      isMember: c.members.includes(me._id as any) || c.members.some(m => m.toString() === me._id.toString()),
-      joinRequest: {
-        name: 'Rahul & Priya', // Dummy request for UI mapping
-        city: 'New Delhi',
-      },
-      members: Array.from({ length: c.members.length }).map((_, i) => ({
-        id: `member-${i}`,
-        name: `Couple ${i + 1}`,
+    return comms.map(c => {
+      const isMember = c.members.some(m => m.toString() === me._id.toString());
+      const isAdmin = c.admins.some(a => a.toString() === me._id.toString());
+      
+      return {
+        id: c._id,
+        title: c.name,
+        about: c.description,
         city: c.city,
-        accent: '#DBCBA6'
-      }))
-    }));
+        couples: c.members.length,
+        imageUri: c.coverImageUrl,
+        isMember,
+        isAdmin,
+        joinRequest: {
+          name: 'Rahul & Priya', // Dummy request for UI mapping
+          city: 'New Delhi',
+        },
+        members: Array.from({ length: c.members.length }).map((_, i) => ({
+          id: `member-${i}`,
+          name: `Couple ${i + 1}`,
+          city: c.city,
+          accent: '#DBCBA6'
+        }))
+      };
+    });
   }
 
   async getMyCommunities(requestingCoupleId: string) {
@@ -81,22 +87,41 @@ export class CommunityService {
     if (!me) throw new AppError('Profile not found', 404);
 
     const comms = await Community.find({ members: me._id });
-    // In our seed, the requester is in all of them by default.
 
-    return comms.map(c => ({
-      id: c._id,
-      title: c.name,
-      about: c.description,
-      city: c.city,
-      couples: c.members.length,
-      imageUri: c.coverImageUrl,
-      isMember: true,
-      joinRequest: {
-        name: 'Rahul & Priya',
-        city: 'New Delhi',
-      },
-      members: [] // Unused in list
-    }));
+    return comms.map(c => {
+      const isAdmin = c.admins.some(a => a.toString() === me._id.toString());
+      return {
+        id: c._id,
+        title: c.name,
+        about: c.description,
+        city: c.city,
+        couples: c.members.length,
+        imageUri: c.coverImageUrl,
+        isMember: true,
+        isAdmin,
+        joinRequest: {
+          name: 'Rahul & Priya',
+          city: 'New Delhi',
+        },
+        members: [] // Unused in list
+      };
+    });
+  }
+
+  async createCommunity(requestingCoupleId: string, data: any) {
+    const me = await Couple.findOne({ coupleId: requestingCoupleId });
+    if (!me) throw new AppError('Profile not found', 404);
+
+    const community = await Community.create({
+      ...data,
+      admins: [me._id],
+      members: [me._id],
+    });
+
+    return {
+       id: community._id,
+       name: community.name,
+    };
   }
 
   async joinCommunity(requestingCoupleId: string, communityId: string, note?: string) {

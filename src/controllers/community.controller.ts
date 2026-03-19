@@ -43,8 +43,24 @@ export const getCommunityDetail = async (_req: Request, _res: Response): Promise
   // Can be implemented similarly
 };
 
-export const createCommunity = async (_req: Request, _res: Response): Promise<void> => {
-  // Optional, if user wants to create from FAB
+export const createCommunity = async (req: Request, res: Response): Promise<void> => {
+  const { coupleId } = req.user!;
+  const data = req.body;
+
+  const community = await communityService.createCommunity(coupleId!, {
+    name: data.name,
+    description: data.description,
+    city: data.city,
+    coverImageUrl: data.coverImageUrl,
+    tags: data.tags || [],
+  });
+
+  sendSuccess({ 
+    res, 
+    statusCode: 201, 
+    data: { community },
+    message: 'Community created successfully!'
+  });
 };
 
 export const joinCommunity = async (req: Request, res: Response): Promise<void> => {
