@@ -81,14 +81,19 @@ export class MatchService {
     if (!me) throw new AppError('Profile not found', 404);
 
     // Transient dummy support
-    if (targetCoupleIdStr.startsWith('dummy-') || !mongoose.Types.ObjectId.isValid(targetCoupleIdStr)) {
-      logger.info(`[MatchService] Say Hello for dummy couple ${targetCoupleIdStr} - success (no DB)`);
-      return { isMatch: false };
+    // Try to find the target couple. We check BOTH _id (ObjectId) and coupleId (UUID).
+    let targetCouple;
+    if (mongoose.Types.ObjectId.isValid(targetCoupleIdStr)) {
+      targetCouple = await Couple.findById(targetCoupleIdStr);
+    } 
+    
+    if (!targetCouple) {
+      targetCouple = await Couple.findOne({ coupleId: targetCoupleIdStr });
     }
 
-    const targetCouple = await Couple.findById(targetCoupleIdStr);
     if (!targetCouple) {
-       logger.warn(`[MatchService] sayHello: Target couple ${targetCoupleIdStr} not found in DB. Skipping interaction.`);
+       // If still not found, it's a dummy or deleted
+       logger.info(`[MatchService] Say Hello for dummy or unknown couple ${targetCoupleIdStr} - success (no DB)`);
        return { isMatch: false };
     }
 
@@ -128,7 +133,7 @@ export class MatchService {
             data: { matchId: existingMatch._id, coupleName: me.profileName }
           });
 
-          return { isMatch: true };
+          return { isMatch: true, matchId: existingMatch._id };
        }
       
       // If we already liked them, or already accepted
@@ -154,14 +159,18 @@ export class MatchService {
     if (!me) throw new AppError('Profile not found', 404);
 
     // Transient dummy support
-    if (targetCoupleIdStr.startsWith('dummy-') || !mongoose.Types.ObjectId.isValid(targetCoupleIdStr)) {
-      logger.info(`[MatchService] Skip for dummy couple ${targetCoupleIdStr} - success (no DB)`);
-      return { skipped: true };
+    // Try to find the target couple. We check BOTH _id (ObjectId) and coupleId (UUID).
+    let targetCouple;
+    if (mongoose.Types.ObjectId.isValid(targetCoupleIdStr)) {
+      targetCouple = await Couple.findById(targetCoupleIdStr);
+    } 
+    
+    if (!targetCouple) {
+      targetCouple = await Couple.findOne({ coupleId: targetCoupleIdStr });
     }
 
-    const targetCouple = await Couple.findById(targetCoupleIdStr);
     if (!targetCouple) {
-       logger.warn(`[MatchService] skipCouple: Target couple ${targetCoupleIdStr} not found in DB. Already gone.`);
+       logger.info(`[MatchService] skipCouple: Target couple ${targetCoupleIdStr} is dummy or not in DB. Already gone.`);
        return { skipped: true };
     }
 
