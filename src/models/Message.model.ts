@@ -7,6 +7,8 @@ export interface IMessage extends Document {
   chatType: ChatType;
   chatId: Types.ObjectId; // matchId (private) or communityId (group)
   sender: Types.ObjectId; // ref: Couple
+  senderUser: Types.ObjectId; // ref: User (Individual sender)
+  senderName: string; // User's name (X, Y, A, or B)
   content: string;
   contentType: ContentType;
   readBy: Types.ObjectId[];
@@ -23,6 +25,8 @@ const MessageSchema = new Schema<IMessage>(
     },
     chatId: { type: Schema.Types.ObjectId, required: true, index: true },
     sender: { type: Schema.Types.ObjectId, ref: 'Couple', required: true },
+    senderUser: { type: Schema.Types.ObjectId, ref: 'User', required: true },
+    senderName: { type: String, required: true },
     content: { type: String, required: true, trim: true, maxlength: 2000 },
     contentType: {
       type: String,

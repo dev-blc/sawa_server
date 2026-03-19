@@ -10,6 +10,7 @@ declare module 'socket.io' {
   interface Socket {
     userId?: string;
     coupleId?: string;
+    userName?: string;
   }
 }
 
@@ -35,7 +36,15 @@ export const createSocketServer = (httpServer: HTTPServer): SocketIOServer => {
       const payload = verifyAccessToken(token);
       socket.userId = payload.userId;
       socket.coupleId = payload.coupleId;
-      next();
+
+      // Fetch user name for display
+      import('../models/User.model').then(({ User }) => {
+        User.findById(payload.userId).then((user) => {
+           if (user) socket.userName = user.name || 'Unknown';
+           next();
+        }).catch(() => next());
+      }).catch(() => next());
+
     } catch {
       next(new Error('Invalid authentication token'));
     }
