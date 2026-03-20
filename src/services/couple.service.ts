@@ -117,26 +117,63 @@ export class CoupleService {
       // In a real app, you'd fetch the actual question text here.
       // For now, we'll use a placeholder mapping based on question IDs.
       const questionMap: Record<string, string> = {
-        q1: 'What is your current focus as a couple?',
-        q2: 'What kind of social activities do you enjoy?',
-        q3: 'What are you looking for on SAWA?',
-        q4: 'How would you describe your weekend vibe?',
+        q1: 'Life Stage',
+        q2: 'Couple Personality',
+        q3: 'Favorite Activities',
+        q4: 'Meeting Frequency',
+        q5: 'What makes a good match',
+        q6: 'Things to avoid',
+      };
+
+      // Map option IDs to friendly labels for better LLM context
+      const optionLabelMap: Record<string, string> = {
+        // Q1
+        'q1-career': 'Building careers',
+        'q1-family': 'Family first',
+        'q1-settled': 'Newly settled',
+        'q1-living': 'Living it up',
+        // Q2
+        'q2-hosts': 'The Hosts',
+        'q2-yes-couple': "The 'yes' couple",
+        'q2-planners': 'The Planners',
+        'q2-explorers': 'The Explorers',
+        // Q4
+        'q4-once-month': 'Once a month',
+        'q4-twice-month': 'Twice a month',
+        'q4-once-week': 'Once a week',
+        'q4-when-fits': 'Whenever it fits',
+        // Q5
+        'q5-similar-stage': 'Similar life stage',
+        'q5-shared-interests': 'Shared interests',
+        'q5-small-groups': 'Small groups',
+        'q5-structured-plans': 'Structured plans',
+        'q5-clear-boundaries': 'Clear boundaries',
+        'q5-weekend-availability': 'Weekend availability',
+        // Q6
+        'q6-late-night': 'Late-night plans',
+        'q6-large-groups': 'Very large groups',
+        'q6-alcohol-centric': 'Alcohol-centric meetups',
+        'q6-last-minute': 'Last-minute plans',
       };
 
       const qaData = answers.map((a) => ({
         question: questionMap[a.questionId] || 'About us',
-        answers: a.selectedOptionIds,
+        answers: a.selectedOptionIds.map(id => optionLabelMap[id] || id),
       }));
 
       const { generateCoupleBio } = require('../utils/ai');
-      const aiBio = await generateCoupleBio(qaData);
+      const aiResponse = await generateCoupleBio(qaData);
 
-      if (aiBio) {
-        coupleDoc.bio = aiBio;
-        logger.info(`[CoupleService] AI bio generated successfully for ${coupleId}`);
+      if (aiResponse) {
+        if (aiResponse.bio) coupleDoc.bio = aiResponse.bio;
+        if (aiResponse.matchCriteria && aiResponse.matchCriteria.length > 0) {
+          if (!coupleDoc.preferences) coupleDoc.preferences = {};
+          coupleDoc.preferences.matchCriteria = aiResponse.matchCriteria;
+        }
+        logger.info(`[CoupleService] AI bio & criteria generated for ${coupleId}`);
       }
     } catch (aiErr) {
-      logger.error(`[CoupleService] AI bio generation failed (non-critical):`, aiErr);
+      logger.error(`[CoupleService] AI generation failed (non-critical):`, aiErr);
     }
     // ─────────────────────────────────────────────────────────────────────────
 
