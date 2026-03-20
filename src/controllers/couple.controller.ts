@@ -48,11 +48,24 @@ const CompleteOnboardingSchema = z.object({
     })
   ),
 });
+ 
+const UpdateMyCoupleSchema = z.object({
+  bio: z.string().optional(),
+  relationshipStatus: z.string().optional(),
+  preferences: z.any().optional(),
+  yourName: z.string().optional(),
+  yourDob: z.string().optional(),
+  yourEmail: z.string().optional(),
+  partnerName: z.string().optional(),
+  partnerDob: z.string().optional(),
+  partnerEmail: z.string().optional(),
+});
 
 export const validateSetupProfile = validate(SetupProfileSchema);
 export const validateUploadPhotos = validate(UploadPhotosSchema);
 export const validateSubmitAnswers = validate(SubmitAnswersSchema);
 export const validateCompleteOnboarding = validate(CompleteOnboardingSchema);
+export const validateUpdateMyCouple = validate(UpdateMyCoupleSchema);
 
 // ─── Controllers ────────────────────────────────────────────────────────────
 
@@ -133,8 +146,13 @@ export const getMyCouple = async (req: Request, res: Response) => {
   sendSuccess({ res, data: { couple } });
 };
 
-export const updateMyCouple = async (_req: Request, _res: Response) => {
-  // Stub for Phase 2 settings updates
+export const updateMyCouple = async (req: Request, res: Response) => {
+  const { coupleId } = req.user!;
+  const data = req.body as z.infer<typeof UpdateMyCoupleSchema>;
+
+  const couple = await coupleService.updateProfile(coupleId!, data);
+
+  sendSuccess({ res, statusCode: 200, message: 'Profile updated successfully', data: { couple } });
 };
 
 export const invitePartner = async (_req: Request, _res: Response) => {

@@ -13,6 +13,7 @@ import {
   validateUploadPhotos,
   validateSubmitAnswers,
   validateCompleteOnboarding,
+  validateUpdateMyCouple,
   completeOnboarding,
   getCoupleById,
 } from '../controllers/couple.controller';
@@ -43,7 +44,10 @@ router.post('/onboarding/complete', validateCompleteOnboarding, asyncHandler(com
 router.post('/', asyncHandler(createCouple));
 
 // PATCH /api/v1/couples/me
-router.patch('/me', asyncHandler(updateMyCouple));
+router.patch('/me', validateUpdateMyCouple, asyncHandler(updateMyCouple));
+
+// PUT /api/v1/couples/me (alias for PATCH)
+router.put('/me', validateUpdateMyCouple, asyncHandler(updateMyCouple));
 
 // POST /api/v1/couples/me/invite
 router.post('/me/invite', asyncHandler(invitePartner));

@@ -144,6 +144,56 @@ export class CoupleService {
     logger.info(`[CoupleService] Onboarding complete for coupleId: ${coupleId}`);
   }
 
+  async updateProfile(
+    coupleId: string,
+    data: {
+      bio?: string;
+      relationshipStatus?: string;
+      preferences?: any;
+      yourName?: string;
+      yourDob?: string;
+      yourEmail?: string;
+      partnerName?: string;
+      partnerDob?: string;
+      partnerEmail?: string;
+    }
+  ) {
+    const coupleDoc = await Couple.findOne({ coupleId });
+    if (!coupleDoc) throw new AppError('Couple not found', 404);
+
+    if (data.bio !== undefined) coupleDoc.bio = data.bio;
+    if (data.relationshipStatus !== undefined) coupleDoc.relationshipStatus = data.relationshipStatus;
+    if (data.preferences !== undefined) coupleDoc.preferences = data.preferences;
+
+    // Update partner names if provided
+    if (data.yourName || data.partnerName) {
+      const p1Name = data.yourName || (await User.findById(coupleDoc.partner1))?.name || 'Partner 1';
+      const p2Name = data.partnerName || (await User.findById(coupleDoc.partner2))?.name || 'Partner 2';
+      coupleDoc.profileName = `${p1Name} & ${p2Name}`;
+    }
+
+    await coupleDoc.save();
+
+    // Update individual User records
+    if (coupleDoc.partner1 && (data.yourName || data.yourDob || data.yourEmail)) {
+      await User.findByIdAndUpdate(coupleDoc.partner1, {
+        name: data.yourName,
+        dob: data.yourDob,
+        email: data.yourEmail,
+      });
+    }
+
+    if (coupleDoc.partner2 && (data.partnerName || data.partnerDob || data.partnerEmail)) {
+      await User.findByIdAndUpdate(coupleDoc.partner2, {
+        name: data.partnerName,
+        dob: data.partnerDob,
+        email: data.partnerEmail,
+      });
+    }
+
+    return coupleDoc;
+  }
+
   async getCouple(coupleId: string): Promise<ICouple | null> {
     return Couple.findOne({ coupleId })
       .populate('partner1', 'name phone dob email')
