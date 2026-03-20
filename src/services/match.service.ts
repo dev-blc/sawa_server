@@ -11,19 +11,45 @@ export class MatchService {
    * If there are no seeded couples in the database other than the requester, 
    * this seeds a dummy couple (Arjun & Meera) to test the UI.
    */
-  async getDiscoveryFeed(requestingCoupleId: string) {
+  async getDiscoveryFeed(requestingCoupleId: string, cityFilter?: string) {
     const me = await Couple.findOne({ coupleId: requestingCoupleId });
     if (!me) throw new AppError('Couple profile not found', 404);
+
+    const SUPPORTED_CITIES = [
+      'Bangalore',
+      'Chennai',
+      'New Delhi',
+      'Delhi',
+      'Mumbai',
+      'Gurgaon',
+      'Noida',
+      'Hyderabad',
+      'Goa',
+    ];
 
     // Get all couple _ids that we have already interacted with
     const interactions = await Match.find({ couple1: me._id }).select('couple2');
     const interactedIds = interactions.map(m => m.couple2);
 
+    // Build query
+    const query: any = {
+       _id: { $ne: me._id, $nin: interactedIds },
+       isProfileComplete: true, 
+    };
+
+    // Rule: "if the location is not listed in the country then show all the couples from all the citeit"
+    // "if i change it to chennai couples in chennai only shown"
+    if (cityFilter && cityFilter !== 'All City' && cityFilter !== 'All Cities' && cityFilter !== 'Unknown') {
+       const isSupported = SUPPORTED_CITIES.some(c => cityFilter.toLowerCase().includes(c.toLowerCase()));
+       if (isSupported) {
+          // It's a major city, filter strictly
+          query['location.city'] = { $regex: new RegExp(cityFilter, 'i') };
+       }
+       // If not supported (e.g. Mountain View), query stays generic (All Cities)
+    }
+
     // Find couples that are not us, and not interacted with
-    let potentialCouples = await Couple.find({
-      _id: { $ne: me._id, $nin: interactedIds },
-      isProfileComplete: true, 
-    }).limit(10); // Fetch up to 10 at a time
+    let potentialCouples = await Couple.find(query).limit(10); // Fetch up to 10 at a time
 
     // --- Developer Seed Fallback ---
     // If empty or too few (because it's just the user testing), provide more dummy couples

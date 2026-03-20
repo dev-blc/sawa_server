@@ -15,6 +15,10 @@ const SetupProfileSchema = z.object({
   partnerEmail: z.string().email('Invalid email').optional().or(z.literal('')),
   partnerDob: z.string().optional().or(z.literal('')),
   relationshipStatus: z.string().optional(),
+  location: z.object({
+    city: z.string().optional(),
+    country: z.string().optional(),
+  }).optional(),
 });
 
 const UploadPhotosSchema = z.object({
@@ -47,6 +51,10 @@ const CompleteOnboardingSchema = z.object({
       selectedOptionIds: z.array(z.string()),
     })
   ),
+  location: z.object({
+    city: z.string().optional(),
+    country: z.string().optional(),
+  }).optional(),
 });
  
 const UpdateMyCoupleSchema = z.object({

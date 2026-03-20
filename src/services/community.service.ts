@@ -49,13 +49,33 @@ export class CommunityService {
     }
   }
 
-  async getAllCommunities(requestingCoupleId: string) {
+  async getAllCommunities(requestingCoupleId: string, cityFilter?: string) {
     const me = await Couple.findOne({ coupleId: requestingCoupleId });
     if (!me) throw new AppError('Profile not found', 404);
 
     await this.ensureSeeded(me._id);
 
-    const comms = await Community.find();
+    const SUPPORTED_CITIES = [
+      'Bangalore',
+      'Chennai',
+      'New Delhi',
+      'Delhi',
+      'Mumbai',
+      'Gurgaon',
+      'Noida',
+      'Hyderabad',
+      'Goa',
+    ];
+
+    const query: any = {};
+    if (cityFilter && cityFilter !== 'All City' && cityFilter !== 'All Cities' && cityFilter !== 'Unknown') {
+       const isSupported = SUPPORTED_CITIES.some(c => cityFilter.toLowerCase().includes(c.toLowerCase()));
+       if (isSupported) {
+          query.city = { $regex: new RegExp(cityFilter, 'i') };
+       }
+    }
+
+    const comms = await Community.find(query);
 
     return comms.map(c => {
       const isMember = c.members.some(m => m.toString() === me._id.toString());

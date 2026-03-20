@@ -159,6 +159,7 @@ export const loginVerifyOtp = async (req: Request, res: Response): Promise<void>
       coupleId: result.coupleId,
       accessToken: result.token.accessToken,
       refreshToken: result.token.refreshToken,
+      profile: result.profile,
     },
   });
 };

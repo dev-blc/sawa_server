@@ -27,8 +27,9 @@ export const validateJoinCommunity = validate(JoinCommunitySchema);
 
 export const getAllCommunities = async (req: Request, res: Response): Promise<void> => {
   const { coupleId } = req.user!;
+  const { city } = req.query;
   
-  const communities = await communityService.getAllCommunities(coupleId!);
+  const communities = await communityService.getAllCommunities(coupleId!, city as string);
   
   sendSuccess({ res, statusCode: 200, data: { communities } });
 };

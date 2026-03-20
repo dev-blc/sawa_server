@@ -20,8 +20,9 @@ export const validateMatchAction = validate(MatchActionSchema);
  */
 export const getDiscoveryFeed = async (req: Request, res: Response): Promise<void> => {
   const { coupleId } = req.user!;
+  const { city } = req.query;
   
-  const couples = await matchService.getDiscoveryFeed(coupleId!);
+  const couples = await matchService.getDiscoveryFeed(coupleId!, city as string);
   
   sendSuccess({ res, statusCode: 200, data: { couples } });
 };

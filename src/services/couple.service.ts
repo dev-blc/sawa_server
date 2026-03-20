@@ -18,6 +18,7 @@ export class CoupleService {
       partnerDob?: string;
       partnerEmail?: string;
       relationshipStatus?: string;
+      location?: { city?: string; country?: string };
     }
   ) {
     logger.info(`[CoupleService.setupProfile] START - coupleId: ${coupleId}`);
@@ -51,6 +52,7 @@ export class CoupleService {
         partner2: partner?._id ?? null,
         profileName: `${data.yourName} & ${data.partnerName}`,
         relationshipStatus: data.relationshipStatus,
+        location: data.location || { city: 'Unknown' },
         answers: [],
         secondaryPhotos: [],
         isProfileComplete: false,
@@ -60,6 +62,7 @@ export class CoupleService {
       await Couple.findByIdAndUpdate(existingCouple._id, {
         profileName: `${data.yourName} & ${data.partnerName}`,
         relationshipStatus: data.relationshipStatus,
+        location: data.location || undefined,
       });
       logger.info(`[CoupleService.setupProfile] Existing Couple document updated: ${existingCouple._id}`);
     }

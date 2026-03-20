@@ -4,6 +4,8 @@ import { otpService } from './otp.service';
 import { userRepository } from '../repositories/user.repository';
 import { signAccessToken, signRefreshToken, verifyRefreshToken } from '../utils/jwt';
 import { AppError } from '../utils/AppError';
+import { Couple } from '../models/Couple.model';
+import { User } from '../models/User.model';
 import { logger } from '../utils/logger';
 import { TokenPair } from '../types/index';
 
@@ -187,6 +189,7 @@ export class AuthService {
   ): Promise<{
     coupleId: string;
     token: TokenPair;
+    profile: any;
   }> {
     const result = await otpService.verify(phone, otp);
 
@@ -216,9 +219,12 @@ export class AuthService {
 
     logger.info(`[AuthService] User logged in successfully. coupleId: ${user.coupleId}`);
 
+    const couple = await Couple.findOne({ coupleId: user.coupleId });
+
     return {
       coupleId: user.coupleId,
       token: { accessToken, refreshToken },
+      profile: couple || null,
     };
   }
 }
