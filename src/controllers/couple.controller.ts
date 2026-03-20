@@ -167,6 +167,22 @@ export const invitePartner = async (_req: Request, _res: Response) => {
   // Stub for partner invite features (if needed later)
 };
 
+/**
+ * POST /api/v1/couples/subscribe
+ * Marks the current couple as subscribed.
+ */
+export const subscribe = async (req: Request, res: Response) => {
+  const { coupleId } = req.user!;
+  const couple = await coupleService.subscribe(coupleId!);
+  
+  sendSuccess({ 
+    res, 
+    statusCode: 200, 
+    message: 'Subscription activated. First month is on us!',
+    data: { couple }
+  });
+};
+
 export const getCoupleById = async (req: Request, res: Response) => {
   const { id } = req.params;
   const couple = await coupleService.getCouple(id);

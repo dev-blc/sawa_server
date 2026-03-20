@@ -16,6 +16,7 @@ import {
   validateUpdateMyCouple,
   completeOnboarding,
   getCoupleById,
+  subscribe,
 } from '../controllers/couple.controller';
 
 const router = Router();
@@ -51,5 +52,8 @@ router.put('/me', validateUpdateMyCouple, asyncHandler(updateMyCouple));
 
 // POST /api/v1/couples/me/invite
 router.post('/me/invite', asyncHandler(invitePartner));
+
+// POST /api/v1/couples/subscribe
+router.post('/subscribe', asyncHandler(subscribe));
 
 export default router;

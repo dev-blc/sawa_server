@@ -248,6 +248,16 @@ export class CoupleService {
       .populate('partner2', 'name phone dob email')
       .exec();
   }
+
+  async subscribe(coupleId: string): Promise<ICouple | null> {
+    const couple = await Couple.findOneAndUpdate(
+      { coupleId },
+      { isSubscribed: true },
+      { new: true }
+    );
+    if (!couple) throw new AppError('Couple not found', 404);
+    return couple;
+  }
 }
 
 export const coupleService = new CoupleService();

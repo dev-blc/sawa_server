@@ -20,6 +20,7 @@ export interface ICouple extends Document {
   };
   answers: IOnboardingAnswer[];
   isProfileComplete: boolean;
+  isSubscribed: boolean;
   preferences: {
     meetingFrequency?: string; // e.g. 'once-month'
     socialVibes?: string[];
@@ -52,6 +53,7 @@ const CoupleSchema = new Schema<ICouple>(
       },
     ],
     isProfileComplete: { type: Boolean, default: false },
+    isSubscribed: { type: Boolean, default: false },
     preferences: {
       meetingFrequency: { type: String },
       socialVibes: [{ type: String }],
