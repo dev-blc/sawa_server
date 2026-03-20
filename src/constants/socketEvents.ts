@@ -15,6 +15,7 @@ export const SOCKET_EVENTS = {
   CHAT_TYPING: 'chat:typing',
   CHAT_STOP_TYPING: 'chat:stopTyping',
 
+  
   // ─── Match ──────────────────────────────────────────────────────────────────
   MATCH_NEW: 'match:new',
   MATCH_ACCEPTED: 'match:accepted',
