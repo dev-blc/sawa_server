@@ -40,126 +40,74 @@ async function run() {
     await Notification.deleteMany({});
     console.log('DB Flushed.');
 
-    // 2. SEED COUPLE 1
-    console.log('Seeding Couple 1 (Alex & Sarah)...');
-    const c1Id = 'seed-couple-1111-2222';
-    const u1 = await User.create({
-      phone: '+1111111111',
-      name: 'Alex',
-      email: 'alex@example.com',
-      coupleId: c1Id,
-      role: 'primary',
-      isPhoneVerified: true
-    });
-    const u2 = await User.create({
-      phone: '+1111111112',
-      name: 'Sarah',
-      email: 'sarah@example.com',
-      coupleId: c1Id,
-      role: 'partner',
-      isPhoneVerified: true
-    });
-    const couple1 = await Couple.create({
-      coupleId: c1Id,
-      partner1: u1._id,
-      partner2: u2._id,
-      profileName: 'Alex & Sarah',
-      relationshipStatus: 'Married',
-      bio: 'We are a career-driven couple living in the city. We love weekend brunch, modern art, and staying active with coastal walks.',
-      primaryPhoto: getBase64(IMG_COUPLE_1),
-      isProfileComplete: true,
-      preferences: {
-        matchCriteria: ['City explorers', 'Brunch lovers', 'Professional couples']
+    const CITIES = [
+      'Bangalore',
+      'Chennai',
+      'New Delhi',
+      'Mumbai',
+      'Gurgaon',
+      'Noida',
+      'Hyderabad',
+      'Goa',
+    ];
+
+    const couplesPerCity = [
+      { name1: 'Arjun', name2: 'Meera', bio: 'Tech lovers in the heart of the city.', criteria: ['Tech', 'Innovation'] },
+      { name1: 'Sameer', name2: 'Zara', bio: 'Foodies always exploring new cafes.', criteria: ['Food', 'Cafes'] },
+    ];
+
+    console.log('Seeding 2 couples per city...');
+    let coupleCount = 0;
+    for (const city of CITIES) {
+      for (let i = 0; i < 2; i++) {
+        coupleCount++;
+        const config = couplesPerCity[i];
+        const profileName = `${config.name1} & ${config.name2}`;
+        const cId = `seed-couple-${city.toLowerCase().replace(/\s/g, '-')}-${i + 1}`;
+        
+        const partner1 = await User.create({
+          phone: `+91${coupleCount}00000001`,
+          name: config.name1,
+          coupleId: cId,
+          role: 'primary',
+          isPhoneVerified: true
+        });
+        const partner2 = await User.create({
+          phone: `+91${coupleCount}00000002`,
+          name: config.name2,
+          coupleId: cId,
+          role: 'partner',
+          isPhoneVerified: true
+        });
+
+        const newCouple = await Couple.create({
+          coupleId: cId,
+          partner1: partner1._id,
+          partner2: partner2._id,
+          profileName,
+          location: { city, country: 'India' },
+          bio: `${config.bio} Currently living in ${city}. Looking for fun-loving couples!`,
+          primaryPhoto: `https://picsum.photos/seed/sawa_city_${city}_${i}/800/1200`,
+          isProfileComplete: true,
+          preferences: { matchCriteria: config.criteria }
+        });
+
+        // Add 1 community for each city (on the first couple of that city)
+        if (i === 0) {
+           await Community.create({
+             name: `${city} ${city === 'Goa' ? 'Sunset' : 'Active'} Club`,
+             description: `A community for couples in ${city} who love to connect and share experiences.`,
+             city,
+             coverImageUrl: `https://picsum.photos/seed/sawa_comm_${city}/1200/800`,
+             members: [newCouple._id],
+             admins: [newCouple._id],
+             tags: [city, 'Local', 'Social']
+           });
+        }
       }
-    });
+    }
 
-    // 3. SEED COUPLE 2 (Mark & Elena) - Bangalore
-    console.log('Seeding Couple 2 (Mark & Elena)...');
-    const c2Id = 'seed-couple-3333-4444';
-    const u3 = await User.create({
-      phone: '+2222222221',
-      name: 'Mark',
-      email: 'mark@example.com',
-      coupleId: c2Id,
-      role: 'primary',
-      isPhoneVerified: true
-    });
-    const u4 = await User.create({
-      phone: '+2222222222',
-      name: 'Elena',
-      email: 'elena@example.com',
-      coupleId: c2Id,
-      role: 'partner',
-      isPhoneVerified: true
-    });
-    const couple2 = await Couple.create({
-      coupleId: c2Id,
-      partner1: u3._id,
-      partner2: u4._id,
-      profileName: 'Mark & Elena',
-      relationshipStatus: 'Engaged',
-      location: { city: 'Bangalore', country: 'India' },
-      bio: 'Nature lovers and weekend hikers. We recently moved to Bangalore and are looking for other couples who enjoy the outdoors and casual dinner parties.',
-      primaryPhoto: getBase64(IMG_COUPLE_2),
-      isProfileComplete: true,
-      preferences: {
-        matchCriteria: ['Hikers', 'Outdoor fans', 'Down-to-earth']
-      }
-    });
-
-    // 4. SEED COUPLE 3 (Vikram & Priya) - Chennai
-    console.log('Seeding Couple 3 (Vikram & Priya)...');
-    const c3Id = 'seed-couple-5555-6666';
-    const u5 = await User.create({ phone: '+3333333331', name: 'Vikram', coupleId: c3Id, role: 'primary', isPhoneVerified: true });
-    const u6 = await User.create({ phone: '+3333333332', name: 'Priya', coupleId: c3Id, role: 'partner', isPhoneVerified: true });
-    await Couple.create({
-      coupleId: c3Id,
-      partner1: u5._id,
-      partner2: u6._id,
-      profileName: 'Vikram & Priya',
-      location: { city: 'Chennai', country: 'India' },
-      bio: 'Die-hard foodies in Chennai. We know all the best spots for filter coffee and fine dining. Let\'s explore the culinary scene together!',
-      primaryPhoto: 'https://picsum.photos/seed/sawa3/800/1200',
-      isProfileComplete: true,
-    });
-
-    // 5. SEED COUPLE 4 (Rohan & Sonal) - Goa
-    console.log('Seeding Couple 4 (Rohan & Sonal)...');
-    const c4Id = 'seed-couple-7777-8888';
-    const u7 = await User.create({ phone: '+4444444441', name: 'Rohan', coupleId: c4Id, role: 'primary', isPhoneVerified: true });
-    const u8 = await User.create({ phone: '+4444444442', name: 'Sonal', coupleId: c4Id, role: 'partner', isPhoneVerified: true });
-    await Couple.create({
-      coupleId: c4Id,
-      partner1: u7._id,
-      partner2: u8._id,
-      profileName: 'Rohan & Sonal',
-      location: { city: 'Goa', country: 'India' },
-      bio: 'Beach lovers living the dream in Goa. We love sunset surfing, beach shacks, and hosting bonfire nights.',
-      primaryPhoto: 'https://picsum.photos/seed/sawa4/800/1200',
-      isProfileComplete: true,
-    });
-
-    // 6. SEED COMMUNITIES
-    console.log('Seeding Communities...');
-    await Community.create({
-      name: 'Urban Explorers',
-      description: 'A community for couples who love discovering hidden gems in the city.',
-      city: 'Mumbai',
-      coverImageUrl: getBase64(IMG_COMM_2),
-      members: [couple1._id],
-      admins: [couple1._id],
-      tags: ['City Life', 'Culture', 'Nightlife']
-    });
-
-    await Community.create({
-      name: 'Weekend Brunch Club',
-      description: 'Dedicated to the finest art of brunching.',
-      city: 'Mumbai',
-      coverImageUrl: getBase64(IMG_COMM_1),
-      members: [couple2._id],
-      admins: [couple2._id],
-      tags: ['Foodies', 'Social', 'Brunch']
-    });
+    console.log(`\nDB Seeded successfully with ${coupleCount} couples across ${CITIES.length} cities.`);
 
     console.log('\nDB Seeded successfully with professional profiles.');
     process.exit(0);
