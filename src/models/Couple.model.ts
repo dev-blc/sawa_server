@@ -39,7 +39,7 @@ const CoupleSchema = new Schema<ICouple>(
     partner2: { type: Schema.Types.ObjectId, ref: 'User' },
     profileName: { type: String, trim: true },
     relationshipStatus: { type: String },
-    bio: { type: String, trim: true, maxlength: 500 },
+    bio: { type: String, trim: true, maxlength: 1000 },
     primaryPhoto: { type: String },
     secondaryPhotos: [{ type: String }],
     location: {

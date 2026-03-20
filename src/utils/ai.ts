@@ -33,8 +33,8 @@ export const generateCoupleBio = async (
           Your goal is to write a warm, engaging profile that feels authentic and human.
           
           You must return a JSON object with two fields:
-          1. "bio": A 3-4 line unique paragraph about who the couple is (use "We").
-          2. "matchCriteria": A list of 2-3 short, specific strings describing what they are looking for.
+          1. "bio": A short, 1-2 line unique paragraph about who the couple is. Use "We". STRICTLY MAX 250 characters.
+          2. "matchCriteria": A list of 2-3 very short, specific strings (max 40 characters each) describing what they are looking for.
 
           Examples of DIFFERENT styles (do not copy, just for inspiration):
           - Professional: "Navigating our corporate careers in the city, we value structured weekend plans and intentional social circles..."

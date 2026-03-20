@@ -69,10 +69,12 @@ export class CommunityService {
 
     const query: any = {};
     if (cityFilter && cityFilter !== 'All City' && cityFilter !== 'All Cities' && cityFilter !== 'Unknown') {
+       // Only filter by city if it's one of our primary supported cities
        const isSupported = SUPPORTED_CITIES.some(c => cityFilter.toLowerCase().includes(c.toLowerCase()));
        if (isSupported) {
           query.city = { $regex: new RegExp(cityFilter, 'i') };
        }
+       // If not supported, we don't set query.city, which means it returns ALL (Show all communities)
     }
 
     const comms = await Community.find(query);

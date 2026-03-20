@@ -1,9 +1,10 @@
 import mongoose from 'mongoose';
 import { Couple } from '../models/Couple.model';
-import { Match } from '../models/Match.model';
+import { Match, IMatch } from '../models/Match.model';
+import { Notification } from '../models/Notification.model';
+import { Message } from '../models/Message.model';
 import { AppError } from '../utils/AppError';
 import { logger } from '../utils/logger';
-import { Notification } from '../models/Notification.model';
 
 export class MatchService {
   /**
@@ -170,13 +171,29 @@ export class MatchService {
     }
 
     // Otherwise, create a pending like
-    await Match.create({
+    const newMatch = await Match.create({
       couple1: me._id,
       couple2: targetCouple._id,
       status: 'pending',
       actionBy: me._id,
     });
 
+    // Create a notification for the recipient
+    await Notification.create({
+      recipient: targetCouple._id,
+      sender: me._id,
+      type: 'match', // Using 'match' type but with pending status logic if needed
+      title: "New Connection Request! ❤️",
+      message: `${me.profileName} wants to connect with you! Say hello back to start chatting.`,
+      data: { 
+        matchId: newMatch._id, 
+        coupleId: me.coupleId, 
+        profileName: me.profileName,
+        isPending: true 
+      }
+    });
+
+    logger.info(`[MatchService] Created pending match and notification for ${targetCoupleIdStr}`);
     return { isMatch: false };
   }
 
@@ -221,24 +238,30 @@ export class MatchService {
     if (!me) throw new AppError('Profile not found', 404);
 
     // Find all matches where we are either couple1 or couple2 and status is accepted
-    const matches = await Match.find({
-      $or: [{ couple1: me._id }, { couple2: me._id }],
-      status: 'accepted'
-    }).populate('couple1').populate('couple2');
+    const [accepted, pending] = await Promise.all([
+      Match.find({ $or: [{ couple1: me._id }, { couple2: me._id }], status: 'accepted' }).populate('couple1').populate('couple2'),
+      Match.find({ $or: [{ couple1: me._id }, { couple2: me._id }], status: 'pending' }).populate('couple1').populate('couple2')
+    ]);
 
-    return matches.map(m => {
+    logger.info(`[MatchService] Accepted: ${accepted.length}, Pending: ${pending.length} for coupleId: ${requestingCoupleId} (ObjectId: ${me._id})`);
+
+    // For debugging, we return ALL interactions that are not skipped/rejected
+    // but filter to accepted for the main list if we want strictness.
+    // The user said "connected", so we'll stick to 'accepted'.
+    
+    return accepted.filter(m => m.couple1 && m.couple2).map(m => {
       // Find the "other" couple
-      // m.couple1 is populated, so it's a full document. We check _id.
-      const isMeCouple1 = m.couple1._id.equals(me._id);
+      // Compare as strings to be 100% safe against population variations
+      const isMeCouple1 = m.couple1._id ? m.couple1._id.toString() === me._id.toString() : m.couple1.toString() === me._id.toString();
       const otherCouple = isMeCouple1 ? (m.couple2 as any) : (m.couple1 as any);
       
       return {
         _id: m._id, // This is the matchId
-        coupleId: otherCouple.coupleId,
-        profileName: otherCouple.profileName || 'Unknown Couple',
-        primaryPhoto: otherCouple.primaryPhoto,
-        secondaryPhotos: otherCouple.secondaryPhotos || [],
-        location: otherCouple.location,
+        coupleId: otherCouple?.coupleId || 'unknown',
+        profileName: otherCouple?.profileName || 'Unknown Couple',
+        primaryPhoto: otherCouple?.primaryPhoto,
+        secondaryPhotos: otherCouple?.secondaryPhotos || [],
+        location: otherCouple?.location,
         status: m.status
       };
     });

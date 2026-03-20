@@ -7,6 +7,8 @@ import { Couple } from '../models/Couple.model';
 import { User } from '../models/User.model';
 import { Notification } from '../models/Notification.model';
 import { Match } from '../models/Match.model';
+import { Community } from '../models/Community.model';
+import { getCoupleCommunityColor } from '../utils/communityColors';
 
 /**
  * Register private & group chat socket event handlers.
@@ -50,9 +52,11 @@ export const registerChatHandlers = (io: SocketIOServer, socket: Socket): void =
         const couple = await Couple.findOne({ coupleId: socket.coupleId });
         if (!couple) return;
 
+        const chatType = data.chatType || 'private';
+
         // Persist message
         const message = await Message.create({
-          chatType: data.chatType || 'private',
+          chatType,
           chatId: data.chatId,
           sender: couple._id,
           senderUser: socket.userId,
@@ -62,47 +66,76 @@ export const registerChatHandlers = (io: SocketIOServer, socket: Socket): void =
           audioDuration: data.audioDuration,
         });
 
-        // Broadcast to room
-        io.to(`chat:${data.chatId}`).emit(SOCKET_EVENTS.CHAT_MESSAGE, {
+        const broadcastData = {
           _id: message._id,
           chatId: data.chatId,
-          senderCoupleId: socket.coupleId, // Used for local UI side determination (left/right)
-          senderUserId: socket.userId,   // Used for showing who in the couple sent it
-          senderName: couple.profileName || user.name || 'Unknown', 
-          senderIndividualName: user.name || socket.userName || 'Unknown',
+          chatType,
+          senderCoupleId: socket.coupleId, 
+          senderUserId: socket.userId,   
+          senderName: couple.profileName || user.name || socket.userName || 'Me', 
+          senderIndividualName: user.name || socket.userName || data.senderIndividualName || 'Me',
           senderRole: socket.userRole,
-          accent: socket.userRole === 'primary' ? '#2E98B8' : '#CF3CA4',
+          accent: getCoupleCommunityColor(socket.coupleId),
           content: data.content,
           contentType: data.contentType ?? 'text',
           audioDuration: data.audioDuration,
           timestamp: message.createdAt.toISOString(),
-        });
+        };
 
-        logger.info(`Message saved and broadcasted to chat:${data.chatId}`);
+        // Broadcast to specific room
+        io.to(`chat:${data.chatId}`).emit(SOCKET_EVENTS.CHAT_MESSAGE, broadcastData);
 
-        // ─── NEW: Send Notification to recipient ───
-        // Find the "other" couple in this match
-        // ─── OPTIMIZED: Send Notification only if no unread message notification exists ───
-        const match = await Match.findById(data.chatId);
-        if (match) {
-           const recipientId = match.couple1.equals(couple._id) ? match.couple2 : match.couple1;
-           
-           const existingUnread = await Notification.findOne({
-             recipient: recipientId,
-             type: 'message',
-             'data.matchId': data.chatId,
-             read: false
-           });
+        logger.info(`Message saved and broadcasted to chat:${data.chatId} (${chatType})`);
 
-           if (!existingUnread) {
-             await Notification.create({
-               recipient: recipientId,
-               sender: couple._id,
-               type: 'message',
-               title: `New Message from ${couple.profileName}`,
-               message: `You have new messages from ${couple.profileName}`,
-               data: { matchId: data.chatId, coupleName: couple.profileName }
-             });
+        // ─── NOTIFICATIONS ───
+        if (chatType === 'private') {
+           const match = await Match.findById(data.chatId);
+           if (match) {
+              const recipientId = match.couple1.equals(couple._id) ? match.couple2 : match.couple1;
+              
+              const existingUnread = await Notification.findOne({
+                recipient: recipientId,
+                type: 'message',
+                'data.matchId': data.chatId,
+                read: false
+              });
+
+              if (!existingUnread) {
+                await Notification.create({
+                  recipient: recipientId,
+                  sender: couple._id,
+                  type: 'message',
+                  title: `New Message from ${couple.profileName}`,
+                  message: `You have new messages from ${couple.profileName}`,
+                  data: { matchId: data.chatId, coupleName: couple.profileName }
+                });
+              }
+           }
+        } else if (chatType === 'group') {
+           const community = await Community.findById(data.chatId);
+           if (community) {
+              // Notify all other members
+              const others = community.members.filter(m => m.toString() !== couple._id.toString());
+              for (const memberId of others) {
+                 // Check if unread community notification exists
+                 const existing = await Notification.findOne({
+                    recipient: memberId,
+                    type: 'message',
+                    'data.communityId': data.chatId,
+                    read: false
+                 });
+
+                 if (!existing) {
+                    await Notification.create({
+                       recipient: memberId,
+                       sender: couple._id,
+                       type: 'message',
+                       title: `New in ${community.name}`,
+                       message: `${couple.profileName} sent a message to the group`,
+                       data: { communityId: community._id, communityName: community.name, chatOnly: true }
+                    });
+                 }
+              }
            }
         }
 

@@ -5,6 +5,7 @@ import { Message } from '../models/Message.model';
 import { Couple } from '../models/Couple.model';
 import { User } from '../models/User.model';
 import mongoose from 'mongoose';
+import { getCoupleCommunityColor } from '../utils/communityColors';
 
 export const getPrivateMessages = async (req: Request, res: Response): Promise<void> => {
   if (!req.user) throw new AppError('Unauthorized', 401);
@@ -93,7 +94,7 @@ export const getGroupMessages = async (req: Request, res: Response): Promise<voi
       senderCoupleId: m.sender?.coupleId,
       senderName: m.sender?.profileName || 'Unknown Couple', // Use couple's profileName
       senderIndividualName: m.senderName, // individual name (Kiran/Raji)
-      accent: m.senderUser?.role === 'primary' ? '#B9B0A7' : '#2D3C62', // Simplified color logic
+      accent: getCoupleCommunityColor(m.sender?.coupleId),
       timestamp: m.createdAt,
       readBy: m.readBy || [],
       audioDuration: m.audioDuration,
