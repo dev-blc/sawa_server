@@ -160,10 +160,10 @@ export const getMyCouple = async (req: Request, res: Response) => {
 };
 
 export const updateMyCouple = async (req: Request, res: Response) => {
-  const { coupleId } = req.user!;
-  const data = req.body as z.infer<typeof UpdateMyCoupleSchema>;
+  const { coupleId, userId } = req.user!;
+  const data = req.body as any;
 
-  const couple = await coupleService.updateProfile(coupleId!, data);
+  const couple = await coupleService.updateProfile(coupleId!, data, userId);
 
   sendSuccess({ res, statusCode: 200, message: 'Profile updated successfully', data: { couple } });
 };

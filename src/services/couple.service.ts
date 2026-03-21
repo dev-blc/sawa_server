@@ -205,7 +205,8 @@ export class CoupleService {
       partnerName?: string;
       partnerDob?: string;
       partnerEmail?: string;
-    }
+    },
+    requestingUserId?: string
   ) {
     const coupleDoc = await Couple.findOne({ coupleId });
     if (!coupleDoc) throw new AppError('Couple not found', 404);
@@ -214,32 +215,41 @@ export class CoupleService {
     if (data.relationshipStatus !== undefined) coupleDoc.relationshipStatus = data.relationshipStatus;
     if (data.preferences !== undefined) coupleDoc.preferences = data.preferences;
 
-    // Update partner names if provided
+    // Identify who is 'You' vs 'Partner' for the incoming request
+    const isPartner1Me = requestingUserId && coupleDoc.partner1?.toString() === requestingUserId.toString();
+    const myId = isPartner1Me ? coupleDoc.partner1 : coupleDoc.partner2;
+    const partnerId = isPartner1Me ? coupleDoc.partner2 : coupleDoc.partner1;
+
+    // Update partner names for profile title
     if (data.yourName || data.partnerName) {
-      // Parallelize fetching existing names if needed
       const [u1, u2] = await Promise.all([
         data.yourName ? null : User.findById(coupleDoc.partner1).select('name'),
         data.partnerName ? null : User.findById(coupleDoc.partner2).select('name')
       ]);
 
-      const p1Name = data.yourName || (u1 as any)?.name || 'Partner 1';
-      const p2Name = data.partnerName || (u2 as any)?.name || 'Partner 2';
+      let p1Name = isPartner1Me ? (data.yourName || (u1 as any)?.name) : (data.partnerName || (u1 as any)?.name);
+      let p2Name = isPartner1Me ? (data.partnerName || (u2 as any)?.name) : (data.yourName || (u2 as any)?.name);
+      
+      p1Name = p1Name || 'Partner 1';
+      p2Name = p2Name || 'Partner 2';
       coupleDoc.profileName = `${p1Name} & ${p2Name}`;
     }
 
     // Save couple doc and update User records in parallel
     const updatePromises: Promise<any>[] = [coupleDoc.save()];
 
-    if (coupleDoc.partner1 && (data.yourName || data.yourDob || data.yourEmail)) {
-      updatePromises.push(User.findByIdAndUpdate(coupleDoc.partner1, {
+    // Update 'Me'
+    if (myId && (data.yourName || data.yourDob || data.yourEmail)) {
+      updatePromises.push(User.findByIdAndUpdate(myId, {
         name: data.yourName,
         dob: data.yourDob,
         email: data.yourEmail,
       }));
     }
 
-    if (coupleDoc.partner2 && (data.partnerName || data.partnerDob || data.partnerEmail)) {
-      updatePromises.push(User.findByIdAndUpdate(coupleDoc.partner2, {
+    // Update 'Partner'
+    if (partnerId && (data.partnerName || data.partnerDob || data.partnerEmail)) {
+      updatePromises.push(User.findByIdAndUpdate(partnerId, {
         name: data.partnerName,
         dob: data.partnerDob,
         email: data.partnerEmail,
