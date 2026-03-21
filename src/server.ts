@@ -26,23 +26,24 @@ const start = async (): Promise<void> => {
     logger.info(`🌐  API base:     http://localhost:${env.PORT}/api/v1`);
   });
 
-  // ─── Self-Wakeup Logic (Render Keep-Alive) ──────────────────────────────────
-  if (env.RENDER_EXTERNAL_URL) {
-    const WAKEUP_INTERVAL = 10 * 60 * 1000; // 10 minutes
+  // ─── Self-Wakeup Logic (Keep-Alive on Free Tiers) ───────────────────────────
+  const wakeupUrl = env.APP_URL || env.RENDER_EXTERNAL_URL;
+  if (wakeupUrl) {
+    const WAKEUP_INTERVAL = 14 * 60 * 1000; // 14 minutes (just before standard 15m sleep)
     setInterval(async () => {
       try {
-        const url = `${env.RENDER_EXTERNAL_URL}/wakeup`;
+        const url = `${wakeupUrl}/wakeup`;
         const res = await fetch(url);
         if (res.ok) {
-           logger.info(`⏰  Self-wakeup ping successful: ${url}`);
+           logger.info(`⏰ Self-wakeup ping successful: ${url}`);
         } else {
-           logger.warn(`⏰  Self-wakeup ping failed with status ${res.status}`);
+           logger.warn(`⏰ Self-wakeup ping failed status ${res.status}`);
         }
       } catch (err) {
-        logger.error('⏰  Error during self-wakeup ping:', err);
+        logger.error('⏰ Error during self-wakeup ping:', err);
       }
     }, WAKEUP_INTERVAL);
-    logger.info(`⏰  Self-wakeup scheduled every 10 mins for: ${env.RENDER_EXTERNAL_URL}`);
+    logger.info(`⏰ Self-wakeup scheduled every 14 mins for: ${wakeupUrl}`);
   }
 
   // ─── Graceful Shutdown ──────────────────────────────────────────────────────

@@ -41,6 +41,19 @@ export const createApp = (): Application => {
     app.use(morgan(env.NODE_ENV === 'development' ? 'dev' : 'combined'));
   }
 
+  // ─── Performance Monitoring ──────────────────────────────────────────────────
+  app.use((req, res, next) => {
+    const start = Date.now();
+    res.on('finish', () => {
+      const duration = Date.now() - start;
+      if (duration > 1000) {
+        // Log "slow" requests over 1s
+        console.warn(`🐢 Slow Request: ${req.method} ${req.url} - ${duration}ms`);
+      }
+    });
+    next();
+  });
+
   // ─── Health Check ────────────────────────────────────────────────────────────
   app.get('/health', (_req: Request, res: Response) => {
     res.status(200).json({
