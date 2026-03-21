@@ -49,14 +49,12 @@ export const authenticate = async (
     };
 
     // DEBUG LOG
-    console.log(`[Auth] Authenticated user ${payload.userId} for ${req.method} ${req.url}`);
+    console.log(`[Auth] Authenticated user ${payload.userId} for ${req.method} ${req.originalUrl || req.url}`);
 
-    // Fetch name asynchronously to attach if available
-    const user = await User.findById(payload.userId).select('name');
-    if (user) {
-      req.user.userName = user.name;
-    }
-
+    // Optimization: Do NOT fetch User from DB here. 
+    // It's a blocking roundtrip on every single protected request.
+    // req.user already contains IDs from the JWT.
+    
     next();
   } catch (err: any) {
     console.error(`[Auth Error] Failed to authenticate: ${err.message}`);
