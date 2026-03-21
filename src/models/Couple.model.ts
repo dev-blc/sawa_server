@@ -65,4 +65,7 @@ const CoupleSchema = new Schema<ICouple>(
   { timestamps: true },
 );
 
+// Performance: Index for Discovery Feed (Discovery filtering by city + completion status)
+CoupleSchema.index({ 'location.city': 1, isProfileComplete: 1 });
+
 export const Couple = mongoose.model<ICouple>('Couple', CoupleSchema);

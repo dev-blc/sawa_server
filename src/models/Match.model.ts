@@ -27,7 +27,9 @@ const MatchSchema = new Schema<IMatch>(
   { timestamps: true }
 );
 
-// Ensure we don't duplicate match records for the same permutation
+// Performance: Optimize relationship lookups and status filtering
 MatchSchema.index({ couple1: 1, couple2: 1 }, { unique: true });
+MatchSchema.index({ couple2: 1, status: 1 });
+MatchSchema.index({ status: 1 });
 
 export const Match = mongoose.model<IMatch>('Match', MatchSchema);

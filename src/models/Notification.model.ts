@@ -29,4 +29,8 @@ const NotificationSchema = new Schema<INotification>(
   { timestamps: true }
 );
 
+// Performance: Speed up unread count and general notification listing
+NotificationSchema.index({ recipient: 1, read: 1 });
+NotificationSchema.index({ createdAt: -1 });
+
 export const Notification = mongoose.model<INotification>('Notification', NotificationSchema);
