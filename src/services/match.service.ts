@@ -215,38 +215,47 @@ export class MatchService {
   /**
    * Get all accepted matches for a couple
    */
-  async getMatches(requestingCoupleId: string) {
-    const me = await Couple.findOne({ coupleId: requestingCoupleId });
-    if (!me) throw new AppError('Profile not found', 404);
+  async getMatches(requestingCoupleId: string, coupleMongoId?: string) {
+    let meId;
+    if (coupleMongoId) {
+      meId = new mongoose.Types.ObjectId(coupleMongoId);
+    } else {
+      const me = await Couple.findOne({ coupleId: requestingCoupleId }).select('_id');
+      if (!me) throw new AppError('Profile not found', 404);
+      meId = me._id;
+    }
 
-    // Find all matches where we are either couple1 or couple2 and status is accepted
-    const [accepted, pending] = await Promise.all([
-      Match.find({ $or: [{ couple1: me._id }, { couple2: me._id }], status: 'accepted' }).populate('couple1').populate('couple2'),
-      Match.find({ $or: [{ couple1: me._id }, { couple2: me._id }], status: 'pending' }).populate('couple1').populate('couple2')
-    ]);
+    // Single Lean query for all relevant match types
+    // Using projection to only fetch fields we need for the list
+    const matches = await Match.find({ 
+      $or: [{ couple1: meId }, { couple2: meId }], 
+      status: 'accepted' 
+    })
+    .populate({
+      path: 'couple1',
+      select: 'profileName primaryPhoto location coupleId'
+    })
+    .populate({
+      path: 'couple2',
+      select: 'profileName primaryPhoto location coupleId'
+    })
+    .lean();
 
-    logger.info(`[MatchService] Accepted: ${accepted.length}, Pending: ${pending.length} for coupleId: ${requestingCoupleId} (ObjectId: ${me._id})`);
-
-    // For debugging, we return ALL interactions that are not skipped/rejected
-    // but filter to accepted for the main list if we want strictness.
-    // The user said "connected", so we'll stick to 'accepted'.
-    
-    return accepted.filter(m => m.couple1 && m.couple2).map(m => {
-      // Find the "other" couple
-      // Compare as strings to be 100% safe against population variations
-      const isMeCouple1 = m.couple1._id ? m.couple1._id.toString() === me._id.toString() : m.couple1.toString() === me._id.toString();
-      const otherCouple = isMeCouple1 ? (m.couple2 as any) : (m.couple1 as any);
+    return (matches as any[]).map(m => {
+      const isMeCouple1 = m.couple1._id.toString() === meId.toString();
+      const otherCouple = isMeCouple1 ? m.couple2 : m.couple1;
       
+      if (!otherCouple) return null;
+
       return {
-        _id: m._id, // This is the matchId
-        coupleId: otherCouple?.coupleId || 'unknown',
-        profileName: otherCouple?.profileName || 'Unknown Couple',
-        primaryPhoto: otherCouple?.primaryPhoto,
-        secondaryPhotos: otherCouple?.secondaryPhotos || [],
-        location: otherCouple?.location,
+        _id: m._id, 
+        coupleId: otherCouple.coupleId,
+        profileName: otherCouple.profileName || 'Unknown Couple',
+        primaryPhoto: otherCouple.primaryPhoto,
+        location: otherCouple.location,
         status: m.status
       };
-    });
+    }).filter(Boolean);
   }
 
   /**

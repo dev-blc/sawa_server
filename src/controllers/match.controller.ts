@@ -54,8 +54,8 @@ export const skipCouple = async (req: Request, res: Response): Promise<void> => 
 };
 
 export const getMatches = async (req: Request, res: Response): Promise<void> => {
-  const { coupleId } = req.user!;
-  const matches = await matchService.getMatches(coupleId!);
+  const { coupleId, coupleMongoId } = req.user!;
+  const matches = await matchService.getMatches(coupleId!, coupleMongoId);
   sendSuccess({ res, statusCode: 200, data: { matches } });
 };
 

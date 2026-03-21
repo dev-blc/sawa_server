@@ -22,7 +22,8 @@ export const getPrivateMessages = async (req: Request, res: Response): Promise<v
     .populate('sender', 'coupleId')
     .populate('senderUser', 'role phone')
     .sort({ createdAt: 1 })
-    .limit(100);
+    .limit(100)
+    .lean();
 
   const finalMessages = populatedMessages.map((m: any) => {
     return {
@@ -49,18 +50,15 @@ export const sendPrivateMessage = async (req: Request, res: Response): Promise<v
   const { matchId } = req.params;
   const { content, contentType } = req.body;
 
-  const user = await User.findById(req.user.userId);
-  if (!user) throw new AppError('User not found', 404);
-
-  const couple = await Couple.findOne({ coupleId: user.coupleId });
-  if (!couple) throw new AppError('Couple not found', 404);
-
+  const { userId, coupleMongoId, userName } = req.user!;
+  
+  // ZERO HOPS! No User.findById or Couple.findOne needed anymore.
   const message = await Message.create({
     chatType: 'private',
     chatId: matchId,
-    sender: couple._id,
-    senderUser: user._id,
-    senderName: user.name || 'Unknown',
+    sender: coupleMongoId,
+    senderUser: userId,
+    senderName: userName || 'User',
     content,
     contentType: contentType || 'text',
     audioDuration: req.body.audioDuration,
@@ -84,7 +82,8 @@ export const getGroupMessages = async (req: Request, res: Response): Promise<voi
     .populate('sender', 'coupleId profileName')
     .populate('senderUser', 'role')
     .sort({ createdAt: 1 })
-    .limit(100);
+    .limit(100)
+    .lean();
 
   const finalMessages = messages.map((m: any) => {
     return {
@@ -109,18 +108,14 @@ export const sendGroupMessage = async (req: Request, res: Response): Promise<voi
   const { communityId } = req.params;
   const { content, contentType } = req.body;
 
-  const user = await User.findById(req.user.userId);
-  if (!user) throw new AppError('User not found', 404);
-
-  const couple = await Couple.findOne({ coupleId: user.coupleId });
-  if (!couple) throw new AppError('Couple not found', 404);
+  const { userId, coupleMongoId, userName } = req.user!;
 
   const message = await Message.create({
     chatType: 'group',
     chatId: communityId,
-    sender: couple._id,
-    senderUser: user._id,
-    senderName: user.name || 'Unknown',
+    sender: coupleMongoId,
+    senderUser: userId,
+    senderName: userName || 'User',
     content,
     contentType: contentType || 'text',
     audioDuration: req.body.audioDuration,
