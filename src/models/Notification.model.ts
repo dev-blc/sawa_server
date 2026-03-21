@@ -33,4 +33,18 @@ const NotificationSchema = new Schema<INotification>(
 NotificationSchema.index({ recipient: 1, read: 1 });
 NotificationSchema.index({ createdAt: -1 });
 
+// Real-time notification emission via Socket.io
+NotificationSchema.post('save', async function(doc) {
+  if ((global as any).io) {
+    try {
+      // Find the couple to get their UUID room name
+      const Couple = mongoose.model('Couple');
+      const couple = await Couple.findById(doc.recipient);
+      if (couple) {
+        (global as any).io.to(`couple:${couple.coupleId}`).emit('notification_received', doc);
+      }
+    } catch (e) {}
+  }
+});
+
 export const Notification = mongoose.model<INotification>('Notification', NotificationSchema);

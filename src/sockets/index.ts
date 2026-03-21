@@ -76,6 +76,12 @@ export const createSocketServer = (httpServer: HTTPServer): SocketIOServer => {
     registerChatHandlers(io, socket);
     registerMatchHandlers(io, socket);
 
+    // Dynamic Room Joining for real-time notifications
+    if (socket.coupleId) {
+        socket.join(`couple:${socket.coupleId}`);
+        logger.info(`✅ Socket joined couple room: couple:${socket.coupleId}`);
+    }
+
     socket.on('disconnect', (reason) => {
       logger.info(`Socket disconnected: ${socket.id} — ${reason}`);
     });
