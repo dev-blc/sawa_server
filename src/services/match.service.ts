@@ -160,22 +160,28 @@ export class MatchService {
       actionBy: me._id,
     });
 
-    // Create a notification for the recipient
-    await Notification.create({
-      recipient: targetCouple._id,
-      sender: me._id,
-      type: 'match', // Using 'match' type but with pending status logic if needed
-      title: "New Connection Request! ❤️",
-      message: `${me.profileName} wants to connect with you! Say hello back to start chatting.`,
-      data: { 
-        matchId: newMatch._id, 
-        coupleId: me.coupleId, 
-        profileName: me.profileName,
-        isPending: true 
+    // Create a notification for the recipient (BACKGROUND)
+    (async () => {
+      try {
+        await Notification.create({
+          recipient: targetCouple._id,
+          sender: me._id,
+          type: 'match',
+          title: "New Connection Request! ❤️",
+          message: `${me.profileName} wants to connect with you! Say hello back to start chatting.`,
+          data: { 
+            matchId: newMatch._id, 
+            coupleId: me.coupleId, 
+            profileName: me.profileName,
+            isPending: true 
+          }
+        });
+      } catch (err) {
+        logger.error(`[MatchService] Background notification failed:`, err);
       }
-    });
+    })();
 
-    logger.info(`[MatchService] Created pending match and notification for ${targetCoupleIdStr}`);
+    logger.info(`[MatchService] Created pending match for ${targetCoupleIdStr}`);
     return { isMatch: false };
   }
 
