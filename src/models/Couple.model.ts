@@ -28,6 +28,7 @@ export interface ICouple extends Document {
     avoidances?: string[];
     matchCriteria?: string[];
   };
+  blocked: Types.ObjectId[];
   createdAt: Date;
   updatedAt: Date;
 }
@@ -61,6 +62,7 @@ const CoupleSchema = new Schema<ICouple>(
       avoidances: [{ type: String }],
       matchCriteria: [{ type: String }],
     },
+    blocked: [{ type: Schema.Types.ObjectId, ref: 'Couple', index: true }],
   },
   { timestamps: true },
 );

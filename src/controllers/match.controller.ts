@@ -65,6 +65,28 @@ export const refreshDiscovery = async (req: Request, res: Response): Promise<voi
    sendSuccess({ res, statusCode: 200, message: 'Discovery feed reset successful' });
 };
 
+export const getIncomingRequests = async (req: Request, res: Response): Promise<void> => {
+  const { coupleId, coupleMongoId } = req.user!;
+  const requests = await matchService.getIncomingRequests(coupleId!, coupleMongoId);
+  sendSuccess({ res, statusCode: 200, data: { requests } });
+};
+
+export const acceptMatch = async (req: Request, res: Response): Promise<void> => {
+  const { coupleId, coupleMongoId } = req.user!;
+  const { targetCoupleId } = req.body as z.infer<typeof MatchActionSchema>;
+  
+  const result = await matchService.acceptMatch(coupleId!, targetCoupleId, coupleMongoId);
+  sendSuccess({ res, statusCode: 200, message: 'Match accepted', data: result });
+};
+
+export const rejectMatch = async (req: Request, res: Response): Promise<void> => {
+  const { coupleId } = req.user!;
+  const { targetCoupleId } = req.body as z.infer<typeof MatchActionSchema>;
+  
+  const result = await matchService.rejectMatch(coupleId!, targetCoupleId);
+  sendSuccess({ res, statusCode: 200, message: 'Match rejected', data: result });
+};
+
 export const getInsights = async (_req: Request, _res: Response): Promise<void> => {
   // Returns insights comparing the logged in couple with a target couple
 };

@@ -1,3 +1,4 @@
+import mongoose from 'mongoose';
 import { Couple, ICouple, IOnboardingAnswer } from '../models/Couple.model';
 import { User } from '../models/User.model';
 import { AppError } from '../utils/AppError';
@@ -78,7 +79,11 @@ export class CoupleService {
    */
   async uploadPhotos(
     coupleId: string,
-    data: { primaryPhotoBase64?: string; secondaryPhotosBase64?: string[] }
+    data: { 
+      primaryPhotoBase64?: string; 
+      secondaryPhotosBase64?: string[]; 
+      keepSecondaryPhotoUrls?: string[];
+    }
   ) {
     const updateData: any = {};
     
@@ -87,10 +92,16 @@ export class CoupleService {
       updateData.primaryPhoto = prefix + data.primaryPhotoBase64;
     }
 
-    if (data.secondaryPhotosBase64 && data.secondaryPhotosBase64.length > 0) {
-      updateData.secondaryPhotos = data.secondaryPhotosBase64
-        .filter(b64 => b64 && b64.length > 10)
-        .map(b64 => (b64.startsWith('data:') ? b64 : 'data:image/jpeg;base64,' + b64));
+    // Identify which photos to keep vs which to add
+    const existingToKeep = data.keepSecondaryPhotoUrls || [];
+    const newPhotos = (data.secondaryPhotosBase64 || [])
+      .filter(b64 => b64 && b64.length > 10)
+      .map(b64 => (b64.startsWith('data:') ? b64 : 'data:image/jpeg;base64,' + b64));
+
+    // Result is the combination of kept URLs and new base64s
+    // NOTE: This replaces the previous secondaryPhotos array entirely with the new merged set
+    if (data.keepSecondaryPhotoUrls !== undefined || data.secondaryPhotosBase64 !== undefined) {
+      updateData.secondaryPhotos = [...existingToKeep, ...newPhotos].slice(0, 3);
     }
 
     await Couple.findOneAndUpdate({ coupleId }, { $set: updateData });
@@ -289,6 +300,40 @@ export class CoupleService {
     );
     if (!couple) throw new AppError('Couple not found', 404);
     return couple;
+  }
+
+  async blockCouple(meMongoId: string, targetMongoId: string) {
+    return Couple.findByIdAndUpdate(
+      meMongoId,
+      { $addToSet: { blocked: new mongoose.Types.ObjectId(targetMongoId) } },
+      { new: true }
+    );
+  }
+
+  async unblockCouple(meMongoId: string, targetMongoId: string) {
+    return Couple.findByIdAndUpdate(
+      meMongoId,
+      { $pull: { blocked: new mongoose.Types.ObjectId(targetMongoId) } },
+      { new: true }
+    );
+  }
+
+  async getBlockedCouples(meMongoId: string) {
+    const me = await Couple.findById(meMongoId)
+      .populate({
+        path: 'blocked',
+        select: 'profileName primaryPhoto location coupleId'
+      })
+      .lean();
+    return me?.blocked || [];
+  }
+
+  async deleteMyCouple(coupleId: string) {
+    // 1. Delete all Users associated with this coupleId
+    await User.deleteMany({ coupleId });
+    // 2. Delete the Couple document
+    await Couple.deleteOne({ coupleId });
+    return { success: true };
   }
 }
 

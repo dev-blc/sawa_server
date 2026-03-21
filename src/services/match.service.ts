@@ -14,12 +14,14 @@ export class MatchService {
   async getDiscoveryFeed(requestingCoupleId: string, cityFilter?: string, coupleMongoId?: string) {
     let me;
     if (coupleMongoId) {
-      me = { _id: new mongoose.Types.ObjectId(coupleMongoId), coupleId: requestingCoupleId };
+      me = await Couple.findById(coupleMongoId);
     } else {
       me = await Couple.findOne({ coupleId: requestingCoupleId });
     }
     
     if (!me) throw new AppError('Couple profile not found', 404);
+
+    const blockedIds = me.blocked || [];
 
     const SUPPORTED_CITIES = [
       'Bangalore',
@@ -39,7 +41,7 @@ export class MatchService {
 
     // Build query
     const query: any = {
-       _id: { $ne: me._id, $nin: interactedIds },
+       _id: { $ne: me._id, $nin: [...interactedIds, ...blockedIds] },
        isProfileComplete: true, 
     };
 
@@ -215,7 +217,49 @@ export class MatchService {
   }
 
   /**
-   * Get all accepted matches for a couple
+   * Get all incoming connection requests (`Who wants to connect`)
+   */
+  async getIncomingRequests(requestingCoupleId: string, coupleMongoId?: string) {
+    let meId;
+    if (coupleMongoId) {
+      meId = new mongoose.Types.ObjectId(coupleMongoId);
+    } else {
+      const me = await Couple.findOne({ coupleId: requestingCoupleId }).select('_id');
+      if (!me) throw new AppError('Profile not found', 404);
+      meId = me._id;
+    }
+
+    const pending = await Match.find({ 
+      couple2: meId, 
+      status: 'pending' 
+    })
+    .populate({
+      path: 'couple1',
+      select: 'profileName primaryPhoto location coupleId'
+    })
+    .lean();
+
+    return (pending as any[])
+      .map((m) => {
+        const otherCouple = m.couple1;
+        if (!otherCouple) return null;
+
+        return {
+          _id: m._id,
+          coupleId: otherCouple.coupleId,
+          profileName: otherCouple.profileName || 'Someone',
+          primaryPhoto: otherCouple.primaryPhoto,
+          location: otherCouple.location?.city || 'Unknown',
+          distance: Math.floor(Math.random() * 8) + 1 + 'km away',
+          status: 'pending',
+          createdAt: m.createdAt
+        };
+      })
+      .filter(Boolean);
+  }
+
+  /**
+   * Get all accepted matches for a couple (`New connections`)
    */
   async getMatches(requestingCoupleId: string, coupleMongoId?: string) {
     let meId;
@@ -227,8 +271,6 @@ export class MatchService {
       meId = me._id;
     }
 
-    // Single Lean query for all relevant match types
-    // Using projection to only fetch fields we need for the list
     const matches = await Match.find({ 
       $or: [{ couple1: meId }, { couple2: meId }], 
       status: 'accepted' 
@@ -243,21 +285,77 @@ export class MatchService {
     })
     .lean();
 
-    return (matches as any[]).map(m => {
-      const isMeCouple1 = m.couple1._id.toString() === meId.toString();
-      const otherCouple = isMeCouple1 ? m.couple2 : m.couple1;
-      
-      if (!otherCouple) return null;
+    return (matches as any[])
+      .map((m) => {
+        const c1Id = m.couple1?._id?.toString();
+        const c2Id = m.couple2?._id?.toString();
+        
+        if (!c1Id || !c2Id) return null;
 
-      return {
-        _id: m._id, 
-        coupleId: otherCouple.coupleId,
-        profileName: otherCouple.profileName || 'Unknown Couple',
-        primaryPhoto: otherCouple.primaryPhoto,
-        location: otherCouple.location,
-        status: m.status
-      };
-    }).filter(Boolean);
+        const isMeCouple1 = c1Id === meId.toString();
+        const otherCouple = isMeCouple1 ? m.couple2 : m.couple1;
+
+        if (!otherCouple) return null;
+
+        return {
+          _id: m._id,
+          coupleId: otherCouple.coupleId,
+          profileName: otherCouple.profileName || 'Unknown Couple',
+          primaryPhoto: otherCouple.primaryPhoto,
+          location: otherCouple.location?.city || 'Unknown',
+          distance: Math.floor(Math.random() * 8) + 1 + 'km away',
+          status: m.status,
+        };
+      })
+      .filter(Boolean);
+  }
+
+  /**
+   * Explicitly accept a pending connection
+   */
+  async acceptMatch(requestingCoupleId: string, targetCoupleIdStr: string, coupleMongoId?: string) {
+    // This essentially Reuses sayHello logic which handles mutual likes
+    return this.sayHello(requestingCoupleId, targetCoupleIdStr, coupleMongoId);
+  }
+
+  /**
+   * Explicitly reject a pending connection
+   */
+  async rejectMatch(requestingCoupleId: string, targetCoupleIdStr: string) {
+    let meId;
+    const me = await Couple.findOne({ coupleId: requestingCoupleId }).select('_id');
+    if (!me) throw new AppError('Profile not found', 404);
+    meId = me._id;
+
+    let targetId: any = targetCoupleIdStr;
+    if (!mongoose.Types.ObjectId.isValid(targetCoupleIdStr)) {
+       const target = await Couple.findOne({ coupleId: targetCoupleIdStr }).select('_id');
+       if (!target) throw new AppError('Target profile not found', 404);
+       targetId = target._id;
+    }
+
+    // Delete the match or mark as rejected
+    await Match.findOneAndDelete({
+      $or: [
+        { couple1: meId, couple2: targetId },
+        { couple1: targetId, couple2: meId }
+      ],
+      status: 'pending'
+    });
+
+    // Option: notify the other couple of rejection (silent usually, but user asked for it)
+    const target = await Couple.findById(targetId);
+    if (target) {
+       await Notification.create({
+          recipient: target._id,
+          sender: meId,
+          type: 'alert',
+          title: "Connection Update",
+          message: "A couple decided not to connect at this time. Keep exploring!",
+       });
+    }
+
+    return { success: true };
   }
 
   /**

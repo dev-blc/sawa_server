@@ -17,6 +17,10 @@ import {
   completeOnboarding,
   getCoupleById,
   subscribe,
+  deleteMyAccount,
+  getBlockList,
+  blockCouple,
+  unblockCouple,
 } from '../controllers/couple.controller';
 
 const router = Router();
@@ -55,5 +59,13 @@ router.post('/me/invite', asyncHandler(invitePartner));
 
 // POST /api/v1/couples/subscribe
 router.post('/subscribe', asyncHandler(subscribe));
+
+// DELETE /api/v1/couples/me
+router.delete('/me', asyncHandler(deleteMyAccount));
+
+// Block management
+router.get('/blocks', asyncHandler(getBlockList));
+router.post('/blocks', asyncHandler(blockCouple));
+router.delete('/blocks', asyncHandler(unblockCouple));
 
 export default router;

@@ -9,6 +9,9 @@ import {
   getInsights,
   validateMatchAction,
   refreshDiscovery,
+  getIncomingRequests,
+  acceptMatch,
+  rejectMatch,
 } from '../controllers/match.controller';
 
 const router = Router();
@@ -27,8 +30,17 @@ router.post('/skip', validateMatchAction, asyncHandler(skipCouple));
 // POST /api/v1/matches/refresh-discovery
 router.post('/refresh-discovery', asyncHandler(refreshDiscovery));
 
-// GET /api/v1/matches
+// GET /api/v1/matches -> gets accepted connections
 router.get('/', asyncHandler(getMatches));
+
+// GET /api/v1/matches/incoming -> gets pending requests
+router.get('/incoming', asyncHandler(getIncomingRequests));
+
+// POST /api/v1/matches/accept -> accept a pending request
+router.post('/accept', validateMatchAction, asyncHandler(acceptMatch));
+
+// POST /api/v1/matches/reject -> reject a pending request
+router.post('/reject', validateMatchAction, asyncHandler(rejectMatch));
 
 // GET /api/v1/matches/insights/:coupleId
 router.get('/insights/:coupleId', asyncHandler(getInsights));

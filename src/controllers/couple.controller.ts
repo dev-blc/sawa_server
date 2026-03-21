@@ -24,6 +24,7 @@ const SetupProfileSchema = z.object({
 const UploadPhotosSchema = z.object({
   primaryPhotoBase64: z.string().optional(),
   secondaryPhotosBase64: z.array(z.string()).max(3).optional(),
+  keepSecondaryPhotoUrls: z.array(z.string()).optional(),
 });
 
 const SubmitAnswersSchema = z.object({
@@ -195,4 +196,30 @@ export const getCoupleById = async (req: Request, res: Response) => {
     throw new AppError('Couple profile not found', 404);
   }
   sendSuccess({ res, data: { couple } });
+};
+
+export const deleteMyAccount = async (req: Request, res: Response): Promise<void> => {
+   const { coupleId } = req.user!;
+   await coupleService.deleteMyCouple(coupleId!);
+   sendSuccess({ res, statusCode: 200, message: 'Account deleted successfully' });
+};
+ 
+export const getBlockList = async (req: Request, res: Response): Promise<void> => {
+   const { coupleMongoId } = req.user!;
+   const blocked = await coupleService.getBlockedCouples(coupleMongoId!);
+   sendSuccess({ res, statusCode: 200, data: { blocked } });
+};
+ 
+export const blockCouple = async (req: Request, res: Response): Promise<void> => {
+   const { coupleMongoId } = req.user!;
+   const { targetCoupleId } = req.body; // target couple's MONGO _id
+   await coupleService.blockCouple(coupleMongoId!, targetCoupleId);
+   sendSuccess({ res, statusCode: 200, message: 'Couple blocked' });
+};
+ 
+export const unblockCouple = async (req: Request, res: Response): Promise<void> => {
+   const { coupleMongoId } = req.user!;
+   const { targetCoupleId } = req.body; // target couple's MONGO _id
+   await coupleService.unblockCouple(coupleMongoId!, targetCoupleId);
+   sendSuccess({ res, statusCode: 200, message: 'Couple unblocked' });
 };
