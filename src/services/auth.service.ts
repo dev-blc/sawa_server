@@ -83,12 +83,19 @@ export class AuthService {
     }
 
     // 1. Ensure the parent Couple exists first (sequentially to avoid race conditions)
+    const existingYours = await prisma.user.findUnique({ where: { phone: yourPhone } });
+    const existingPartner = await prisma.user.findUnique({ where: { phone: partnerPhone } });
+    
+    const defaultName = (existingYours?.name || existingPartner?.name) 
+        ? `${existingYours?.name || 'User'} & ${existingPartner?.name || 'Partner'}`
+        : 'Sawa Couple';
+
     await prisma.couple.upsert({
       where: { coupleId },
       update: {},
       create: { 
         coupleId,
-        profileName: 'New Couple',
+        profileName: defaultName,
         isProfileComplete: false,
         isSubscribed: false
       }
@@ -230,7 +237,7 @@ export class AuthService {
         couple = await prisma.couple.create({
           data: {
             coupleId: user.coupleId,
-            profileName: user.name || 'User',
+            profileName: user.name || 'Sawa Couple',
             isProfileComplete: false,
             isSubscribed: false,
           }
