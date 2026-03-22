@@ -10,7 +10,7 @@ export const getNotifications = async (req: Request, res: Response): Promise<voi
   if (!me) throw new AppError('Couple profile not found', 404);
 
   const notifications = await prisma.notification.findMany({ 
-    where: { recipientId: me.id },
+    where: { recipientId: me.coupleId },
     include: {
       sender: { select: { id: true, profileName: true, primaryPhoto: true } }
     },
@@ -42,7 +42,7 @@ export const getUnreadCount = async (req: Request, res: Response): Promise<void>
    if (!me) throw new AppError('Couple profile not found', 404);
    
    const count = await prisma.notification.count({ 
-     where: { recipientId: me.id, read: false }
+     where: { recipientId: me.coupleId, read: false }
    });
    sendSuccess({ res, statusCode: 200, data: { count } });
 };

@@ -21,13 +21,13 @@ export class MatchService {
 
     // Get interacted IDs
     const interactions = await prisma.match.findMany({
-      where: { couple1Id: me.id },
+      where: { couple1Id: me.coupleId },
       select: { couple2Id: true }
     });
     const interactedIds = interactions.map((m: any) => m.couple2Id);
 
     const where: any = {
-      id: { not: me.id, notIn: [...interactedIds, ...blockedIds] },
+      coupleId: { not: me.coupleId, notIn: [...interactedIds, ...blockedIds] },
       isProfileComplete: true,
     };
 
@@ -84,33 +84,33 @@ export class MatchService {
     let existingMatch = await prisma.match.findFirst({
       where: {
         OR: [
-          { couple1Id: me.id, couple2Id: targetCouple.id },
-          { couple1Id: targetCouple.id, couple2Id: me.id }
+          { couple1Id: me.coupleId, couple2Id: targetCouple.coupleId },
+          { couple1Id: targetCouple.coupleId, couple2Id: me.coupleId }
         ]
       }
     });
 
     if (existingMatch) {
-      if (existingMatch.status === 'pending' && existingMatch.actionById !== me.id) {
+      if (existingMatch.status === 'pending' && existingMatch.actionById !== me.coupleId) {
           // Mutual like
           await prisma.match.update({
             where: { id: existingMatch.id },
-            data: { status: 'accepted', actionById: me.id }
+            data: { status: 'accepted', actionById: me.coupleId }
           });
 
           await prisma.notification.createMany({
             data: [
               {
-                recipientId: me.id,
-                senderId: targetCouple.id,
+                recipientId: me.coupleId,
+                senderId: targetCouple.coupleId,
                 type: 'match',
                 title: "You've Connected!",
                 message: `You connected with ${targetCouple.profileName}!`,
                 data: { matchId: existingMatch.id, coupleName: targetCouple.profileName }
               },
               {
-                recipientId: targetCouple.id,
-                senderId: me.id,
+                recipientId: targetCouple.coupleId,
+                senderId: me.coupleId,
                 type: 'match',
                 title: "You've Connected!",
                 message: `You connected with ${me.profileName}!`,
@@ -127,10 +127,10 @@ export class MatchService {
 
     const newMatch = await prisma.match.create({
       data: {
-        couple1Id: me.id,
-        couple2Id: targetCouple.id,
+        couple1Id: me.coupleId,
+        couple2Id: targetCouple.coupleId,
         status: 'pending',
-        actionById: me.id,
+        actionById: me.coupleId,
       }
     });
 
@@ -138,8 +138,8 @@ export class MatchService {
       try {
         await prisma.notification.create({
           data: {
-            recipientId: targetCouple!.id,
-            senderId: me!.id,
+            recipientId: targetCouple!.coupleId,
+            senderId: me!.coupleId,
             type: 'match',
             title: 'New Connection Request!',
             message: `${me!.profileName} wants to connect with you!`,
@@ -175,10 +175,10 @@ export class MatchService {
 
     await prisma.match.create({
       data: { 
-          couple1Id: me.id, 
-          couple2Id: target.id, 
+          couple1Id: me.coupleId, 
+          couple2Id: target.coupleId, 
           status: 'skipped', 
-          actionById: me.id 
+          actionById: me.coupleId 
       }
     });
 
@@ -190,9 +190,9 @@ export class MatchService {
     if (coupleMongoId) {
       meId = coupleMongoId;
     } else {
-      const me = await prisma.couple.findUnique({ where: { coupleId: requestingCoupleId }, select: { id: true } });
+      const me = await prisma.couple.findUnique({ where: { coupleId: requestingCoupleId }, select: { id: true, coupleId: true } });
       if (!me) throw new AppError('Profile not found', 404);
-      meId = me.id;
+      meId = me.coupleId;
     }
 
     const pending = await prisma.match.findMany({ 
@@ -223,9 +223,9 @@ export class MatchService {
     if (coupleMongoId) {
       meId = coupleMongoId;
     } else {
-      const me = await prisma.couple.findUnique({ where: { coupleId: requestingCoupleId }, select: { id: true } });
+      const me = await prisma.couple.findUnique({ where: { coupleId: requestingCoupleId }, select: { id: true, coupleId: true } });
       if (!me) throw new AppError('Profile not found', 404);
-      meId = me.id;
+      meId = me.coupleId;
     }
 
     const matches = await prisma.match.findMany({ 
@@ -256,26 +256,26 @@ export class MatchService {
   }
 
   async rejectMatch(requestingCoupleId: string, targetCoupleIdStr: string) {
-    const me = await prisma.couple.findUnique({ where: { coupleId: requestingCoupleId }, select: { id: true } });
+    const me = await prisma.couple.findUnique({ where: { coupleId: requestingCoupleId }, select: { id: true, coupleId: true } });
     if (!me) throw new AppError('Profile not found', 404);
 
     const target = await prisma.couple.findFirst({
         where: { OR: [{ id: targetCoupleIdStr }, { coupleId: targetCoupleIdStr }] },
-        select: { id: true }
+        select: { id: true, coupleId: true }
     });
     if (!target) throw new AppError('Target profile not found', 404);
 
     await prisma.match.deleteMany({
       where: {
-        OR: [{ couple1Id: me.id, couple2Id: target.id }, { couple1Id: target.id, couple2Id: me.id }],
+        OR: [{ couple1Id: me.coupleId, couple2Id: target.coupleId }, { couple1Id: target.coupleId, couple2Id: me.coupleId }],
         status: 'pending'
       }
     });
 
     await prisma.notification.create({
         data: {
-          recipientId: target.id,
-          senderId: me.id,
+          recipientId: target.coupleId,
+          senderId: me.coupleId,
           type: 'system',
           title: "Connection Update",
           message: "A couple decided not to connect at this time.",
@@ -286,12 +286,12 @@ export class MatchService {
   }
 
   async refreshDiscovery(requestingCoupleId: string) {
-    const me = await prisma.couple.findUnique({ where: { coupleId: requestingCoupleId }, select: { id: true } });
+    const me = await prisma.couple.findUnique({ where: { coupleId: requestingCoupleId }, select: { id: true, coupleId: true } });
     if (!me) throw new AppError('Profile not found', 404);
 
     await prisma.match.deleteMany({
       where: {
-        OR: [{ couple1Id: me.id }, { couple2Id: me.id }],
+        OR: [{ couple1Id: me.coupleId }, { couple2Id: me.coupleId }],
         status: { in: ['skipped', 'pending'] }
       }
     });
