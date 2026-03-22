@@ -35,25 +35,9 @@ const INITIAL_COMMUNITIES = [
 ];
 
 export class CommunityService {
-  async ensureSeeded(creatorId: mongoose.Types.ObjectId) {
-    const count = await Community.countDocuments();
-    if (count === 0) {
-      logger.info('[CommunityService] Seeding initial communities...');
-      for (const comm of INITIAL_COMMUNITIES) {
-        await Community.create({
-          ...comm,
-          admins: [creatorId],
-          members: [creatorId], // The seeded requester is automatically a member
-        });
-      }
-    }
-  }
-
   async getAllCommunities(requestingCoupleId: string, cityFilter?: string) {
     const me = await Couple.findOne({ coupleId: requestingCoupleId });
     if (!me) throw new AppError('Profile not found', 404);
-
-    await this.ensureSeeded(me._id);
 
     const SUPPORTED_CITIES = [
       'Bangalore',
