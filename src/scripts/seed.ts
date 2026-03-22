@@ -6,6 +6,8 @@ import { Couple } from '../models/Couple.model';
 import { Community } from '../models/Community.model';
 import { Message } from '../models/Message.model';
 import { Match } from '../models/Match.model';
+import { Prompt } from '../models/Prompt.model';
+import { Report } from '../models/Report.model';
 import { logger } from '../utils/logger';
 
 // Load env from root
@@ -128,6 +130,19 @@ const seedData = async () => {
     await Community.deleteMany({});
     await Message.deleteMany({});
     await Match.deleteMany({});
+    await Prompt.deleteMany({});
+    await Report.deleteMany({});
+    
+    logger.info('Seeding sawa_db...');
+
+    // Seed Prompts
+    await Prompt.create([
+      { text: "What's your favorite family activity?", category: "chat_shortcut" },
+      { text: "Wanna hangout?", category: "chat_shortcut" },
+      { text: "Movie this weekend?", category: "chat_shortcut" },
+      { text: "Coffee sometime this week?", category: "chat_shortcut" },
+      { text: "Any plans for the holidays?", category: "chat_shortcut" },
+    ]);
 
     // Seed Couples & Users
     for (let i = 0; i < COUPLES.length; i++) {

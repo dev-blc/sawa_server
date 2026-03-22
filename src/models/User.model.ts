@@ -8,7 +8,8 @@ export interface IUser extends Document {
   coupleId: string;          // shared couple entity ID
   isPhoneVerified: boolean;
   refreshTokenHash?: string;
-  role: 'primary' | 'partner'; // which seat in the couple
+  role: 'primary' | 'partner' | 'admin'; // which seat in the couple, or admin
+  password?: string; // only for admin users
   createdAt: Date;
   updatedAt: Date;
 }
@@ -17,8 +18,11 @@ const UserSchema = new Schema<IUser>(
   {
     phone: {
       type: String,
-      required: true,
+      required: function (this: IUser) {
+        return this.role !== 'admin';
+      },
       unique: true,
+      sparse: true,
       trim: true,
     },
     name: {
@@ -48,8 +52,12 @@ const UserSchema = new Schema<IUser>(
     },
     role: {
       type: String,
-      enum: ['primary', 'partner'],
+      enum: ['primary', 'partner', 'admin'],
       required: true,
+    },
+    password: {
+      type: String,
+      select: false,
     },
   },
   {
