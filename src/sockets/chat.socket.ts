@@ -25,129 +25,138 @@ export const registerChatHandlers = (io: SocketIOServer, socket: Socket): void =
       senderIndividualName?: string;
       clientMessageId?: string;
     }) => {
-      
       if (!socket.userId || !socket.coupleId) return;
 
-      socket.join(`chat:${data.chatId}`);
-
       try {
-        const user = await prisma.user.findUnique({ where: { id: socket.userId } });
-        if (!user) return;
+        const chatId = data.chatId;
+      const chatType = data.chatType || 'private';
+      const timestamp = new Date().toISOString();
+      const clientMessageId = data.clientMessageId || `srv-${Date.now()}`;
 
-        const couple = await prisma.couple.findUnique({ where: { coupleId: socket.coupleId } });
-        if (!couple) return;
+      // 1. IMMEDIATE BROADCAST (Ultra-low latency 🚀)
+      const broadcastData = {
+        _id: clientMessageId, // Real Database ID will be synced via fetchHistory later
+        clientMessageId,
+        chatId,
+        chatType,
+        senderCoupleId: socket.coupleId,
+        senderUserId: socket.userId,
+        senderName: socket.userName || data.senderIndividualName || 'User',
+        accent: getCoupleCommunityColor(socket.coupleId),
+        content: data.content,
+        contentType: data.contentType ?? 'text',
+        audioDuration: data.audioDuration,
+        timestamp,
+      };
 
-        const timestamp = new Date().toISOString();
-        const chatType = data.chatType || 'private';
+      // Broadcast to room immediately
+      io.to(`chat:${chatId}`).emit(SOCKET_EVENTS.CHAT_MESSAGE, broadcastData);
 
-        const broadcastData = {
-          _id: crypto.randomUUID(), // Temporarily use UUID for frontend keying
-          clientMessageId: data.clientMessageId,
-          chatId: data.chatId,
-          chatType,
-          senderCoupleId: socket.coupleId, 
-          senderUserId: socket.userId,   
-          senderName: socket.userName || data.senderIndividualName || 'Me', 
-          accent: getCoupleCommunityColor(socket.coupleId),
-          content: data.content,
-          contentType: data.contentType ?? 'text',
-          audioDuration: data.audioDuration,
-          timestamp,
-        };
-
-        io.to(`chat:${data.chatId}`).emit(SOCKET_EVENTS.CHAT_MESSAGE, broadcastData);
-
-        if (chatType === 'private') {
-           const match = await prisma.match.findUnique({ where: { id: data.chatId } });
-           if (match) {
-            const recipientId = match.couple1Id === couple.coupleId ? match.couple2Id : match.couple1Id;
-            const recipientCouple = await prisma.couple.findUnique({ where: { coupleId: recipientId } });
-              if (recipientCouple?.coupleId) {
-                 io.to(`couple:${recipientCouple.coupleId}`).emit(SOCKET_EVENTS.CHAT_MESSAGE, broadcastData);
-              }
-           }
-        }
-
+      // Private recipient room broadcast
+      if (chatType === 'private') {
         (async () => {
           try {
-            const msg = await prisma.message.create({
-              data: {
-                chatType: chatType as any,
-                matchId: chatType === 'private' ? data.chatId : null,
-                communityId: chatType === 'group' ? data.chatId : null,
-                senderId: couple.coupleId,
-                senderUserId: socket.userId!,
-                senderName: socket.userName || data.senderIndividualName || 'Unknown',
-                content: data.content,
-                contentType: (data.contentType || 'text') as any,
-                audioDuration: data.audioDuration,
-                createdAt: new Date(timestamp),
-              }
+            const match = await prisma.match.findUnique({ 
+              where: { id: chatId },
+              select: { couple1Id: true, couple2Id: true }
             });
-
-            if (chatType === 'private') {
-                const match = await prisma.match.findUnique({ where: { id: data.chatId } });
-                if (match) {
-                   const recipientId = match.couple1Id === couple.coupleId ? match.couple2Id : match.couple1Id;
-                   const existingUnread = await prisma.notification.findFirst({
-                     where: {
-                       recipientId: recipientId,
-                       type: 'message',
-                       read: false,
-                       data: { path: ['matchId'], equals: data.chatId } as any
-                     }
-                   });
-
-                   if (!existingUnread) {
-                     await prisma.notification.create({
-                       data: {
-                         recipientId: recipientId,
-                         senderId: couple.coupleId,
-                         type: 'message',
-                         title: `New Message from ${couple.profileName}`,
-                         message: `You have new messages from ${couple.profileName}`,
-                         data: { matchId: data.chatId, coupleName: couple.profileName }
-                       }
-                     });
-                   }
-                }
-            } else if (chatType === 'group') {
-                const community = await prisma.community.findUnique({
-                    where: { id: data.chatId },
-                    include: { members: true }
-                });
-                if (community) {
-                   const others = community.members.filter((m: any) => m.coupleId !== couple.coupleId);
-                   for (const member of others) {
-                      const existing = await prisma.notification.findFirst({
-                         where: {
-                            recipientId: member.coupleId,
-                            type: 'message',
-                            read: false,
-                            data: { path: ['communityId'], equals: data.chatId } as any
-                         }
-                      });
-
-                      if (!existing) {
-                         await prisma.notification.create({
-                            data: {
-                               recipientId: member.coupleId,
-                               senderId: couple.coupleId,
-                               type: 'message',
-                               title: `New in ${community.name}`,
-                               message: `${couple.profileName} sent a message`,
-                               data: { communityId: community.id, communityName: community.name, chatOnly: true }
-                            }
-                         });
-                      }
-                   }
-                }
+            if (match) {
+              const recipientId = match.couple1Id === socket.coupleId ? match.couple2Id : match.couple1Id;
+              io.to(`couple:${recipientId}`).emit(SOCKET_EVENTS.CHAT_MESSAGE, broadcastData);
             }
-          } catch (bgErr) {
-            logger.error(`[Socket] Background work failed:`, bgErr);
+          } catch (e) {
+            logger.warn('[Socket] Private recipient broadcast failed', e);
           }
         })();
+      }
 
+      // 2. BACKGROUND PERSISTENCE & NOTIFICATIONS
+      (async () => {
+        try {
+          // Save to Database
+          await prisma.message.create({
+            data: {
+              chatType: chatType as any,
+              matchId: chatType === 'private' ? chatId : null,
+              communityId: chatType === 'group' ? chatId : null,
+              senderId: socket.coupleId!,
+              senderUserId: socket.userId!,
+              senderName: socket.userName || data.senderIndividualName || 'Unknown',
+              content: data.content,
+              contentType: (data.contentType || 'text') as any,
+              audioDuration: data.audioDuration,
+              createdAt: new Date(timestamp),
+            }
+          });
+
+          // Notifications
+          if (chatType === 'private') {
+            const match = await prisma.match.findUnique({ 
+              where: { id: chatId },
+              include: { couple1: true, couple2: true }
+            });
+            if (match) {
+               const recipientId = match.couple1Id === socket.coupleId ? match.couple2Id : match.couple1Id;
+               const me = match.couple1Id === socket.coupleId ? match.couple1 : match.couple2;
+               
+               const existingUnread = await prisma.notification.findFirst({
+                 where: {
+                   recipientId: recipientId,
+                   type: 'message',
+                   read: false,
+                   data: { path: ['matchId'], equals: chatId } as any
+                 }
+               });
+
+               if (!existingUnread) {
+                 await prisma.notification.create({
+                   data: {
+                     recipientId: recipientId,
+                     senderId: socket.coupleId,
+                     type: 'message',
+                     title: `New Message from ${me?.profileName || 'Couple'}`,
+                     message: `You have new messages from ${me?.profileName || 'Couple'}`,
+                     data: { matchId: chatId, coupleName: me?.profileName }
+                   }
+                 });
+               }
+            }
+          } else if (chatType === 'group') {
+            const community = await prisma.community.findUnique({
+                where: { id: chatId },
+                include: { members: true }
+            });
+            if (community) {
+               const others = community.members.filter((m: any) => m.coupleId !== socket.coupleId);
+               for (const member of others) {
+                  const existing = await prisma.notification.findFirst({
+                     where: {
+                        recipientId: member.coupleId,
+                        type: 'message',
+                        read: false,
+                        data: { path: ['communityId'], equals: chatId } as any
+                     }
+                  });
+
+                  if (!existing) {
+                     await prisma.notification.create({
+                        data: {
+                           recipientId: member.coupleId,
+                           senderId: socket.coupleId,
+                           type: 'message',
+                           title: `New in ${community.name}`,
+                           message: `New message in the group`,
+                           data: { communityId: community.id, communityName: community.name, chatOnly: true }
+                        }
+                     });
+                  }
+               }
+            }
+          }
+        } catch (bgErr) {
+          logger.error(`[Socket] Background work failed:`, bgErr);
+        }
+      })();
       } catch (err) {
         logger.error('Failed to handle CHAT_MESSAGE socket event:', err);
       }
