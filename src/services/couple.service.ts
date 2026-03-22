@@ -191,6 +191,9 @@ export class CoupleService {
           const updateObj: any = {};
           if (aiResponse.bio) updateObj.bio = aiResponse.bio;
           if (aiResponse.matchCriteria && aiResponse.matchCriteria.length > 0) {
+            // Store the whole paragraph as the first element of the array for simplicity,
+            // or join it if we want it to remain an array of short strings.
+            // Since the AI now returns a single paragraph, we store it as is.
             updateObj.matchCriteria = aiResponse.matchCriteria;
           }
           await prisma.couple.update({ where: { coupleId }, data: updateObj });
@@ -209,6 +212,10 @@ export class CoupleService {
       preferences?: any;
       yourName?: string; yourDob?: string; yourEmail?: string;
       partnerName?: string; partnerDob?: string; partnerEmail?: string;
+      // Added photo support directly in update
+      primaryPhotoBase64?: string;
+      secondaryPhotosBase64?: string[];
+      keepSecondaryPhotoUrls?: string[];
     },
     requestingUserId?: string
   ) {
@@ -219,19 +226,47 @@ export class CoupleService {
     if (data.bio !== undefined) updateData.bio = data.bio;
     if (data.relationshipStatus !== undefined) updateData.relationshipStatus = data.relationshipStatus;
     
-    // Map preferences if provided
+    // 1. Photos processing
+    if (data.primaryPhotoBase64 && data.primaryPhotoBase64.length > 10) {
+      updateData.primaryPhoto = data.primaryPhotoBase64.startsWith('data:') 
+        ? data.primaryPhotoBase64 
+        : 'data:image/jpeg;base64,' + data.primaryPhotoBase64;
+    }
+
+    if (data.secondaryPhotosBase64 !== undefined || data.keepSecondaryPhotoUrls !== undefined) {
+      const existingToKeep = data.keepSecondaryPhotoUrls || [];
+      const newPhotos = (data.secondaryPhotosBase64 || [])
+        .filter(b64 => b64 && b64.length > 10)
+        .map(b64 => b64.startsWith('data:') ? b64 : 'data:image/jpeg;base64,' + b64);
+      updateData.secondaryPhotos = [...existingToKeep, ...newPhotos].slice(0, 3);
+    }
+
+    // 2. Map preferences if provided
     if (data.preferences) {
         if (data.preferences.meetingFrequency) updateData.meetingFrequency = data.preferences.meetingFrequency;
         if (data.preferences.socialVibes) updateData.socialVibes = data.preferences.socialVibes;
         if (data.preferences.activities) updateData.activities = data.preferences.activities;
         if (data.preferences.avoidances) updateData.avoidances = data.preferences.avoidances;
-        if (data.preferences.matchCriteria) updateData.matchCriteria = data.preferences.matchCriteria;
+        
+        if (data.preferences.matchCriteria) {
+            updateData.matchCriteria = Array.isArray(data.preferences.matchCriteria) 
+                ? data.preferences.matchCriteria 
+                : [data.preferences.matchCriteria];
+        }
+    }
+
+    // Explicit check for matchCriteria at top level (if app sends it that way)
+    if ((data as any).matchCriteria) {
+        updateData.matchCriteria = Array.isArray((data as any).matchCriteria)
+            ? (data as any).matchCriteria
+            : [(data as any).matchCriteria];
     }
 
     const isPartner1Me = requestingUserId && coupleDoc.partner1Id === requestingUserId;
     const myId = isPartner1Me ? coupleDoc.partner1Id : coupleDoc.partner2Id;
     const partnerId = isPartner1Me ? coupleDoc.partner2Id : coupleDoc.partner1Id;
 
+    // 3. Dynamic Profile Name update
     if (data.yourName || data.partnerName) {
       const u1 = await prisma.user.findUnique({ where: { id: coupleDoc.partner1Id || '' } });
       const u2 = await prisma.user.findUnique({ where: { id: coupleDoc.partner2Id || '' } });
@@ -244,29 +279,50 @@ export class CoupleService {
 
     await prisma.couple.update({ where: { coupleId }, data: updateData });
 
+    // 4. Update individual Users
     if (myId && (data.yourName || data.yourDob || data.yourEmail)) {
-      await prisma.user.update({
-        where: { id: myId },
-        data: {
-          name: data.yourName || undefined,
-          dob: data.yourDob || undefined,
-          email: data.yourEmail || undefined,
+      try {
+        await prisma.user.update({
+            where: { id: myId },
+            data: {
+              name: data.yourName || undefined,
+              dob: data.yourDob || undefined,
+              email: data.yourEmail || undefined,
+            }
+        });
+      } catch (err: any) {
+        if (err.code === 'P2002' && err.meta?.target?.includes('email')) {
+             logger.warn(`[CoupleService.updateProfile] Email conflict for myId ${myId}, skipping email update.`);
+             await prisma.user.update({
+                where: { id: myId },
+                data: { name: data.yourName || undefined, dob: data.yourDob || undefined }
+             });
         }
-      });
+      }
     }
 
     if (partnerId && (data.partnerName || data.partnerDob || data.partnerEmail)) {
-      await prisma.user.update({
-        where: { id: partnerId },
-        data: {
-          name: data.partnerName || undefined,
-          dob: data.partnerDob || undefined,
-          email: data.partnerEmail || undefined,
+      try {
+        await prisma.user.update({
+            where: { id: partnerId },
+            data: {
+              name: data.partnerName || undefined,
+              dob: data.partnerDob || undefined,
+              email: data.partnerEmail || undefined,
+            }
+        });
+      } catch (err: any) {
+        if (err.code === 'P2002' && err.meta?.target?.includes('email')) {
+             logger.warn(`[CoupleService.updateProfile] Email conflict for partnerId ${partnerId}, skipping email update.`);
+             await prisma.user.update({
+                where: { id: partnerId },
+                data: { name: data.partnerName || undefined, dob: data.partnerDob || undefined }
+             });
         }
-      });
+      }
     }
 
-    return prisma.couple.findUnique({ where: { coupleId } });
+    return prisma.couple.findUnique({ where: { coupleId }, include: { partner1: true, partner2: true } });
   }
 
   async getCouple(coupleId: string): Promise<any | null> {
