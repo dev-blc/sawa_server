@@ -43,8 +43,8 @@ export class AdminService {
     });
 
     return couples.map(c => ({
-      _id: c.id,
-      id: c.id,
+      _id: c.coupleId,
+      id: c.coupleId,
       pairName: c.profileName || 'Anonymous Pair',
       city: c.locationCity || 'Unknown',
       compatibilityScore: Math.floor(Math.random() * 30) + 70,
