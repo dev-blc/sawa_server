@@ -155,7 +155,13 @@ export class CoupleService {
     await prisma.couple.update({
       where: { coupleId },
       data: { 
-          answers: answers as any, 
+          answers: {
+              deleteMany: {},
+              create: answers.map((a: any) => ({
+                  questionId: a.questionId,
+                  selectedOptionIds: a.selectedOptionIds
+              }))
+          },
           isProfileComplete: true 
       }
     });

@@ -1,31 +1,42 @@
 import { prisma } from '../lib/prisma';
-import bcrypt from 'bcryptjs';
+import { logger } from '../utils/logger';
 
-async function flush() {
+async function flushDb() {
+  console.log('🗑️  Starting Database Flush...');
   try {
-    console.log('⚠️ Starting database flush...');
+    // List of tables to truncate (order matters if not using CASCADE, 
+    // but PostgreSQL TRUNCATE ... CASCADE handles it cleanly)
+    const tables = [
+      'onboarding_answers',
+      'messages',
+      'notifications',
+      'matches',
+      'community_members',
+      'community_admins',
+      'community_join_requests',
+      'reports',
+      'otp_tokens',
+      'users',
+      'couples',
+      'communities',
+      'prompts'
+    ];
 
-    // Delete in order to avoid FK violations
-    await prisma.message.deleteMany();
-    await prisma.notification.deleteMany();
-    await prisma.report.deleteMany();
-    await prisma.match.deleteMany();
-    await prisma.communityJoinRequest.deleteMany();
-    await prisma.communityMember.deleteMany();
-    await prisma.communityAdmin.deleteMany();
-    await prisma.community.deleteMany();
-    await prisma.otpToken.deleteMany();
-    await prisma.user.deleteMany();
-    await prisma.couple.deleteMany();
-    await prisma.prompt.deleteMany();
+    console.log(`Clearing ${tables.length} tables...`);
 
-    console.log('🗑️ All tables cleared.');
+    // Using raw query for efficient cascade truncate
+    // We wrap table names in quotes because some might be reserved words or case-sensitive
+    for (const table of tables) {
+      await prisma.$executeRawUnsafe(`TRUNCATE TABLE "${table}" RESTART IDENTITY CASCADE;`);
+      console.log(`  ✅ Cleared ${table}`);
+    }
 
-  
+    console.log('✨ Database Flush Complete!');
+    process.exit(0);
   } catch (err) {
-    console.error('❌ Flush failed:', err);
+    console.error('❌ Database Flush Failed:', err);
     process.exit(1);
   }
 }
 
-flush();
+flushDb();
