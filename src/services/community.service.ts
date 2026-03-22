@@ -34,7 +34,7 @@ export class CommunityService {
     }
 
     const comms = await Community.find(query);
-    logger.info(`🏘️  DB fetched ${comms.length} communities. Names: ${comms.map(c => c.name).join(', ')}`);
+    logger.info(`🏘️  DB fetched ${comms.length} communities.`);
 
     return comms.map(c => {
       const isMember = c.members.some(m => m.toString() === me._id.toString());
@@ -49,10 +49,6 @@ export class CommunityService {
         imageUri: c.coverImageUrl,
         isMember,
         isAdmin,
-        joinRequest: {
-          name: 'Rahul & Priya', // Dummy request for UI mapping
-          city: 'New Delhi',
-        },
         members: Array.from({ length: c.members.length }).map((_, i) => ({
           id: `member-${i}`,
           name: `Couple ${i + 1}`,
@@ -80,10 +76,6 @@ export class CommunityService {
         imageUri: c.coverImageUrl,
         isMember: true,
         isAdmin,
-        joinRequest: {
-          name: 'Rahul & Priya',
-          city: 'New Delhi',
-        },
         members: [] // Unused in list
       };
     });
