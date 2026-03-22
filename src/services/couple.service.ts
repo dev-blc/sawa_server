@@ -25,29 +25,31 @@ export class CoupleService {
   ) {
     logger.info(`[CoupleService.setupProfile] START - coupleId: ${coupleId}`);
 
-    // 1. Update primary user's details
+    // 1. Update primary user's details (ALWAYS the one signing up/submitting)
     const primaryUpdate = await User.findByIdAndUpdate(primaryUserId, {
       name: data.yourName,
       dob: data.yourDob || undefined,
       email: data.yourEmail || undefined,
+      role: 'primary' // Enforce role
     });
     logger.info(`[CoupleService.setupProfile] Primary user update: ${!!primaryUpdate} (${primaryUserId})`);
 
     // 2. Find and update the partner user
-    const partnerUpdate = await User.findOneAndUpdate(
+    const partner = await User.findOneAndUpdate(
       { coupleId, role: 'partner' },
       {
         name: data.partnerName,
         dob: data.partnerDob || undefined,
         email: data.partnerEmail || undefined,
-      }
+      },
+      { new: true }
     );
-    logger.info(`[CoupleService.setupProfile] Partner user update: ${!!partnerUpdate}`);
+    logger.info(`[CoupleService.setupProfile] Partner user update: ${!!partner}`);
 
     // 3. Upsert the Couple document
+    // We enforce: partner1 = PRIMARY (Boy), partner2 = PARTNER (Girl)
     const existingCouple = await Couple.findOne({ coupleId });
     if (!existingCouple) {
-      const partner = await User.findOne({ coupleId, role: 'partner' });
       await Couple.create({
         coupleId,
         partner1: primaryUserId,
@@ -62,6 +64,8 @@ export class CoupleService {
       logger.info(`[CoupleService.setupProfile] Couple document created for: ${coupleId}`);
     } else {
       await Couple.findByIdAndUpdate(existingCouple._id, {
+        partner1: primaryUserId, // Re-enforce alignment
+        partner2: partner?._id ?? existingCouple.partner2,
         profileName: `${data.yourName} & ${data.partnerName}`,
         relationshipStatus: data.relationshipStatus,
         location: data.location || undefined,
@@ -214,44 +218,46 @@ export class CoupleService {
     if (data.relationshipStatus !== undefined) coupleDoc.relationshipStatus = data.relationshipStatus;
     if (data.preferences !== undefined) coupleDoc.preferences = data.preferences;
 
-    // Identify who is 'You' vs 'Partner' for the incoming request
+    // Identify who is 'You' (submitter) vs 'Partner' for the incoming request
     const isPartner1Me = requestingUserId && coupleDoc.partner1?.toString() === requestingUserId.toString();
     const myId = isPartner1Me ? coupleDoc.partner1 : coupleDoc.partner2;
     const partnerId = isPartner1Me ? coupleDoc.partner2 : coupleDoc.partner1;
 
-    // Update partner names for profile title
+    // Update partner names for profile title (Always: Partner1 & Partner2)
     if (data.yourName || data.partnerName) {
       const [u1, u2] = await Promise.all([
-        data.yourName ? null : User.findById(coupleDoc.partner1).select('name'),
-        data.partnerName ? null : User.findById(coupleDoc.partner2).select('name')
+        User.findById(coupleDoc.partner1).select('name'),
+        User.findById(coupleDoc.partner2).select('name')
       ]);
 
-      let p1Name = isPartner1Me ? (data.yourName || (u1 as any)?.name) : (data.partnerName || (u1 as any)?.name);
-      let p2Name = isPartner1Me ? (data.partnerName || (u2 as any)?.name) : (data.yourName || (u2 as any)?.name);
+      // p1 is always partner1 (Primary)
+      let p1Name = isPartner1Me ? (data.yourName || u1?.name) : (data.partnerName || u1?.name);
+      // p2 is always partner2 (Partner)
+      let p2Name = isPartner1Me ? (data.partnerName || u2?.name) : (data.yourName || u2?.name);
       
-      p1Name = p1Name || 'Partner 1';
-      p2Name = p2Name || 'Partner 2';
+      p1Name = p1Name || 'User 1';
+      p2Name = p2Name || 'User 2';
       coupleDoc.profileName = `${p1Name} & ${p2Name}`;
     }
 
     // Save couple doc and update User records in parallel
     const updatePromises: Promise<any>[] = [coupleDoc.save()];
 
-    // Update 'Me'
+    // Update 'submitter'
     if (myId && (data.yourName || data.yourDob || data.yourEmail)) {
       updatePromises.push(User.findByIdAndUpdate(myId, {
-        name: data.yourName,
-        dob: data.yourDob,
-        email: data.yourEmail,
+        name: data.yourName || undefined,
+        dob: data.yourDob || undefined,
+        email: data.yourEmail || undefined,
       }));
     }
 
-    // Update 'Partner'
+    // Update 'other partner'
     if (partnerId && (data.partnerName || data.partnerDob || data.partnerEmail)) {
       updatePromises.push(User.findByIdAndUpdate(partnerId, {
-        name: data.partnerName,
-        dob: data.partnerDob,
-        email: data.partnerEmail,
+        name: data.partnerName || undefined,
+        dob: data.partnerDob || undefined,
+        email: data.partnerEmail || undefined,
       }));
     }
 
