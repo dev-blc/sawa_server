@@ -82,6 +82,19 @@ export class AuthService {
         }
     }
 
+    // 1. Ensure the parent Couple exists first (sequentially to avoid race conditions)
+    await prisma.couple.upsert({
+      where: { coupleId },
+      update: {},
+      create: { 
+        coupleId,
+        profileName: 'New Couple',
+        isProfileComplete: false,
+        isSubscribed: false
+      }
+    });
+
+    // 2. Now upsert users in parallel
     await Promise.all([
       userRepository.upsertByPhone(yourPhone, coupleId, 'primary'),
       userRepository.upsertByPhone(partnerPhone, coupleId, 'partner')

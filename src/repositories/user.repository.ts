@@ -20,19 +20,6 @@ export class UserRepository {
     coupleId: string,
     role: 'primary' | 'partner',
   ): Promise<User> {
-    // 1. Ensure the parent Couple exists first (to satisfy foreign key)
-    await prisma.couple.upsert({
-      where: { coupleId },
-      update: {},
-      create: { 
-        coupleId,
-        profileName: 'New Couple', // Placeholder
-        isProfileComplete: false,
-        isSubscribed: false
-      }
-    });
-
-    // 2. Now upsert the user
     return prisma.user.upsert({
       where: { phone },
       update: {},
