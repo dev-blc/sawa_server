@@ -1,5 +1,7 @@
 import { Server as HTTPServer } from 'http';
 import { Server as SocketIOServer, Socket } from 'socket.io';
+import { createAdapter } from '@socket.io/redis-adapter';
+import Redis from 'ioredis';
 import { env } from '../config/env';
 import { logger } from '../utils/logger';
 import { verifyAccessToken } from '../utils/jwt';
@@ -30,6 +32,26 @@ export const createSocketServer = (httpServer: HTTPServer): SocketIOServer => {
     transports: ['websocket', 'polling'],
     allowEIO3: true,
   });
+
+  // ─── Redis Adapter (Scalability) ──────────────────────────────────────────
+  if (env.REDIS_URL) {
+    try {
+      const pubClient = new Redis(env.REDIS_URL, {
+        maxRetriesPerRequest: null,
+      });
+      const subClient = pubClient.duplicate();
+
+      pubClient.on('error', (err) => logger.error('Redis PubClient Error:', err));
+      subClient.on('error', (err) => logger.error('Redis SubClient Error:', err));
+
+      io.adapter(createAdapter(pubClient, subClient));
+      logger.info('✅ Socket.io Redis adapter initialized');
+    } catch (err) {
+      logger.error('❌ Failed to initialize Redis adapter:', err);
+    }
+  } else {
+    logger.warn('⚠️  REDIS_URL not found. Socket.io running without Redis adapter (Single-instance only).');
+  }
 
   io.use(async (socket: Socket, next) => {
     let token = socket.handshake.auth?.token as string | undefined;
