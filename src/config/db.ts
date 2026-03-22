@@ -18,7 +18,9 @@ export const connectDB = async (): Promise<void> => {
         socketTimeoutMS: 30000,      // 30s is more than enough
         connectTimeoutMS: 10000,
       });
-      logger.info('✅  MongoDB connected and tuned for production');
+      const dbHost = mongoose.connection.host;
+      const dbName = mongoose.connection.name;
+      logger.info(`✅  MongoDB connected to host: ${dbHost}, database: ${dbName}`);
       return;
     } catch (error) {
       attempt += 1;

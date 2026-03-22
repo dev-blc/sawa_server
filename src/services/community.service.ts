@@ -34,6 +34,7 @@ export class CommunityService {
     }
 
     const comms = await Community.find(query);
+    logger.info(`🏘️  DB fetched ${comms.length} communities. Names: ${comms.map(c => c.name).join(', ')}`);
 
     return comms.map(c => {
       const isMember = c.members.some(m => m.toString() === me._id.toString());
