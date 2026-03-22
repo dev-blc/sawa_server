@@ -23,7 +23,12 @@ export const createSocketServer = (httpServer: HTTPServer): SocketIOServer => {
     cors: {
       origin: allowedOrigins,
       methods: ['GET', 'POST'],
+      credentials: true,
     },
+    pingTimeout: 60000,
+    pingInterval: 25000,
+    transports: ['websocket', 'polling'], // Prioritize websocket 🚀
+    allowEIO3: true, // Compatibility
   });
 
   // ─── JWT Auth Middleware ─────────────────────────────────────────────────────
