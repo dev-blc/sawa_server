@@ -168,4 +168,27 @@ export class AdminService {
   async deletePrompt(id: string) {
     return prisma.prompt.delete({ where: { id } });
   }
+
+  async sendNotification(title: string, message: string, recipientIds?: string[]) {
+    // If recipientIds is provided and not empty, send to those specific couples
+    if (recipientIds && recipientIds.length > 0) {
+      const data = recipientIds.map(rid => ({
+        recipientId: rid,
+        type: 'admin' as any,
+        title,
+        message,
+      }));
+      return prisma.notification.createMany({ data });
+    }
+
+    // Otherwise, broadcast to ALL couples
+    const allCouples = await prisma.couple.findMany({ select: { coupleId: true } });
+    const data = allCouples.map(c => ({
+      recipientId: c.coupleId,
+      type: 'admin' as any,
+      title,
+      message,
+    }));
+    return prisma.notification.createMany({ data });
+  }
 }

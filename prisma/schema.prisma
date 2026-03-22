@@ -271,6 +271,7 @@ enum NotificationType {
   message
   community
   system
+  admin
 }
 
 enum ReportStatus {
