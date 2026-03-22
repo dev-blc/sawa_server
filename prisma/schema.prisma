@@ -31,6 +31,7 @@ model User {
   coupleProfile    Couple?   @relation("CouplePartners", fields: [coupleId], references: [coupleId])
   partnerOf1       Couple[]  @relation("Partner1")
   partnerOf2       Couple[]  @relation("Partner2")
+  messages         Message[] @relation("Message_senderUser")
 
   @@index([coupleId])
   @@map("users")
@@ -213,6 +214,7 @@ model Message {
   updatedAt    DateTime    @updatedAt
 
   sender       Couple      @relation("Message_sender", fields: [senderId], references: [coupleId])
+  senderUser   User?       @relation("Message_senderUser", fields: [senderUserId], references: [id])
   match        Match?      @relation("Message_privateChat", fields: [matchId], references: [id])
   community    Community?  @relation(fields: [communityId], references: [id])
 
