@@ -25,6 +25,18 @@ async function seedAdmin() {
       console.log('🚀 Creating new admin account...');
       const hashedPassword = await bcrypt.hash(password, 10);
       
+      // Ensure admin-system couple exists
+      await prisma.couple.upsert({
+        where: { coupleId: 'admin-system' },
+        update: {},
+        create: {
+          coupleId: 'admin-system',
+          profileName: 'Admin System',
+          isProfileComplete: true,
+          isSubscribed: true
+        }
+      });
+
       await prisma.user.create({
         data: {
           email,

@@ -10,7 +10,19 @@ async function finalizeAdmin() {
     await prisma.user.deleteMany({});
     console.log('🗑️ Cleared all users.');
 
-    // 2. Create the requested admin
+    // 2. Ensure ADMIN_COUPLE exists
+    await prisma.couple.upsert({
+      where: { coupleId: 'ADMIN_COUPLE' },
+      update: {},
+      create: {
+        coupleId: 'ADMIN_COUPLE',
+        profileName: 'Admin Entity',
+        isProfileComplete: true,
+        isSubscribed: true
+      }
+    });
+
+    // 3. Create the requested admin
     const email = 'sawa@gmail.com';
     const password = 'admin';
     const hashedPassword = await bcrypt.hash(password, 10);
