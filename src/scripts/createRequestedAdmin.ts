@@ -1,41 +1,35 @@
-import mongoose from 'mongoose';
+import { prisma } from '../lib/prisma';
 import dotenv from 'dotenv';
 import bcrypt from 'bcryptjs';
 
 dotenv.config();
 
-const MONGODB_URI = process.env.MONGODB_URI;
-
 async function createAdmin() {
-  if (!MONGODB_URI) return;
   try {
-    await mongoose.connect(MONGODB_URI);
-    const User = mongoose.model('User', new mongoose.Schema({
-      name: String,
-      email: String,
-      password: { type: String, select: false },
-      role: { type: String, default: 'user' },
-      status: { type: String, default: 'active' }
-    }));
-
     const email = 'sawa@gmail.com';
     const password = 'admin';
     const hashedPassword = await bcrypt.hash(password, 10);
 
-    const exists = await User.findOne({ email });
+    const exists = await prisma.user.findFirst({ where: { email } });
     if (exists) {
-      exists.password = hashedPassword;
-      exists.role = 'admin';
-      await exists.save();
+      await prisma.user.update({
+        where: { id: exists.id },
+        data: {
+          password: hashedPassword,
+          role: 'admin',
+        }
+      });
       console.log(`✅ Updated existing account: ${email}`);
     } else {
-      await new User({
-        name: 'Sawa Admin',
-        email,
-        password: hashedPassword,
-        role: 'admin',
-        status: 'active'
-      }).save();
+      await prisma.user.create({
+        data: {
+          name: 'Sawa Admin',
+          email,
+          password: hashedPassword,
+          role: 'admin',
+          isPhoneVerified: true
+        }
+      });
       console.log(`🚀 Created new admin account: ${email}`);
     }
     process.exit(0);

@@ -1,65 +1,56 @@
-import { User, IUser } from '../models/User.model';
+import { prisma } from '../lib/prisma';
 import { AppError } from '../utils/AppError';
+import type { User } from '@prisma/client';
 
 export class UserRepository {
-  async findByPhone(phone: string): Promise<IUser | null> {
-    return User.findOne({ phone });
+  async findByPhone(phone: string): Promise<User | null> {
+    return prisma.user.findUnique({ where: { phone } });
   }
 
-  async findById(id: string): Promise<IUser | null> {
-    return User.findById(id);
+  async findById(id: string): Promise<User | null> {
+    return prisma.user.findUnique({ where: { id } });
   }
 
-  async findByEntityId(coupleId: string): Promise<IUser[]> {
-    return User.find({ coupleId });
+  async findByEntityId(coupleId: string): Promise<User[]> {
+    return prisma.user.findMany({ where: { coupleId } });
   }
 
-  /**
-   * Upsert a user by phone.
-   * Creates if not found, returns existing if found.
-   */
   async upsertByPhone(
     phone: string,
     coupleId: string,
     role: 'primary' | 'partner',
-  ): Promise<IUser> {
-    const existing = await User.findOne({ phone });
-    if (existing) {
-      return existing;
-    }
-
-    return User.create({ phone, coupleId, role, isPhoneVerified: false });
+  ): Promise<User> {
+    return prisma.user.upsert({
+      where: { phone },
+      update: {},
+      create: { phone, coupleId, role, isPhoneVerified: false },
+    });
   }
 
-  async markVerified(phone: string): Promise<IUser> {
-    const user = await User.findOneAndUpdate(
-      { phone },
-      { isPhoneVerified: true },
-      { new: true },
-    );
-    if (!user) {
-      throw new AppError(`User not found for phone: ${phone}`, 404, 'USER_NOT_FOUND');
-    }
+  async markVerified(phone: string): Promise<User> {
+    const user = await prisma.user.update({
+      where: { phone },
+      data: { isPhoneVerified: true },
+    });
+    if (!user) throw new AppError(`User not found for phone: ${phone}`, 404, 'USER_NOT_FOUND');
     return user;
   }
 
   async saveRefreshTokenHash(userId: string, hash: string): Promise<void> {
-    await User.findByIdAndUpdate(userId, { refreshTokenHash: hash });
+    await prisma.user.update({ where: { id: userId }, data: { refreshTokenHash: hash } });
   }
 
   async clearRefreshToken(userId: string): Promise<void> {
-    await User.findByIdAndUpdate(userId, { $unset: { refreshTokenHash: 1 } });
+    await prisma.user.update({ where: { id: userId }, data: { refreshTokenHash: null } });
   }
 
-  async findByIdWithRefreshToken(userId: string): Promise<IUser & { refreshTokenHash?: string } | null> {
-    return User.findById(userId).select('+refreshTokenHash');
+  async findByIdWithRefreshToken(userId: string): Promise<User | null> {
+    return prisma.user.findUnique({ where: { id: userId } });
   }
 
-  async update(id: string, data: Partial<IUser>): Promise<IUser> {
-    const user = await User.findByIdAndUpdate(id, data, { new: true });
-    if (!user) {
-      throw new AppError('User not found', 404, 'USER_NOT_FOUND');
-    }
+  async update(id: string, data: Partial<User>): Promise<User> {
+    const user = await prisma.user.update({ where: { id }, data });
+    if (!user) throw new AppError('User not found', 404, 'USER_NOT_FOUND');
     return user;
   }
 }

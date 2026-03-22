@@ -1,5 +1,5 @@
 import { Request, Response, NextFunction } from 'express';
-import { User } from '../models/User.model';
+import { prisma } from '../lib/prisma';
 import { verifyAccessToken } from '../utils/jwt';
 import { AppError } from '../utils/AppError';
 
@@ -40,7 +40,7 @@ export const adminAuth = async (
     const payload = verifyAccessToken(token);
     
     // For admin actions, we MUST verify the role from the database to ensure security.
-    const user = await User.findById(payload.userId).select('+role');
+    const user = await prisma.user.findUnique({ where: { id: payload.userId } });
     
     if (!user || user.role !== 'admin') {
       return next(new AppError('Access denied. Admins only.', 403, 'FORBIDDEN'));
@@ -48,7 +48,7 @@ export const adminAuth = async (
 
     req.user = { 
       userId: payload.userId, 
-      coupleId: user.coupleId,
+      coupleId: user.coupleId || undefined,
       role: user.role
     };
 

@@ -1,49 +1,37 @@
-import mongoose from 'mongoose';
-import { Community } from '../models/Community.model';
-import { Couple } from '../models/Couple.model';
+import { prisma } from '../lib/prisma';
 import { AppError } from '../utils/AppError';
 import { logger } from '../utils/logger';
-import { Notification } from '../models/Notification.model';
-import { Match } from '../models/Match.model';
 
 export class CommunityService {
 
   async getAllCommunities(requestingCoupleId: string, cityFilter?: string) {
-    const me = await Couple.findOne({ coupleId: requestingCoupleId });
+    const me = await prisma.couple.findUnique({ where: { coupleId: requestingCoupleId } });
     if (!me) throw new AppError('Profile not found', 404);
 
+    const SUPPORTED_CITIES = ['Bangalore', 'Chennai', 'New Delhi', 'Delhi', 'Mumbai', 'Gurgaon', 'Noida', 'Hyderabad', 'Goa'];
 
-    const SUPPORTED_CITIES = [
-      'Bangalore',
-      'Chennai',
-      'New Delhi',
-      'Delhi',
-      'Mumbai',
-      'Gurgaon',
-      'Noida',
-      'Hyderabad',
-      'Goa',
-    ];
-
-    const query: any = {};
-    if (cityFilter && cityFilter !== 'All City' && cityFilter !== 'All Cities' && cityFilter !== 'Unknown') {
-       // Only filter by city if it's one of our primary supported cities
+    const where: any = {};
+    if (cityFilter && !['All City', 'All Cities', 'Unknown'].includes(cityFilter)) {
        const isSupported = SUPPORTED_CITIES.some(c => cityFilter.toLowerCase().includes(c.toLowerCase()));
        if (isSupported) {
-          query.city = { $regex: new RegExp(cityFilter, 'i') };
+          where.city = { contains: cityFilter, mode: 'insensitive' };
        }
-       // If not supported, we don't set query.city, which means it returns ALL (Show all communities)
     }
 
-    const comms = await Community.find(query);
-    logger.info(`🏘️  DB fetched ${comms.length} communities.`);
+    const comms = await prisma.community.findMany({
+      where,
+      include: {
+        members: true,
+        admins: true
+      }
+    });
 
-    return comms.map(c => {
-      const isMember = c.members.some(m => m.toString() === me._id.toString());
-      const isAdmin = c.admins.some(a => a.toString() === me._id.toString());
+    return comms.map((c: any) => {
+      const isMember = c.members.some((m: any) => m.coupleId === me.id);
+      const isAdmin = c.admins.some((a: any) => a.coupleId === me.id);
       
       return {
-        id: c._id,
+        id: c.id,
         title: c.name,
         about: c.description,
         city: c.city,
@@ -62,15 +50,26 @@ export class CommunityService {
   }
 
   async getMyCommunities(requestingCoupleId: string) {
-    const me = await Couple.findOne({ coupleId: requestingCoupleId });
+    const me = await prisma.couple.findUnique({ where: { coupleId: requestingCoupleId } });
     if (!me) throw new AppError('Profile not found', 404);
 
-    const comms = await Community.find({ members: me._id });
+    const memberships = await prisma.communityMember.findMany({
+      where: { coupleId: me.id },
+      include: {
+        community: {
+          include: {
+            members: true,
+            admins: true
+          }
+        }
+      }
+    });
 
-    return comms.map(c => {
-      const isAdmin = c.admins.some(a => a.toString() === me._id.toString());
+    return memberships.map((m: any) => {
+      const c = m.community;
+      const isAdmin = c.admins.some((a: any) => a.coupleId === me.id);
       return {
-        id: c._id,
+        id: c.id,
         title: c.name,
         about: c.description,
         city: c.city,
@@ -78,45 +77,49 @@ export class CommunityService {
         imageUri: c.coverImageUrl,
         isMember: true,
         isAdmin,
-        members: [] // Unused in list
+        members: []
       };
     });
   }
 
   async createCommunity(requestingCoupleId: string, data: any) {
-    const me = await Couple.findOne({ coupleId: requestingCoupleId });
+    const me = await prisma.couple.findUnique({ where: { coupleId: requestingCoupleId } });
     if (!me) throw new AppError('Profile not found', 404);
 
-    const community = await Community.create({
-      name: data.name,
-      description: data.description,
-      city: data.city,
-      coverImageUrl: data.coverImageUrl,
-      tags: data.tags,
-      admins: [me._id],
-      members: [me._id],
+    const community = await prisma.community.create({
+      data: {
+        name: data.name,
+        description: data.description,
+        city: data.city,
+        coverImageUrl: data.coverImageUrl,
+        tags: data.tags || [],
+        admins: { create: { coupleId: me.id } },
+        members: { create: { coupleId: me.id } }
+      }
     });
 
-    // Send notifications to invited couples
     if (data.invitedCoupleIds && data.invitedCoupleIds.length > 0) {
       for (const targetCoupleId of data.invitedCoupleIds) {
         try {
-          // Verify they are matched/connected matches
-          const match = await Match.findOne({
-            $or: [
-              { couple1: me._id, couple2: targetCoupleId, status: 'accepted' },
-              { couple1: targetCoupleId, couple2: me._id, status: 'accepted' }
-            ]
+          const match = await prisma.match.findFirst({
+            where: {
+              OR: [
+                { couple1Id: me.id, couple2Id: targetCoupleId, status: 'accepted' },
+                { couple1Id: targetCoupleId, couple2Id: me.id, status: 'accepted' }
+              ]
+            }
           });
 
           if (match) {
-            await Notification.create({
-              recipient: new mongoose.Types.ObjectId(targetCoupleId),
-              sender: me._id,
-              type: 'community',
-              title: 'Community Invitation',
-              message: `${me.profileName} invited you to join their community: ${community.name}`,
-              data: { communityId: community._id, name: community.name }
+            await prisma.notification.create({
+              data: {
+                recipientId: targetCoupleId,
+                senderId: me.id,
+                type: 'community',
+                title: 'Community Invitation',
+                message: `${me.profileName} invited you to join ${community.name}`,
+                data: { communityId: community.id, name: community.name }
+              }
             });
           }
         } catch (err) {
@@ -125,256 +128,135 @@ export class CommunityService {
       }
     }
 
-    return {
-       id: community._id,
-       name: community.name,
-    };
+    return { id: community.id, name: community.name };
   }
 
-  async joinCommunity(requestingCoupleId: string, communityId: string, note?: string) {
-    const me = await Couple.findOne({ coupleId: requestingCoupleId });
+  async joinCommunity(requestingCoupleId: string, communityId: string) {
+    const me = await prisma.couple.findUnique({ where: { coupleId: requestingCoupleId } });
     if (!me) throw new AppError('Profile not found', 404);
 
-    const community = await Community.findById(communityId);
-    if (!community) throw new AppError('Community not found', 404);
+    const isMember = await prisma.communityMember.findUnique({
+        where: { communityId_coupleId: { communityId, coupleId: me.id } }
+    });
+    if (isMember) return { status: 'already-member' };
 
-    if (community.members.includes(me._id as any)) {
-      return { status: 'already-member' };
-    }
-
-    // Check if there is an active invite for this user
-    const invitation = await Notification.findOne({
-      $or: [{ recipient: me._id }, { recipient: me.coupleId as any }],
-      type: 'community',
-      'data.communityId': community._id,
+    const invitation = await prisma.notification.findFirst({
+      where: { recipientId: me.id, type: 'community', data: { path: ['communityId'], equals: communityId } as any }
     });
 
     if (invitation) {
-       // Invited! Accept immediately.
-       community.members.push(me._id as any);
-       await community.save();
-       
-       const io = (global as any).io;
-       if (io) {
-          io.to(`chat:${community._id}`).emit('chat:message', {
-             _id: new mongoose.Types.ObjectId(),
-             chatId: community._id,
-             chatType: 'group',
-             senderCoupleId: 'system',
-             content: `${me.profileName} accepted the invite and joined the community`,
-             contentType: 'text',
-             timestamp: new Date().toISOString(),
-             isSystem: true
-          });
-       }
-       return { status: 'joined', message: 'Joined community' };
+       await prisma.communityMember.create({ data: { communityId, coupleId: me.id } });
+       return { status: 'joined' };
     }
 
-    // Otherwise, it's a normal join request
-    if (community.joinRequests.includes(me._id as any)) {
-      return { status: 'already-requested' };
-    }
+    const isRequested = await prisma.communityJoinRequest.findUnique({
+        where: { communityId_coupleId: { communityId, coupleId: me.id } }
+    });
+    if (isRequested) return { status: 'already-requested' };
 
-    community.joinRequests.push(me._id as any);
-    await community.save();
+    await prisma.communityJoinRequest.create({ data: { communityId, coupleId: me.id } });
 
-    // Send notifications to all admins
-    for (const adminId of community.admins) {
-      await Notification.create({
-        recipient: adminId,
-        sender: me._id,
-        type: 'community',
-        title: 'New Join Request',
-        message: `${me.profileName} wants to join ${community.name}${note ? `: "${note}"` : ''}`,
-        data: { communityId: community._id, requestId: me._id }
+    const admins = await prisma.communityAdmin.findMany({ where: { communityId } });
+    for (const admin of admins) {
+      await prisma.notification.create({
+        data: {
+          recipientId: admin.coupleId,
+          senderId: me.id,
+          type: 'community',
+          title: 'New Join Request',
+          message: `${me.profileName} wants to join.`,
+          data: { communityId, requestId: me.id }
+        }
       });
     }
 
-    return { status: 'requested', message: 'Join request sent to host.' };
+    return { status: 'requested' };
   }
 
   async leaveCommunity(requestingCoupleId: string, communityId: string) {
-    const me = await Couple.findOne({ coupleId: requestingCoupleId });
+    const me = await prisma.couple.findUnique({ where: { coupleId: requestingCoupleId } });
     if (!me) throw new AppError('Profile not found', 404);
 
-    const community = await Community.findById(communityId);
-    if (!community) throw new AppError('Community not found', 404);
+    await prisma.communityMember.deleteMany({ where: { communityId, coupleId: me.id } });
+    await prisma.communityAdmin.deleteMany({ where: { communityId, coupleId: me.id } });
 
-    community.members = community.members.filter(m => m.toString() !== me._id.toString());
-    
-    // If they were an admin, remove them
-    const wasAdmin = community.admins.some(a => a.toString() === me._id.toString());
-    community.admins = community.admins.filter(a => a.toString() !== me._id.toString());
+    const remainingAdmins = await prisma.communityAdmin.findMany({ where: { communityId } });
+    const remainingMembers = await prisma.communityMember.findMany({ where: { communityId } });
 
-    // If community has no admins but still has members, appoint a new one
-    if (community.admins.length === 0 && community.members.length > 0) {
-      community.admins.push(community.members[0]);
+    if (remainingAdmins.length === 0 && remainingMembers.length > 0) {
+      await prisma.communityAdmin.create({ data: { communityId, coupleId: remainingMembers[0].coupleId } });
     }
 
-    if (community.members.length === 0) {
-      // Last person left, delete community?
-      await Community.findByIdAndDelete(communityId);
+    if (remainingMembers.length === 0) {
+      await prisma.community.delete({ where: { id: communityId } });
       return { status: 'deleted' };
-    }
-
-    await community.save();
-
-    const io = (global as any).io;
-    if (io) {
-      io.to(`chat:${community._id}`).emit('chat:message', {
-        _id: new mongoose.Types.ObjectId(),
-        chatId: community._id,
-        chatType: 'group',
-        senderCoupleId: 'system',
-        content: `${me.profileName} left the community`,
-        contentType: 'text',
-        timestamp: new Date().toISOString(),
-        isSystem: true
-      });
     }
 
     return { status: 'left' };
   }
 
-  async inviteToCommunity(requestingCoupleId: string, communityId: string, invitedCoupleIds: string[]) {
-    const me = await Couple.findOne({ coupleId: requestingCoupleId });
-    if (!me || !me.profileName) throw new AppError('Profile not found', 404);
-
-    const community = await Community.findById(communityId);
-    if (!community) throw new AppError('Community not found', 404);
-
-    if (invitedCoupleIds.length > 0) {
-      for (const targetCoupleId of invitedCoupleIds) {
-        try {
-          const match = await Match.findOne({
-            $or: [
-              { couple1: me._id, couple2: targetCoupleId, status: 'accepted' },
-              { couple1: targetCoupleId, couple2: me._id, status: 'accepted' }
-            ]
-          });
-
-          if (match) {
-            await Notification.create({
-              recipient: new mongoose.Types.ObjectId(targetCoupleId),
-              sender: me._id,
-              type: 'community',
-              title: 'Community Invitation',
-              message: `${me.profileName} invited you to join their community: ${community.name}`,
-              data: { communityId: community._id, name: community.name }
-            });
-          }
-        } catch (err) {
-          logger.error(`[CommunityService] Failed to notify couple ${targetCoupleId}: ${err}`);
-        }
-      }
-    }
-    return { success: true };
-  }
-
   async processJoinRequest(requestingCoupleId: string, communityId: string, requestId: string, decision: 'accept' | 'reject') {
-    const me = await Couple.findOne({ coupleId: requestingCoupleId });
+    const me = await prisma.couple.findUnique({ where: { coupleId: requestingCoupleId } });
     if (!me) throw new AppError('Profile not found', 404);
 
-    const community = await Community.findById(communityId);
-    if (!community) throw new AppError('Community not found', 404);
+    const isAdmin = await prisma.communityAdmin.findUnique({
+        where: { communityId_coupleId: { communityId, coupleId: me.id } }
+    });
+    if (!isAdmin) throw new AppError('Admin only', 403);
 
-    const isAdmin = community.admins.some(a => a.toString() === me._id.toString());
-    if (!isAdmin) throw new AppError('Only administrators can approve join requests', 403);
-
-    community.joinRequests = community.joinRequests.filter(req => req.toString() !== requestId);
+    await prisma.communityJoinRequest.deleteMany({ where: { communityId, coupleId: requestId } });
 
     if (decision === 'accept') {
-       if (!community.members.some(m => m.toString() === requestId)) {
-          community.members.push(new mongoose.Types.ObjectId(requestId) as any);
-       }
-       await community.save();
+       await prisma.communityMember.upsert({
+           where: { communityId_coupleId: { communityId, coupleId: requestId } },
+           update: {},
+           create: { communityId, coupleId: requestId }
+       });
 
-       const requestedCouple = await Couple.findById(requestId);
-       if (requestedCouple) {
-          await Notification.create({
-             recipient: requestedCouple._id,
-             sender: me._id,
+       await prisma.notification.create({
+          data: {
+             recipientId: requestId,
+             senderId: me.id,
              type: 'community',
              title: 'Request Accepted!',
-             message: `Your request to join ${community.name} was accepted!`,
-             data: { communityId: community._id, name: community.name }
-          });
-
-          const io = (global as any).io;
-          if (io) {
-             io.to(`chat:${community._id}`).emit('chat:message', {
-                _id: new mongoose.Types.ObjectId(),
-                chatId: community._id,
-                chatType: 'group',
-                senderCoupleId: 'system',
-                content: `${requestedCouple.profileName} just joined the community!`,
-                contentType: 'text',
-                timestamp: new Date().toISOString(),
-                isSystem: true
-             });
+             message: `You joined the community!`,
+             data: { communityId }
           }
-       }
-       return { message: 'Request accepted' };
-    } else {
-       await community.save();
-       await Notification.create({
-          recipient: new mongoose.Types.ObjectId(requestId),
-          sender: me._id,
-          type: 'system',
-          title: 'Request Declined',
-          message: `Your request to join ${community.name} was declined by the host.`,
-          data: { communityId: community._id }
        });
-       return { message: 'Request rejected' };
+       return { message: 'Accepted' };
     }
+    return { message: 'Rejected' };
   }
 
   async getCommunityDetail(requestingCoupleId: string, communityId: string) {
-    const me = await Couple.findOne({ coupleId: requestingCoupleId });
+    const me = await prisma.couple.findUnique({ where: { coupleId: requestingCoupleId } });
     if (!me) throw new AppError('Profile not found', 404);
 
-    const c = await Community.findById(communityId).populate('members').populate('joinRequests');
-    if (!c) throw new AppError('Community not found', 404);
-
-    const isMember = c.members.some(m => m._id.toString() === me._id.toString());
-    const isAdmin = c.admins.some(a => a.toString() === me._id.toString());
-    
-    // Check if there's a pending invitation for this couple (even if they read the notification already)
-    const invitation = await Notification.findOne({
-      $or: [{ recipient: me._id }, { recipient: me.coupleId as any }],
-      type: 'community',
-      'data.communityId': c._id,
-    });
-
-    const adminCouples = await Couple.find({ _id: { $in: c.admins } })
-      .populate('partner1', 'name')
-      .populate('partner2', 'name')
-      .lean();
-
-    /** One row per hosting couple (combined profile — same shape as `members` items). */
-    const hosts = adminCouples.map((ac) => {
-      const city = ac.location?.city || 'Unknown';
-      const p1 = ac.partner1 as { name?: string } | null;
-      const p2 = ac.partner2 as { name?: string } | null;
-      let name = (ac.profileName || '').trim();
-      if (!name) {
-        const a = p1?.name?.trim();
-        const b = p2?.name?.trim();
-        if (a && b) name = `${a} & ${b}`;
-        else name = a || b || 'Host';
+    const c = await prisma.community.findUnique({
+      where: { id: communityId },
+      include: {
+        members: { include: { couple: true } },
+        admins: { include: { couple: { include: { partner1: true, partner2: true } } } },
+        joinRequests: { include: { couple: true } }
       }
-      return {
-        id: String(ac._id),
-        coupleId: ac.coupleId,
-        name,
-        city,
-        accent: '#DBCBA6',
-        image: ac.primaryPhoto,
-      };
     });
+
+    if (!c) throw new AppError('Not found', 404);
+
+    const isMember = c.members.some((m: any) => m.coupleId === me.id);
+    const isAdmin = c.admins.some((a: any) => a.coupleId === me.id);
+    
+    const hosts = c.admins.map(a => ({
+        id: a.couple.id,
+        coupleId: a.couple.coupleId,
+        name: a.couple.profileName || 'Host',
+        city: a.couple.locationCity || 'Unknown',
+        accent: '#DBCBA6',
+        image: a.couple.primaryPhoto
+    }));
 
     return {
-      id: c._id,
+      id: c.id,
       title: c.name,
       about: c.description,
       city: c.city,
@@ -382,88 +264,90 @@ export class CommunityService {
       imageUri: c.coverImageUrl,
       isMember,
       isAdmin,
-      isInvited: !!invitation,
       hosts,
-      members: (c.members as any).map((m: any) => ({
-        id: m._id, // Internal ID for keys
-        coupleId: m.coupleId, // Business ID for profile navigation
-        name: m.profileName,
-        city: m.location?.city || 'Unknown',
+      members: c.members.map((m: any) => ({
+        id: m.couple.id,
+        coupleId: m.couple.coupleId,
+        name: m.couple.profileName,
+        city: m.couple.locationCity || 'Unknown',
         accent: '#DBCBA6',
-        image: m.primaryPhoto,
+        image: m.couple.primaryPhoto
       })),
-      joinRequests: isAdmin ? (c.joinRequests as any).map((m: any) => ({
-        id: m._id,
-        coupleId: m.coupleId,
-        name: m.profileName,
-        city: m.location?.city || 'Unknown',
+      joinRequests: isAdmin ? c.joinRequests.map((r: any) => ({
+        id: r.couple.id,
+        coupleId: r.couple.coupleId,
+        name: r.couple.profileName,
+        city: r.couple.locationCity || 'Unknown',
         accent: '#3CA6C7',
-        image: m.primaryPhoto,
+        image: r.couple.primaryPhoto
       })) : []
     };
   }
 
   async deleteCommunity(requestingCoupleId: string, communityId: string) {
-    const me = await Couple.findOne({ coupleId: requestingCoupleId });
+    const me = await prisma.couple.findUnique({ where: { coupleId: requestingCoupleId } });
     if (!me) throw new AppError('Profile not found', 404);
 
-    const community = await Community.findById(communityId);
-    if (!community) throw new AppError('Community not found', 404);
+    const isAdmin = await prisma.communityAdmin.findUnique({
+        where: { communityId_coupleId: { communityId, coupleId: me.id } }
+    });
+    if (!isAdmin) throw new AppError('Admin only', 403);
 
-    // Only actual admins can delete
-    const isAdmin = community.admins.some(a => a.toString() === me._id.toString());
-    if (!isAdmin) {
-      throw new AppError('Only administrators can delete this community', 403);
-    }
-
-    await Community.findByIdAndDelete(communityId);
+    await prisma.community.delete({ where: { id: communityId } });
     return { success: true };
   }
 
   async getInviteableCouples(requestingCoupleId: string, communityId: string) {
-    const me = await Couple.findOne({ coupleId: requestingCoupleId });
+    const me = await prisma.couple.findUnique({ where: { coupleId: requestingCoupleId } });
     if (!me) throw new AppError('Profile not found', 404);
 
-    const community = await Community.findById(communityId);
-    if (!community) throw new AppError('Community not found', 404);
-
-    // 1. Get all accepted matches (friends)
-    const matches = await Match.find({
-      $or: [{ couple1: me._id }, { couple2: me._id }],
-      status: 'accepted'
-    }).populate('couple1').populate('couple2');
-
-    // 2. Find internal notifications that are pending invites for this community
-    // Using simple heuristic: community notification from 'me' with this communityId
-    const pendingInvites = await Notification.find({
-      sender: me._id,
-      type: 'community',
-      'data.communityId': new mongoose.Types.ObjectId(communityId),
+    const matches = await prisma.match.findMany({
+      where: { OR: [{ couple1Id: me.id }, { couple2Id: me.id }], status: 'accepted' },
+      include: { couple1: true, couple2: true }
     });
 
-    const invitedIds = pendingInvites.map(n => n.recipient.toString());
+    const members = await prisma.communityMember.findMany({ where: { communityId } });
+    const memberIds = members.map(m => m.coupleId);
 
-    return matches.map(m => {
-      const other = m.couple1._id.equals(me._id) ? (m.couple2 as any) : (m.couple1 as any);
-      const otherId = other._id.toString();
-      
-      let status: 'available' | 'invited' | 'member' = 'available';
-      
-      if (community.members.some(mid => mid.toString() === otherId)) {
-        status = 'member';
-      } else if (invitedIds.includes(otherId)) {
-        status = 'invited';
-      }
+    return matches.map((m: any) => {
+      const other = m.couple1Id === me.id ? m.couple2 : m.couple1;
+      const status = memberIds.includes(other.id) ? 'member' : 'available';
 
       return {
-        id: other._id,
+        id: other.id,
         coupleId: other.coupleId,
         name: other.profileName,
-        city: other.location?.city || 'India',
+        city: other.locationCity || 'India',
         image: other.primaryPhoto,
         status
       };
     });
+  }
+
+  async inviteToCommunity(requestingCoupleId: string, communityId: string, invitedCoupleIds: string[]) {
+    const me = await prisma.couple.findUnique({ where: { coupleId: requestingCoupleId } });
+    if (!me) throw new AppError('Profile not found', 404);
+
+    const community = await prisma.community.findUnique({ where: { id: communityId } });
+    if (!community) throw new AppError('Community not found', 404);
+
+    for (const targetCoupleId of invitedCoupleIds) {
+      try {
+        await prisma.notification.create({
+          data: {
+            recipientId: targetCoupleId,
+            senderId: me.id,
+            type: 'community',
+            title: 'Community Invitation',
+            message: `${me.profileName} invited you to join ${community.name}`,
+            data: { communityId: community.id, name: community.name }
+          }
+        });
+      } catch (err) {
+        logger.error(`[CommunityService] Failed to invite couple ${targetCoupleId}: ${err}`);
+      }
+    }
+    return { success: true };
   }
 }
 

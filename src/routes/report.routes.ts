@@ -1,5 +1,5 @@
 import express from 'express';
-import { Report } from '../models/Report.model';
+import { prisma } from '../lib/prisma';
 import { authenticate } from '../middleware/authenticate';
 
 const router = express.Router();
@@ -7,18 +7,20 @@ const router = express.Router();
 router.post('/', authenticate, async (req: any, res) => {
     try {
         const { targetId, reason, details } = req.body;
-        const reporterId = req.user.coupleId; // Or req.user.id depending on setup
+        const reporterId = req.user.coupleId;
 
         if (!targetId || !reason) {
             return res.status(400).json({ success: false, message: 'Missing target or reason' });
         }
 
-        const report = await Report.create({
-            reporter: reporterId,
-            target: targetId,
-            reason,
-            details: details || '',
-            status: 'pending'
+        const report = await prisma.report.create({
+            data: {
+                reporterId: reporterId,
+                targetId: targetId,
+                reason,
+                details: details || '',
+                status: 'pending'
+            }
         });
 
         res.status(201).json({ success: true, data: report });

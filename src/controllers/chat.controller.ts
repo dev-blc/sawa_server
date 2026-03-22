@@ -1,39 +1,33 @@
 import { Request, Response } from 'express';
 import { sendSuccess } from '../utils/response';
 import { AppError } from '../utils/AppError';
-import { Message } from '../models/Message.model';
-import { Couple } from '../models/Couple.model';
-import { User } from '../models/User.model';
-import mongoose from 'mongoose';
+import { prisma } from '../lib/prisma';
 import { getCoupleCommunityColor } from '../utils/communityColors';
 
 export const getPrivateMessages = async (req: Request, res: Response): Promise<void> => {
   if (!req.user) throw new AppError('Unauthorized', 401);
   const { matchId } = req.params;
 
-  if (!mongoose.Types.ObjectId.isValid(matchId)) {
-     throw new AppError('Invalid match ID', 400);
-  }
+  const messages = await prisma.message.findMany({
+    where: {
+      chatType: 'private',
+      matchId: matchId,
+    },
+    include: {
+      sender: { select: { coupleId: true } },
+    },
+    orderBy: { createdAt: 'asc' },
+    take: 100,
+  });
 
-  const populatedMessages = await Message.find({
-    chatType: 'private',
-    chatId: new mongoose.Types.ObjectId(matchId),
-  })
-    .populate('sender', 'coupleId')
-    .populate('senderUser', 'role phone')
-    .sort({ createdAt: 1 })
-    .limit(100)
-    .lean();
-
-  const finalMessages = populatedMessages.map((m: any) => {
+  const finalMessages = messages.map((m: any) => {
     return {
-      _id: m._id,
+      _id: m.id,
       content: m.content,
       contentType: m.contentType,
       senderName: m.senderName,
-      senderUserId: m.senderUser?._id,
-      senderRole: m.senderUser?.role,
-      senderCoupleId: m.sender?.coupleId, // The shared string ID (X-Y)
+      senderUserId: m.senderUserId,
+      senderCoupleId: m.sender?.coupleId, 
       senderIndividualName: m.senderName,
       timestamp: m.createdAt,
       readBy: m.readBy || [],
@@ -50,18 +44,20 @@ export const sendPrivateMessage = async (req: Request, res: Response): Promise<v
   const { matchId } = req.params;
   const { content, contentType } = req.body;
 
-  const { userId, coupleMongoId, userName } = req.user!;
+  const { userId, coupleId, userName } = req.user!;
+  if (!coupleId) throw new AppError('Couple ID required', 400);
   
-  // ZERO HOPS! No User.findById or Couple.findOne needed anymore.
-  const message = await Message.create({
-    chatType: 'private',
-    chatId: matchId,
-    sender: coupleMongoId,
-    senderUser: userId,
-    senderName: userName || 'User',
-    content,
-    contentType: contentType || 'text',
-    audioDuration: req.body.audioDuration,
+  const message = await prisma.message.create({
+    data: {
+      chatType: 'private',
+      matchId: matchId,
+      senderId: coupleId,
+      senderUserId: userId,
+      senderName: userName || 'User',
+      content,
+      contentType: (contentType || 'text') as any,
+      audioDuration: req.body.audioDuration,
+    }
   });
 
   sendSuccess({ res, data: { message }, statusCode: 201 });
@@ -71,29 +67,27 @@ export const getGroupMessages = async (req: Request, res: Response): Promise<voi
   if (!req.user) throw new AppError('Unauthorized', 401);
   const { communityId } = req.params;
 
-  if (!mongoose.Types.ObjectId.isValid(communityId)) {
-    throw new AppError('Invalid community ID', 400);
-  }
-
-  const messages = await Message.find({
-    chatType: 'group',
-    chatId: new mongoose.Types.ObjectId(communityId),
-  })
-    .populate('sender', 'coupleId profileName')
-    .populate('senderUser', 'role')
-    .sort({ createdAt: 1 })
-    .limit(100)
-    .lean();
+  const messages = await prisma.message.findMany({
+    where: {
+      chatType: 'group',
+      communityId: communityId,
+    },
+    include: {
+      sender: { select: { coupleId: true, profileName: true } },
+    },
+    orderBy: { createdAt: 'asc' },
+    take: 100,
+  });
 
   const finalMessages = messages.map((m: any) => {
     return {
-      _id: m._id,
+      _id: m.id,
       content: m.content,
       contentType: m.contentType,
       senderCoupleId: m.sender?.coupleId,
-      senderName: m.sender?.profileName || 'Unknown Couple', // Use couple's profileName
-      senderIndividualName: m.senderName, // individual name (Kiran/Raji)
-      accent: getCoupleCommunityColor(m.sender?.coupleId),
+      senderName: m.sender?.profileName || 'Unknown Couple', 
+      senderIndividualName: m.senderName, 
+      accent: getCoupleCommunityColor(m.sender?.coupleId || ''),
       timestamp: m.createdAt,
       readBy: m.readBy || [],
       audioDuration: m.audioDuration,
@@ -108,17 +102,20 @@ export const sendGroupMessage = async (req: Request, res: Response): Promise<voi
   const { communityId } = req.params;
   const { content, contentType } = req.body;
 
-  const { userId, coupleMongoId, userName } = req.user!;
+  const { userId, coupleId, userName } = req.user!;
+  if (!coupleId) throw new AppError('Couple ID required', 400);
 
-  const message = await Message.create({
-    chatType: 'group',
-    chatId: communityId,
-    sender: coupleMongoId,
-    senderUser: userId,
-    senderName: userName || 'User',
-    content,
-    contentType: contentType || 'text',
-    audioDuration: req.body.audioDuration,
+  const message = await prisma.message.create({
+    data: {
+      chatType: 'group',
+      communityId: communityId,
+      senderId: coupleId,
+      senderUserId: userId,
+      senderName: userName || 'User',
+      content,
+      contentType: (contentType || 'text') as any,
+      audioDuration: req.body.audioDuration,
+    }
   });
 
   sendSuccess({ res, data: { message }, statusCode: 201 });

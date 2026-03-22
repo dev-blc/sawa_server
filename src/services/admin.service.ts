@@ -1,72 +1,64 @@
-import { User } from '../models/User.model';
-import { Couple } from '../models/Couple.model';
-import { Community } from '../models/Community.model';
-import { Match } from '../models/Match.model';
-import { Notification } from '../models/Notification.model';
-import { Prompt } from '../models/Prompt.model';
-import { Report } from '../models/Report.model';
+import { prisma } from '../lib/prisma';
 
 export class AdminService {
   async getStats() {
-    const [totalUsers, totalCouples, totalCommunities, totalMatches, totalPrompts, pendingReports] = await Promise.all([
-      User.countDocuments(),
-      Couple.countDocuments(),
-      Community.countDocuments(),
-      Match.countDocuments({ status: 'accepted' }),
-      Prompt.countDocuments({ isActive: true }),
-      Report.countDocuments({ status: 'pending' }),
-    ]);
-
-    // Simple active today logic: anyone updated in the last 24h
     const dayAgo = new Date(Date.now() - 24 * 60 * 60 * 1000);
-    const activeToday = await User.countDocuments({ updatedAt: { $gte: dayAgo } });
 
-    return {
-      totalUsers,
-      totalCouples,
-      totalCommunities,
-      totalPrompts,
-      activeToday,
-      pendingReports,
-    };
+    const [totalUsers, totalCouples, totalCommunities, totalMatches, totalPrompts, pendingReports, activeToday] =
+      await Promise.all([
+        prisma.user.count(),
+        prisma.couple.count(),
+        prisma.community.count(),
+        prisma.match.count({ where: { status: 'accepted' } }),
+        prisma.prompt.count({ where: { isActive: true } }),
+        prisma.report.count({ where: { status: 'pending' } }),
+        prisma.user.count({ where: { updatedAt: { gte: dayAgo } } }),
+      ]);
+
+    return { totalUsers, totalCouples, totalCommunities, totalPrompts, activeToday, pendingReports };
   }
 
   async getUsers() {
-    const users = await User.find().sort({ createdAt: -1 }).limit(100);
-    // Joining with coupleId manually to get city
-    const coupleIds = [...new Set(users.map(u => u.coupleId))];
-    const couples = await Couple.find({ coupleId: { $in: coupleIds } });
-    const coupleMap = new Map(couples.map(c => [c.coupleId, c]));
-
-    return users.map(u => {
-      const couple = coupleMap.get(u.coupleId);
-      return {
-        id: u._id,
-        name: u.name || 'Unknown',
-        phone: u.phone,
-        city: couple?.location?.city || 'Unknown',
-        status: u.isPhoneVerified ? 'active' : 'inactive',
-        joinedAt: u.createdAt,
-      };
+    const users = await prisma.user.findMany({
+      orderBy: { createdAt: 'desc' },
+      take: 100,
+      include: { coupleProfile: true },
     });
+
+    return users.map(u => ({
+      id: u.id,
+      name: u.name || 'Unknown',
+      phone: u.phone,
+      city: u.coupleProfile?.locationCity || 'Unknown',
+      status: u.isPhoneVerified ? 'active' : 'inactive',
+      joinedAt: u.createdAt,
+    }));
   }
 
   async getCouples() {
-    const couples = await Couple.find().sort({ createdAt: -1 }).limit(100);
+    const couples = await prisma.couple.findMany({
+      orderBy: { createdAt: 'desc' },
+      take: 100,
+    });
+
     return couples.map(c => ({
-      id: c._id,
+      id: c.id,
       pairName: c.profileName || 'Anonymous Pair',
-      city: c.location?.city || 'Unknown',
-      compatibilityScore: Math.floor(Math.random() * 30) + 70, // Mock for now
+      city: c.locationCity || 'Unknown',
+      compatibilityScore: Math.floor(Math.random() * 30) + 70,
       streakDays: 0,
       status: c.isProfileComplete ? 'engaged' : 'new',
     }));
   }
 
   async getCommunities() {
-    const comms = await Community.find().sort({ createdAt: -1 });
+    const comms = await prisma.community.findMany({
+      orderBy: { createdAt: 'desc' },
+      include: { members: true },
+    });
+
     return comms.map(c => ({
-      id: c._id,
+      id: c.id,
       name: c.name,
       category: c.tags?.[0] || c.city || 'General',
       members: c.members.length,
@@ -75,20 +67,23 @@ export class AdminService {
   }
 
   async getActivities() {
-    // Recent notifications, users, and communities
     const [notifs, users, communities] = await Promise.all([
-      Notification.find().populate('sender', 'profileName').sort({ createdAt: -1 }).limit(10),
-      User.find().sort({ createdAt: -1 }).limit(10),
-      Community.find().sort({ createdAt: -1 }).limit(10)
+      prisma.notification.findMany({
+        orderBy: { createdAt: 'desc' },
+        take: 10,
+        include: { sender: true },
+      }),
+      prisma.user.findMany({ orderBy: { createdAt: 'desc' }, take: 10 }),
+      prisma.community.findMany({ orderBy: { createdAt: 'desc' }, take: 10 }),
     ]);
 
     const activities: any[] = [];
 
     notifs.forEach(n => {
       activities.push({
-        id: `notif-${n._id}`,
+        id: `notif-${n.id}`,
         title: n.title,
-        actor: n.sender ? (n.sender as any).profileName : 'System',
+        actor: n.sender?.profileName || 'System',
         type: n.type === 'match' ? 'couple_matched' : 'system_alert',
         happenedAt: n.createdAt,
       });
@@ -96,7 +91,7 @@ export class AdminService {
 
     users.forEach(u => {
       activities.push({
-        id: `user-${u._id}`,
+        id: `user-${u.id}`,
         title: 'New User Registered',
         actor: u.name || 'Anonymous User',
         type: 'user_registration',
@@ -106,7 +101,7 @@ export class AdminService {
 
     communities.forEach(c => {
       activities.push({
-        id: `comm-${c._id}`,
+        id: `comm-${c.id}`,
         title: 'New Community Created',
         actor: c.name,
         type: 'community_creation',
@@ -114,18 +109,20 @@ export class AdminService {
       });
     });
 
-    return activities.sort((a, b) => {
-      const dateA = a.happenedAt ? new Date(a.happenedAt).getTime() : 0;
-      const dateB = b.happenedAt ? new Date(b.happenedAt).getTime() : 0;
-      return dateB - dateA;
-    }).slice(0, 20);
+    return activities
+      .sort((a, b) => {
+        const dateA = a.happenedAt ? new Date(a.happenedAt).getTime() : 0;
+        const dateB = b.happenedAt ? new Date(b.happenedAt).getTime() : 0;
+        return dateB - dateA;
+      })
+      .slice(0, 20);
   }
 
   async getPrompts() {
-    const list = await Prompt.find().sort({ createdAt: -1 });
+    const list = await prisma.prompt.findMany({ orderBy: { createdAt: 'desc' } });
     return list.map(p => ({
-      id: p._id,
-      title: p.text, // Mapping text to title for Admin UI
+      id: p.id,
+      title: p.text,
       question: p.text,
       category: p.category,
       tags: [],
@@ -135,15 +132,15 @@ export class AdminService {
   }
 
   async getReports() {
-    const list = await Report.find()
-      .populate('reporter', 'profileName')
-      .populate('target', 'profileName')
-      .sort({ createdAt: -1 });
+    const list = await prisma.report.findMany({
+      orderBy: { createdAt: 'desc' },
+      include: { reporter: true, target: true },
+    });
 
     return list.map(r => ({
-      id: r._id,
-      reporter: (r.reporter as any)?.profileName || 'Unknown',
-      target: (r.target as any)?.profileName || 'Unknown',
+      id: r.id,
+      reporter: r.reporter?.profileName || 'Unknown',
+      target: r.target?.profileName || 'Unknown',
       reason: r.reason,
       status: r.status,
       createdAt: r.createdAt,
@@ -151,17 +148,16 @@ export class AdminService {
   }
 
   async addPrompt(text: string, category: string) {
-    return Prompt.create({ text, category });
+    return prisma.prompt.create({ data: { text, category } });
   }
 
   async togglePrompt(id: string) {
-    const p = await Prompt.findById(id);
+    const p = await prisma.prompt.findUnique({ where: { id } });
     if (!p) throw new Error('Prompt not found');
-    p.isActive = !p.isActive;
-    return p.save();
+    return prisma.prompt.update({ where: { id }, data: { isActive: !p.isActive } });
   }
 
   async deletePrompt(id: string) {
-    return Prompt.findByIdAndDelete(id);
+    return prisma.prompt.delete({ where: { id } });
   }
 }

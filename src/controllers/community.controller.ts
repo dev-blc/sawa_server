@@ -77,9 +77,9 @@ export const joinCommunity = async (req: Request, res: Response): Promise<void> 
   const { id } = req.params;
   const data = req.body as z.infer<typeof JoinCommunitySchema>;
 
-  const result = await communityService.joinCommunity(coupleId!, id, data.note);
+  const result = await communityService.joinCommunity(coupleId!, id);
 
-  sendSuccess({ res, statusCode: 200, message: result.message, data: result });
+  sendSuccess({ res, statusCode: 200, message: (result as any).status, data: result });
 };
 
 export const leaveCommunity = async (req: Request, res: Response): Promise<void> => {

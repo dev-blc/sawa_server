@@ -1,24 +1,14 @@
-import mongoose from 'mongoose';
+import { prisma } from '../lib/prisma';
 import dotenv from 'dotenv';
 
 dotenv.config();
 
-const MONGODB_URI = process.env.MONGODB_URI;
-
 async function checkUsers() {
-  if (!MONGODB_URI) return;
   try {
-    await mongoose.connect(MONGODB_URI);
-    const User = mongoose.model('User', new mongoose.Schema({
-      email: String,
-      phone: String,
-      role: String
-    }));
-
-    const users = await User.find({});
+    const users = await prisma.user.findMany({});
     console.log('👥 Current Users in DB:');
-    users.forEach(u => {
-      console.log(`- ID: ${u._id}, Email: ${u.email}, Phone: ${u.phone}, Role: ${u.role}`);
+    users.forEach((u: any) => {
+      console.log(`- ID: ${u.id}, Email: ${u.email}, Phone: ${u.phone}, Role: ${u.role}`);
     });
     process.exit(0);
   } catch (err) {

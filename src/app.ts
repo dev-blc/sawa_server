@@ -58,13 +58,12 @@ export const createApp = (): Application => {
 
   // ─── Health Check ────────────────────────────────────────────────────────────
   app.get('/health', (_req: Request, res: Response) => {
-    const { host, name } = require('mongoose').connection;
     res.status(200).json({
       success: true,
       status: 'healthy',
       service: 'sawa-server',
       environment: env.NODE_ENV,
-      db: { host, name },
+      db: { type: 'postgresql (prisma)' },
       timestamp: new Date().toISOString(),
     });
   });

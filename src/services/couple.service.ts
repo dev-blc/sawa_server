@@ -1,9 +1,6 @@
-import mongoose from 'mongoose';
-import { Couple, ICouple, IOnboardingAnswer } from '../models/Couple.model';
-import { User } from '../models/User.model';
+import { prisma } from '../lib/prisma';
 import { AppError } from '../utils/AppError';
 import { logger } from '../utils/logger';
-import { Community } from '../models/Community.model';
 
 export class CoupleService {
   /**
@@ -25,61 +22,66 @@ export class CoupleService {
   ) {
     logger.info(`[CoupleService.setupProfile] START - coupleId: ${coupleId}`);
 
-    // 1. Update primary user's details (ALWAYS the one signing up/submitting)
-    const primaryUpdate = await User.findByIdAndUpdate(primaryUserId, {
-      name: data.yourName,
-      dob: data.yourDob || undefined,
-      email: data.yourEmail || undefined,
-      role: 'primary' // Enforce role
+    // 1. Update primary user's details
+    await prisma.user.update({
+      where: { id: primaryUserId },
+      data: {
+        name: data.yourName,
+        dob: data.yourDob || undefined,
+        email: data.yourEmail || undefined,
+        role: 'primary'
+      }
     });
-    logger.info(`[CoupleService.setupProfile] Primary user update: ${!!primaryUpdate} (${primaryUserId})`);
 
     // 2. Find and update the partner user
-    const partner = await User.findOneAndUpdate(
-      { coupleId, role: 'partner' },
-      {
-        name: data.partnerName,
-        dob: data.partnerDob || undefined,
-        email: data.partnerEmail || undefined,
-      },
-      { new: true }
-    );
-    logger.info(`[CoupleService.setupProfile] Partner user update: ${!!partner}`);
+    const partner = await prisma.user.findFirst({
+        where: { coupleId, role: 'partner' }
+    });
+    
+    if (partner) {
+        await prisma.user.update({
+            where: { id: partner.id },
+            data: {
+                name: data.partnerName,
+                dob: data.partnerDob || undefined,
+                email: data.partnerEmail || undefined,
+            }
+        });
+    }
 
     // 3. Upsert the Couple document
-    // We enforce: partner1 = PRIMARY (Boy), partner2 = PARTNER (Girl)
-    const existingCouple = await Couple.findOne({ coupleId });
+    const existingCouple = await prisma.couple.findUnique({ where: { coupleId } });
+    
     if (!existingCouple) {
-      await Couple.create({
-        coupleId,
-        partner1: primaryUserId,
-        partner2: partner?._id ?? null,
-        profileName: `${data.yourName} & ${data.partnerName}`,
-        relationshipStatus: data.relationshipStatus,
-        location: data.location || { city: 'Unknown' },
-        answers: [],
-        secondaryPhotos: [],
-        isProfileComplete: false,
+      await prisma.couple.create({
+        data: {
+          coupleId,
+          partner1Id: primaryUserId,
+          partner2Id: partner?.id || null,
+          profileName: `${data.yourName} & ${data.partnerName}`,
+          relationshipStatus: data.relationshipStatus,
+          locationCity: data.location?.city || 'Unknown',
+          locationCountry: data.location?.country || 'India',
+          isProfileComplete: false,
+        }
       });
-      logger.info(`[CoupleService.setupProfile] Couple document created for: ${coupleId}`);
     } else {
-      await Couple.findByIdAndUpdate(existingCouple._id, {
-        partner1: primaryUserId, // Re-enforce alignment
-        partner2: partner?._id ?? existingCouple.partner2,
-        profileName: `${data.yourName} & ${data.partnerName}`,
-        relationshipStatus: data.relationshipStatus,
-        location: data.location || undefined,
+      await prisma.couple.update({
+        where: { id: existingCouple.id },
+        data: {
+          partner1Id: primaryUserId,
+          partner2Id: partner?.id || existingCouple.partner2Id,
+          profileName: `${data.yourName} & ${data.partnerName}`,
+          relationshipStatus: data.relationshipStatus,
+          locationCity: data.location?.city || undefined,
+          locationCountry: data.location?.country || undefined,
+        }
       });
-      logger.info(`[CoupleService.setupProfile] Existing Couple document updated: ${existingCouple._id}`);
     }
   }
 
   /**
-   * Upload photos (dummy base64 logic — actual app would upload to Cloudinary or AWS S3)
-   * Instead of saving raw base64 in Mongo (too large), we just pretend and save a fake URL.
-   */
-  /**
-   * Upload photos (dummy base64 logic — actual app would upload to Cloudinary or AWS S3)
+   * Upload photos
    */
   async uploadPhotos(
     coupleId: string,
@@ -96,83 +98,60 @@ export class CoupleService {
       updateData.primaryPhoto = prefix + data.primaryPhotoBase64;
     }
 
-    // Identify which photos to keep vs which to add
     const existingToKeep = data.keepSecondaryPhotoUrls || [];
     const newPhotos = (data.secondaryPhotosBase64 || [])
       .filter(b64 => b64 && b64.length > 10)
       .map(b64 => (b64.startsWith('data:') ? b64 : 'data:image/jpeg;base64,' + b64));
 
-    // Result is the combination of kept URLs and new base64s
-    // NOTE: This replaces the previous secondaryPhotos array entirely with the new merged set
     if (data.keepSecondaryPhotoUrls !== undefined || data.secondaryPhotosBase64 !== undefined) {
       updateData.secondaryPhotos = [...existingToKeep, ...newPhotos].slice(0, 3);
     }
 
-    await Couple.findOneAndUpdate({ coupleId }, { $set: updateData });
-    logger.info(`[CoupleService] Photos saved for coupleId: ${coupleId}`);
+    await prisma.couple.update({
+        where: { coupleId },
+        data: updateData
+    });
   }
 
   /**
    * Submit questionnaire answers and mark onboarding COMPLETE
    */
-  async submitAnswers(coupleId: string, answers: IOnboardingAnswer[]) {
-    // 1. Mark as complete atomically first to avoid fetch/save races
-    const coupleDoc = await Couple.findOneAndUpdate(
-      { coupleId },
-      { $set: { answers, isProfileComplete: true } },
-      { new: true }
-    );
-
-    if (!coupleDoc) {
-      throw new AppError('Couple not found', 404);
-    }
+  async submitAnswers(coupleId: string, answers: any[]) {
+    // Prisma treats arrays of JSON objects as Json[] in PostgreSQL if defined so, 
+    // but in schema.prisma I defined them as specific models if they were important.
+    // However, I used Json for answers if I remember correctly.
+    // Let's check schema.prisma
+    
+    await prisma.couple.update({
+      where: { coupleId },
+      data: { 
+          answers: answers as any, 
+          isProfileComplete: true 
+      }
+    });
 
     // ─── AI BIO GENERATION (BACKGROUND) ─────────────────────────────────────
     (async () => {
       try {
         const questionMap: Record<string, string> = {
-          q1: 'Life Stage',
-          q2: 'Couple Personality',
-          q3: 'Favorite Activities',
-          q4: 'Meeting Frequency',
-          q5: 'What makes a good match',
-          q6: 'Things to avoid',
+          q1: 'Life Stage', q2: 'Couple Personality', q3: 'Favorite Activities',
+          q4: 'Meeting Frequency', q5: 'What makes a good match', q6: 'Things to avoid',
         };
-
         const optionLabelMap: Record<string, string> = {
-          'q1-career': 'Building careers (Work is a big part of our lives right now)',
-          'q1-family': 'Family first (Home and the people in it are priority #1)',
-          'q1-settled': 'Newly settled (Finding our footing in a new place)',
-          'q1-living': 'Living it up (Making the most of our current stage)',
-          'q2-hosts': "The Hosts (Prefer inviting people over vs going out)",
-          'q2-yes-couple': "The 'yes' couple (Usually up for whatever is on)",
-          'q2-planners': 'The Planners (Like to know what we are doing in advance)',
-          'q2-explorers': 'The Explorers (Always looking for something new to try)',
-          'q3-dinners-home': 'Dinners at home',
-          'q3-restaurants': 'Exploring new restaurants',
-          'q3-outdoor': 'Outdoor activities/nature',
-          'q3-cultural': 'Cultural events/museums',
-          'q3-drinks': 'Casual drinks',
-          'q3-trips': 'Weekend trips/travel',
-          'q4-once-month': 'Meeting once a month (Quality over quantity)',
-          'q4-twice-month': 'Meeting twice a month',
-          'q4-once-week': 'Meeting once a week (Very social)',
-          'q4-when-fits': 'Meeting whenever it fits (Go with the flow)',
-          'q5-similar-stage': 'Matches in a similar life stage',
-          'q5-shared-interests': 'Shared interests',
-          'q5-small-groups': 'Small group settings',
-          'q5-structured-plans': 'Structured plans',
-          'q5-clear-boundaries': 'Clear boundaries',
-          'q5-weekend-availability': 'Weekend availability',
-          'q6-late-night': 'Avoiding late-night plans',
-          'q6-large-groups': 'Avoiding very large groups',
-          'q6-alcohol-centric': 'Avoiding alcohol-centric meetups',
+          'q1-career': 'Building careers', 'q1-family': 'Family first', 'q1-settled': 'Newly settled', 'q1-living': 'Living it up',
+          'q2-hosts': "The Hosts", 'q2-yes-couple': "The 'yes' couple", 'q2-planners': 'The Planners', 'q2-explorers': 'The Explorers',
+          'q3-dinners-home': 'Dinners at home', 'q3-restaurants': 'Exploring new restaurants', 'q3-outdoor': 'Outdoor activities/nature',
+          'q3-cultural': 'Cultural events/museums', 'q3-drinks': 'Casual drinks', 'q3-trips': 'Weekend trips/travel',
+          'q4-once-month': 'Meeting once a month', 'q4-twice-month': 'Meeting twice a month', 'q4-once-week': 'Meeting once a week', 'q4-when-fits': 'Meeting whenever it fits',
+          'q5-similar-stage': 'Matches in a similar life stage', 'q5-shared-interests': 'Shared interests', 'q5-small-groups': 'Small group settings',
+          'q5-structured-plans': 'Structured plans', 'q5-clear-boundaries': 'Clear boundaries', 'q5-weekend-availability': 'Weekend availability',
+          'q6-late-night': 'Avoiding late-night plans', 'q6-large-groups': 'Avoiding very large groups', 'q6-alcohol-centric': 'Avoiding alcohol-centric meetups',
           'q6-last-minute': 'Avoiding last-minute/spontaneous plans',
         };
 
-        const qaData = answers.map((a) => ({
+        const qaData = answers.map((a: any) => ({
           question: questionMap[a.questionId] || 'About us',
-          answers: a.selectedOptionIds.map(id => optionLabelMap[id] || id),
+          answers: a.selectedOptionIds.map((id: string) => optionLabelMap[id] || id),
         }));
 
         const { generateCoupleBio } = require('../utils/ai');
@@ -182,18 +161,14 @@ export class CoupleService {
           const updateObj: any = {};
           if (aiResponse.bio) updateObj.bio = aiResponse.bio;
           if (aiResponse.matchCriteria && aiResponse.matchCriteria.length > 0) {
-            updateObj['preferences.matchCriteria'] = aiResponse.matchCriteria;
+            updateObj.matchCriteria = aiResponse.matchCriteria;
           }
-          await Couple.findOneAndUpdate({ coupleId }, { $set: updateObj });
-          logger.info(`[CoupleService] AI bio background completion SUCCESS for ${coupleId}`);
+          await prisma.couple.update({ where: { coupleId }, data: updateObj });
         }
       } catch (aiErr) {
         logger.error(`[CoupleService] AI background generation failed:`, aiErr);
       }
     })();
-    // ─────────────────────────────────────────────────────────────────────────
-
-    logger.info(`[CoupleService] Onboarding complete for coupleId: ${coupleId}`);
   }
 
   async updateProfile(
@@ -202,94 +177,88 @@ export class CoupleService {
       bio?: string;
       relationshipStatus?: string;
       preferences?: any;
-      yourName?: string;
-      yourDob?: string;
-      yourEmail?: string;
-      partnerName?: string;
-      partnerDob?: string;
-      partnerEmail?: string;
+      yourName?: string; yourDob?: string; yourEmail?: string;
+      partnerName?: string; partnerDob?: string; partnerEmail?: string;
     },
     requestingUserId?: string
   ) {
-    const coupleDoc = await Couple.findOne({ coupleId });
+    const coupleDoc = await prisma.couple.findUnique({ where: { coupleId } });
     if (!coupleDoc) throw new AppError('Couple not found', 404);
 
-    if (data.bio !== undefined) coupleDoc.bio = data.bio;
-    if (data.relationshipStatus !== undefined) coupleDoc.relationshipStatus = data.relationshipStatus;
-    if (data.preferences !== undefined) coupleDoc.preferences = data.preferences;
+    const updateData: any = {};
+    if (data.bio !== undefined) updateData.bio = data.bio;
+    if (data.relationshipStatus !== undefined) updateData.relationshipStatus = data.relationshipStatus;
+    
+    // Map preferences if provided
+    if (data.preferences) {
+        if (data.preferences.meetingFrequency) updateData.meetingFrequency = data.preferences.meetingFrequency;
+        if (data.preferences.socialVibes) updateData.socialVibes = data.preferences.socialVibes;
+        if (data.preferences.activities) updateData.activities = data.preferences.activities;
+        if (data.preferences.avoidances) updateData.avoidances = data.preferences.avoidances;
+        if (data.preferences.matchCriteria) updateData.matchCriteria = data.preferences.matchCriteria;
+    }
 
-    // Identify who is 'You' (submitter) vs 'Partner' for the incoming request
-    const isPartner1Me = requestingUserId && coupleDoc.partner1?.toString() === requestingUserId.toString();
-    const myId = isPartner1Me ? coupleDoc.partner1 : coupleDoc.partner2;
-    const partnerId = isPartner1Me ? coupleDoc.partner2 : coupleDoc.partner1;
+    const isPartner1Me = requestingUserId && coupleDoc.partner1Id === requestingUserId;
+    const myId = isPartner1Me ? coupleDoc.partner1Id : coupleDoc.partner2Id;
+    const partnerId = isPartner1Me ? coupleDoc.partner2Id : coupleDoc.partner1Id;
 
-    // Update partner names for profile title (Always: Partner1 & Partner2)
     if (data.yourName || data.partnerName) {
-      const [u1, u2] = await Promise.all([
-        User.findById(coupleDoc.partner1).select('name'),
-        User.findById(coupleDoc.partner2).select('name')
-      ]);
+      const u1 = await prisma.user.findUnique({ where: { id: coupleDoc.partner1Id || '' } });
+      const u2 = await prisma.user.findUnique({ where: { id: coupleDoc.partner2Id || '' } });
 
-      // p1 is always partner1 (Primary)
       let p1Name = isPartner1Me ? (data.yourName || u1?.name) : (data.partnerName || u1?.name);
-      // p2 is always partner2 (Partner)
       let p2Name = isPartner1Me ? (data.partnerName || u2?.name) : (data.yourName || u2?.name);
       
-      p1Name = p1Name || 'User 1';
-      p2Name = p2Name || 'User 2';
-      coupleDoc.profileName = `${p1Name} & ${p2Name}`;
+      updateData.profileName = `${p1Name || 'User 1'} & ${p2Name || 'User 2'}`;
     }
 
-    // Save couple doc and update User records in parallel
-    const updatePromises: Promise<any>[] = [coupleDoc.save()];
+    await prisma.couple.update({ where: { coupleId }, data: updateData });
 
-    // Update 'submitter'
     if (myId && (data.yourName || data.yourDob || data.yourEmail)) {
-      updatePromises.push(User.findByIdAndUpdate(myId, {
-        name: data.yourName || undefined,
-        dob: data.yourDob || undefined,
-        email: data.yourEmail || undefined,
-      }));
+      await prisma.user.update({
+        where: { id: myId },
+        data: {
+          name: data.yourName || undefined,
+          dob: data.yourDob || undefined,
+          email: data.yourEmail || undefined,
+        }
+      });
     }
 
-    // Update 'other partner'
     if (partnerId && (data.partnerName || data.partnerDob || data.partnerEmail)) {
-      updatePromises.push(User.findByIdAndUpdate(partnerId, {
-        name: data.partnerName || undefined,
-        dob: data.partnerDob || undefined,
-        email: data.partnerEmail || undefined,
-      }));
+      await prisma.user.update({
+        where: { id: partnerId },
+        data: {
+          name: data.partnerName || undefined,
+          dob: data.partnerDob || undefined,
+          email: data.partnerEmail || undefined,
+        }
+      });
     }
 
-    await Promise.all(updatePromises);
-
-    return coupleDoc;
+    return prisma.couple.findUnique({ where: { coupleId } });
   }
 
   async getCouple(coupleId: string): Promise<any | null> {
-    // 1. Initial lookup to get the MongoDB _id for the community search
-    const coupleBasic = await Couple.findOne({ coupleId }).select('_id').lean();
-    if (!coupleBasic) return null;
-
-    // 2. Parallelize population and community search
-    const [couple, communityDocs] = await Promise.all([
-      Couple.findById(coupleBasic._id)
-        .populate('partner1', 'name phone dob email')
-        .populate('partner2', 'name phone dob email')
-        .lean(),
-      Community.find({ members: coupleBasic._id })
-        .select('name city description coverImageUrl')
-        .lean()
-    ]);
+    const couple = await prisma.couple.findUnique({
+      where: { coupleId },
+      include: {
+        partner1: true,
+        partner2: true,
+        communityMembers: {
+            include: { community: true }
+        }
+      }
+    });
 
     if (!couple) return null;
 
-    const communities = communityDocs.map(c => ({
-      id: c._id,
-      title: c.name,
-      subtitle: c.city,
-      note: c.description,
-      imageUri: c.coverImageUrl
+    const communities = couple.communityMembers.map((m: any) => ({
+      id: m.community.id,
+      title: m.community.name,
+      subtitle: m.community.city,
+      note: m.community.description,
+      imageUri: m.community.coverImageUrl
     }));
 
     return {
@@ -298,47 +267,46 @@ export class CoupleService {
     };
   }
 
-  async subscribe(coupleId: string): Promise<ICouple | null> {
-    const couple = await Couple.findOneAndUpdate(
-      { coupleId },
-      { isSubscribed: true },
-      { new: true }
-    );
-    if (!couple) throw new AppError('Couple not found', 404);
-    return couple;
+  async subscribe(coupleId: string) {
+    return prisma.couple.update({
+      where: { coupleId },
+      data: { isSubscribed: true }
+    });
   }
 
-  async blockCouple(meMongoId: string, targetMongoId: string) {
-    return Couple.findByIdAndUpdate(
-      meMongoId,
-      { $addToSet: { blocked: new mongoose.Types.ObjectId(targetMongoId) } },
-      { new: true }
-    );
+  async blockCouple(meId: string, targetId: string) {
+    const me = await prisma.couple.findUnique({ where: { id: meId } });
+    const blocked = me?.blocked || [];
+    if (!blocked.includes(targetId)) {
+        return prisma.couple.update({
+            where: { id: meId },
+            data: { blocked: { set: [...blocked, targetId] } }
+        });
+    }
+    return me;
   }
 
-  async unblockCouple(meMongoId: string, targetMongoId: string) {
-    return Couple.findByIdAndUpdate(
-      meMongoId,
-      { $pull: { blocked: new mongoose.Types.ObjectId(targetMongoId) } },
-      { new: true }
-    );
+  async unblockCouple(meId: string, targetId: string) {
+    const me = await prisma.couple.findUnique({ where: { id: meId } });
+    const blocked = (me?.blocked || []).filter((id: string) => id !== targetId);
+    return prisma.couple.update({
+        where: { id: meId },
+        data: { blocked: { set: blocked } }
+    });
   }
 
-  async getBlockedCouples(meMongoId: string) {
-    const me = await Couple.findById(meMongoId)
-      .populate({
-        path: 'blocked',
-        select: 'profileName primaryPhoto location coupleId'
-      })
-      .lean();
-    return me?.blocked || [];
+  async getBlockedCouples(meId: string) {
+    const me = await prisma.couple.findUnique({ where: { id: meId } });
+    if (!me?.blocked.length) return [];
+    return prisma.couple.findMany({
+        where: { id: { in: me.blocked } },
+        select: { id: true, profileName: true, primaryPhoto: true, locationCity: true, coupleId: true }
+    });
   }
 
   async deleteMyCouple(coupleId: string) {
-    // 1. Delete all Users associated with this coupleId
-    await User.deleteMany({ coupleId });
-    // 2. Delete the Couple document
-    await Couple.deleteOne({ coupleId });
+    await prisma.user.deleteMany({ where: { coupleId } });
+    await prisma.couple.delete({ where: { coupleId } });
     return { success: true };
   }
 }

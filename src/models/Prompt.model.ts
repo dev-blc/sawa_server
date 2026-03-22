@@ -1,20 +1,7 @@
-import mongoose, { Schema, Document } from 'mongoose';
+// Prisma re-export — preserves existing import patterns
+import { prisma } from '../lib/prisma';
+import type { Prompt as PrismaPrompt } from '@prisma/client';
 
-export interface IPrompt extends Document {
-    text: string;
-    category: string; // e.g. 'chat_shortcut', 'daily_topic'
-    isActive: boolean;
-    createdAt: Date;
-    updatedAt: Date;
-}
+export type IPrompt = PrismaPrompt;
 
-const PromptSchema = new Schema<IPrompt>(
-    {
-        text: { type: String, required: true },
-        category: { type: String, default: 'chat_shortcut' },
-        isActive: { type: Boolean, default: true },
-    },
-    { timestamps: true }
-);
-
-export const Prompt = mongoose.model<IPrompt>('Prompt', PromptSchema);
+export const Prompt = prisma.prompt;

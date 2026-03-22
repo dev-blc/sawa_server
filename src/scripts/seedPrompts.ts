@@ -1,9 +1,7 @@
-import mongoose from 'mongoose';
+import { prisma } from '../lib/prisma';
 import dotenv from 'dotenv';
 
 dotenv.config();
-
-const MONGODB_URI = process.env.MONGODB_URI;
 
 const DEFAULT_PROMPTS = [
   "What's your favorite family activity?",
@@ -14,19 +12,13 @@ const DEFAULT_PROMPTS = [
 ];
 
 async function seedPrompts() {
-  if (!MONGODB_URI) return;
   try {
-    await mongoose.connect(MONGODB_URI);
-    const Prompt = mongoose.model('Prompt', new mongoose.Schema({
-      text: String,
-      category: String,
-      isActive: { type: Boolean, default: true }
-    }));
-
     for (const text of DEFAULT_PROMPTS) {
-      const exists = await Prompt.findOne({ text });
+      const exists = await prisma.prompt.findFirst({ where: { text } });
       if (!exists) {
-        await new Prompt({ text, category: 'chat_shortcut', isActive: true }).save();
+        await prisma.prompt.create({
+            data: { text, category: 'chat_shortcut', isActive: true }
+        });
         console.log(`✅ Seeded prompt: ${text}`);
       }
     }

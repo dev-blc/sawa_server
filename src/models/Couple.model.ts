@@ -1,73 +1,8 @@
-import mongoose, { Schema, Document, Types } from 'mongoose';
+// Prisma re-export — preserves existing import patterns
+import { prisma } from '../lib/prisma';
+import type { Couple as PrismaCouple, OnboardingAnswer as PrismaAnswer } from '@prisma/client';
 
-export interface IOnboardingAnswer {
-  questionId: string;
-  selectedOptionIds: string[];
-}
+export type ICouple = PrismaCouple;
+export type IOnboardingAnswer = PrismaAnswer;
 
-export interface ICouple extends Document {
-  coupleId: string;    // Matches User.coupleId
-  partner1?: Types.ObjectId;
-  partner2?: Types.ObjectId;
-  profileName?: string;
-  relationshipStatus?: string;
-  bio?: string;
-  primaryPhoto?: string;
-  secondaryPhotos: string[];
-  location?: {
-    city?: string;
-    country?: string;
-  };
-  answers: IOnboardingAnswer[];
-  isProfileComplete: boolean;
-  isSubscribed: boolean;
-  preferences: {
-    meetingFrequency?: string; // e.g. 'once-month'
-    socialVibes?: string[];
-    activities?: string[];
-    avoidances?: string[];
-    matchCriteria?: string[];
-  };
-  blocked: Types.ObjectId[];
-  createdAt: Date;
-  updatedAt: Date;
-}
-
-const CoupleSchema = new Schema<ICouple>(
-  {
-    coupleId: { type: String, required: true, unique: true, index: true },
-    partner1: { type: Schema.Types.ObjectId, ref: 'User', index: true },
-    partner2: { type: Schema.Types.ObjectId, ref: 'User', index: true },
-    profileName: { type: String, trim: true },
-    relationshipStatus: { type: String },
-    bio: { type: String, trim: true, maxlength: 1000 },
-    primaryPhoto: { type: String },
-    secondaryPhotos: [{ type: String }],
-    location: {
-      city: { type: String },
-      country: { type: String },
-    },
-    answers: [
-      {
-        questionId: { type: String, required: true },
-        selectedOptionIds: [{ type: String }],
-      },
-    ],
-    isProfileComplete: { type: Boolean, default: false },
-    isSubscribed: { type: Boolean, default: false },
-    preferences: {
-      meetingFrequency: { type: String },
-      socialVibes: [{ type: String }],
-      activities: [{ type: String }],
-      avoidances: [{ type: String }],
-      matchCriteria: [{ type: String }],
-    },
-    blocked: [{ type: Schema.Types.ObjectId, ref: 'Couple', index: true }],
-  },
-  { timestamps: true },
-);
-
-// Performance: Index for Discovery Feed (Discovery filtering by city + completion status)
-CoupleSchema.index({ 'location.city': 1, isProfileComplete: 1 });
-
-export const Couple = mongoose.model<ICouple>('Couple', CoupleSchema);
+export const Couple = prisma.couple;

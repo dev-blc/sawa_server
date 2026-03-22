@@ -1,10 +1,8 @@
 import { Request, Response } from 'express';
 import bcrypt from 'bcryptjs';
-import { User } from '../models/User.model';
-import { Community } from '../models/Community.model';
+import { prisma } from '../lib/prisma';
 import { AdminService } from '../services/admin.service';
 import { signAccessToken } from '../utils/jwt';
-import { AppError } from '../utils/AppError';
 import { logger } from '../utils/logger';
 
 const adminService = new AdminService();
@@ -13,7 +11,9 @@ export class AdminController {
   async adminLogin(req: Request, res: Response) {
     try {
       const { email, password } = req.body;
-      const user = await User.findOne({ email, role: 'admin' }).select('+password');
+      const user = await prisma.user.findFirst({ 
+        where: { email, role: 'admin' }
+      });
       
       if (!user || !user.password) {
         return res.status(401).json({ success: false, message: 'Invalid credentials or not an admin' });
@@ -25,14 +25,13 @@ export class AdminController {
       }
 
       const token = signAccessToken({ 
-        userId: user._id.toString(), 
-        coupleId: user.coupleId,
-        type: 'access'
-      } as any);
+        userId: user.id, 
+        coupleId: user.coupleId || undefined
+      });
 
       res.status(200).json({ 
         success: true, 
-        data: { token, user: { id: user._id, name: user.name, role: user.role } } 
+        data: { token, user: { id: user.id, name: user.name, role: user.role } } 
       });
     } catch (err: any) {
       logger.error('❌ Admin Login Error:', err.message);
@@ -95,7 +94,7 @@ export class AdminController {
   async deleteUser(req: Request, res: Response) {
     try {
       const { id } = req.params;
-      await User.findByIdAndDelete(id);
+      await prisma.user.delete({ where: { id } });
       res.status(200).json({ success: true, message: 'User deleted' });
     } catch (err: any) {
       res.status(500).json({ success: false, message: err.message });
@@ -105,7 +104,7 @@ export class AdminController {
   async deleteCommunity(req: Request, res: Response) {
     try {
       const { id } = req.params;
-      await Community.findByIdAndDelete(id);
+      await prisma.community.delete({ where: { id } });
       res.status(200).json({ success: true, message: 'Community deleted' });
     } catch (err: any) {
       res.status(500).json({ success: false, message: err.message });

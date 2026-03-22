@@ -1,0 +1,322 @@
+// This is the Prisma schema for SAWA — migrated from MongoDB/Mongoose to PostgreSQL.
+// Field names, variable names and IDs preserved exactly as they were in Mongoose.
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+// ────────────────────────────────────────────────
+//  USER  (auth / role / individual identity)
+// ────────────────────────────────────────────────
+model User {
+  id               String    @id @default(cuid()) @map("_id")
+  phone            String?   @unique
+  name             String?
+  email            String?   @unique
+  dob              String?
+  coupleId         String?
+  isPhoneVerified  Boolean   @default(false)
+  refreshTokenHash String?
+  role             UserRole  @default(primary)
+  password         String?
+  createdAt        DateTime  @default(now())
+  updatedAt        DateTime  @updatedAt
+
+  // Relation back to couple profile
+  coupleProfile    Couple?   @relation("CouplePartners", fields: [coupleId], references: [coupleId])
+  partnerOf1       Couple[]  @relation("Partner1")
+  partnerOf2       Couple[]  @relation("Partner2")
+
+  @@index([coupleId])
+  @@map("users")
+}
+
+enum UserRole {
+  primary
+  partner
+  admin
+}
+
+// ────────────────────────────────────────────────
+//  COUPLE  (shared couple entity / profile)
+// ────────────────────────────────────────────────
+model Couple {
+  id                  String    @id @default(cuid()) @map("_id")
+  coupleId            String    @unique
+  profileName         String?
+  relationshipStatus  String?
+  bio                 String?
+  primaryPhoto        String?
+  secondaryPhotos     String[]  @default([])
+  locationCity        String?
+  locationCountry     String?
+  isProfileComplete   Boolean   @default(false)
+  isSubscribed        Boolean   @default(false)
+  // Preferences stored as flat arrays (SQL-compatible)
+  meetingFrequency    String?
+  socialVibes         String[]  @default([])
+  activities          String[]  @default([])
+  avoidances          String[]  @default([])
+  matchCriteria       String[]  @default([])
+  // Blocked couple IDs stored as string array
+  blocked             String[]  @default([])
+  createdAt           DateTime  @default(now())
+  updatedAt           DateTime  @updatedAt
+
+  partner1Id          String?
+  partner2Id          String?
+
+  // Relations
+  partner1            User?     @relation("Partner1", fields: [partner1Id], references: [id])
+  partner2            User?     @relation("Partner2", fields: [partner2Id], references: [id])
+  users               User[]    @relation("CouplePartners")
+  answers             OnboardingAnswer[]
+  // Community membership + admin join stored in join tables
+  communityMembers    CommunityMember[]
+  communityAdmins     CommunityAdmin[]
+  communityRequests   CommunityJoinRequest[]
+  match1              Match[]   @relation("Match_couple1")
+  match2              Match[]   @relation("Match_couple2")
+  matchActions        Match[]   @relation("Match_actionBy")
+  sentMessages        Message[] @relation("Message_sender")
+  sentNotifications   Notification[] @relation("Notification_sender")
+  receivedNotifications Notification[] @relation("Notification_recipient")
+  reports             Report[]  @relation("Report_reporter")
+  reportedBy          Report[]  @relation("Report_target")
+
+  @@index([coupleId])
+  @@index([locationCity, isProfileComplete])
+  @@map("couples")
+}
+
+model OnboardingAnswer {
+  id                String   @id @default(cuid()) @map("_id")
+  coupleId          String
+  questionId        String
+  selectedOptionIds String[]
+  couple            Couple   @relation(fields: [coupleId], references: [coupleId])
+
+  @@map("onboarding_answers")
+}
+
+// ────────────────────────────────────────────────
+//  COMMUNITY
+// ────────────────────────────────────────────────
+model Community {
+  id           String   @id @default(cuid()) @map("_id")
+  name         String   @unique
+  description  String?
+  city         String
+  coverImageUrl String?
+  maxMembers   Int      @default(50)
+  tags         String[] @default([])
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+
+  members      CommunityMember[]
+  admins       CommunityAdmin[]
+  joinRequests CommunityJoinRequest[]
+  messages     Message[]
+
+  @@index([city])
+  @@map("communities")
+}
+
+model CommunityMember {
+  id          String    @id @default(cuid()) @map("_id")
+  communityId String
+  coupleId    String
+  community   Community @relation(fields: [communityId], references: [id])
+  couple      Couple    @relation(fields: [coupleId], references: [coupleId])
+
+  @@unique([communityId, coupleId])
+  @@map("community_members")
+}
+
+model CommunityAdmin {
+  id          String    @id @default(cuid()) @map("_id")
+  communityId String
+  coupleId    String
+  community   Community @relation(fields: [communityId], references: [id])
+  couple      Couple    @relation(fields: [coupleId], references: [coupleId])
+
+  @@unique([communityId, coupleId])
+  @@map("community_admins")
+}
+
+model CommunityJoinRequest {
+  id          String    @id @default(cuid()) @map("_id")
+  communityId String
+  coupleId    String
+  community   Community @relation(fields: [communityId], references: [id])
+  couple      Couple    @relation(fields: [coupleId], references: [coupleId])
+
+  @@unique([communityId, coupleId])
+  @@map("community_join_requests")
+}
+
+// ────────────────────────────────────────────────
+//  MATCH
+// ────────────────────────────────────────────────
+model Match {
+  id         String      @id @default(cuid()) @map("_id")
+  couple1Id  String
+  couple2Id  String
+  actionById String
+  status     MatchStatus
+  matchScore Float       @default(0)
+  insights   String[]    @default([])
+  createdAt  DateTime    @default(now())
+  updatedAt  DateTime    @updatedAt
+
+  couple1    Couple      @relation("Match_couple1", fields: [couple1Id], references: [coupleId])
+  couple2    Couple      @relation("Match_couple2", fields: [couple2Id], references: [coupleId])
+  actionBy   Couple      @relation("Match_actionBy", fields: [actionById], references: [coupleId])
+  messages   Message[]   @relation("Message_privateChat")
+
+  @@unique([couple1Id, couple2Id])
+  @@index([couple2Id, status])
+  @@index([couple1Id, status])
+  @@index([status])
+  @@index([createdAt])
+  @@map("matches")
+}
+
+enum MatchStatus {
+  pending
+  accepted
+  rejected
+  skipped
+}
+
+// ────────────────────────────────────────────────
+//  MESSAGE  (private & group chats)
+// ────────────────────────────────────────────────
+model Message {
+  id           String      @id @default(cuid()) @map("_id")
+  chatType     ChatType
+  matchId      String?     // private chat → match
+  communityId  String?     // group chat → community
+  senderId     String
+  senderUserId String?
+  senderName   String
+  content      String
+  contentType  ContentType @default(text)
+  audioDuration Int?
+  readBy       String[]    @default([])   // array of couple IDs that read the message
+  createdAt    DateTime    @default(now())
+  updatedAt    DateTime    @updatedAt
+
+  sender       Couple      @relation("Message_sender", fields: [senderId], references: [coupleId])
+  match        Match?      @relation("Message_privateChat", fields: [matchId], references: [id])
+  community    Community?  @relation(fields: [communityId], references: [id])
+
+  @@index([matchId, createdAt])
+  @@index([communityId, createdAt])
+  @@map("messages")
+}
+
+enum ChatType {
+  private
+  group
+}
+
+enum ContentType {
+  text
+  image
+  gif
+  prompt
+  audio
+}
+
+// ────────────────────────────────────────────────
+//  NOTIFICATION
+// ────────────────────────────────────────────────
+model Notification {
+  id          String           @id @default(cuid()) @map("_id")
+  recipientId String
+  senderId    String?
+  type        NotificationType
+  title       String
+  message     String
+  data        Json?
+  read        Boolean          @default(false)
+  createdAt   DateTime         @default(now())
+  updatedAt   DateTime         @updatedAt
+
+  recipient   Couple           @relation("Notification_recipient", fields: [recipientId], references: [coupleId])
+  sender      Couple?          @relation("Notification_sender", fields: [senderId], references: [coupleId])
+
+  @@index([recipientId, read])
+  @@index([createdAt])
+  @@map("notifications")
+}
+
+enum NotificationType {
+  match
+  message
+  community
+  system
+}
+
+// ────────────────────────────────────────────────
+//  OTP TOKEN
+// ────────────────────────────────────────────────
+model OtpToken {
+  id        String   @id @default(cuid()) @map("_id")
+  phone     String
+  coupleId  String
+  otpCode   String
+  expiresAt DateTime
+  attempts  Int      @default(0)
+  createdAt DateTime @default(now())
+
+  @@index([phone])
+  @@index([phone, coupleId])
+  @@map("otp_tokens")
+}
+
+// ────────────────────────────────────────────────
+//  PROMPT  (chat shortcuts)
+// ────────────────────────────────────────────────
+model Prompt {
+  id        String   @id @default(cuid()) @map("_id")
+  text      String   @unique
+  category  String   @default("chat_shortcut")
+  isActive  Boolean  @default(true)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@map("prompts")
+}
+
+// ────────────────────────────────────────────────
+//  REPORT
+// ────────────────────────────────────────────────
+model Report {
+  id         String       @id @default(cuid()) @map("_id")
+  reporterId String
+  targetId   String
+  reason     String
+  details    String?
+  status     ReportStatus @default(pending)
+  createdAt  DateTime     @default(now())
+  updatedAt  DateTime     @updatedAt
+
+  reporter   Couple       @relation("Report_reporter", fields: [reporterId], references: [coupleId])
+  target     Couple       @relation("Report_target", fields: [targetId], references: [coupleId])
+
+  @@map("reports")
+}
+
+enum ReportStatus {
+  pending
+  reviewed
+  resolved
+  dismissed
+}

@@ -1,28 +1,15 @@
-import mongoose from 'mongoose';
-import dotenv from 'dotenv';
-import path from 'path';
-import { User } from '../models/User.model';
-import { Couple } from '../models/Couple.model';
-import { Community } from '../models/Community.model';
-import { Message } from '../models/Message.model';
-import { Match } from '../models/Match.model';
-import { Prompt } from '../models/Prompt.model';
-import { Report } from '../models/Report.model';
-import { logger } from '../utils/logger';
-
-// Load env from root
-dotenv.config({ path: path.resolve(__dirname, '../../.env') });
-
-const MONGODB_URI = process.env.MONGODB_URI || 'mongodb://localhost:27017';
+import { prisma } from '../lib/prisma';
+import bcrypt from 'bcryptjs';
 
 const COUPLES = [
   {
     coupleId: 'seed_couple_1',
     primaryPhoto: 'https://images.unsplash.com/photo-1583511655857-d19b40a7a54e?auto=format&fit=crop&q=80&w=800',
     profileName: 'Aisha & Rohan',
-    bio: 'Big foodies looking to explore new cafes and host weekend dinners! ☕️🍕',
+    bio: 'Big foodies looking to explore new cafes!',
     relationshipStatus: 'Married',
-    location: { city: 'Bengaluru', country: 'India' },
+    locationCity: 'Bengaluru',
+    locationCountry: 'India',
     isProfileComplete: true,
     answers: [{ questionId: 'q1', selectedOptionIds: ['q1-career'] }]
   },
@@ -30,162 +17,150 @@ const COUPLES = [
     coupleId: 'seed_couple_2',
     primaryPhoto: 'https://images.unsplash.com/photo-1591035897819-f4bdf739f446?auto=format&fit=crop&q=80&w=800',
     profileName: 'Priya & Rahul',
-    bio: 'Avid travelers and hikers. Always planning the next weekend trip. 🏔️✈️',
+    bio: 'Avid travelers and hikers.',
     relationshipStatus: 'Engaged',
-    location: { city: 'Mumbai', country: 'India' },
+    locationCity: 'Mumbai',
+    locationCountry: 'India',
     isProfileComplete: true,
     answers: [{ questionId: 'q1', selectedOptionIds: ['q1-living'] }]
-  },
-  {
-    coupleId: 'seed_couple_3',
-    primaryPhoto: 'https://images.unsplash.com/photo-1516589178581-6cd7833ae3b2?auto=format&fit=crop&q=80&w=800',
-    profileName: 'Simran & Kunal',
-    bio: 'Introverted couple who love art, cultural events, and quiet wine nights. 🎨🍷',
-    relationshipStatus: 'Dating',
-    location: { city: 'New Delhi', country: 'India' },
-    isProfileComplete: true,
-    answers: [{ questionId: 'q1', selectedOptionIds: ['q1-settled'] }]
-  },
-  {
-    coupleId: 'seed_couple_4',
-    primaryPhoto: 'https://images.unsplash.com/photo-1533038595267-37e51c1c73ec?auto=format&fit=crop&q=80&w=800',
-    profileName: 'Kavita & Amit',
-    bio: 'Tennis partners and fitness enthusiasts. Looking for other active couples! 🎾💪',
-    relationshipStatus: 'Married',
-    location: { city: 'Bengaluru', country: 'India' },
-    isProfileComplete: true,
-    answers: [{ questionId: 'q1', selectedOptionIds: ['q1-settled'] }]
-  },
-  {
-    coupleId: 'seed_couple_5',
-    primaryPhoto: 'https://images.unsplash.com/photo-1491438590914-bc09fcaaf77a?auto=format&fit=crop&q=80&w=800',
-    profileName: 'Zara & Neel',
-    bio: 'Techies by day, musicians by night. Love jam sessions and live gigs. 🎸🎹',
-    relationshipStatus: 'Dating',
-    location: { city: 'Bengaluru', country: 'India' },
-    isProfileComplete: true,
-    answers: [{ questionId: 'q1', selectedOptionIds: ['q1-career'] }]
-  },
-  {
-    coupleId: 'seed_couple_6',
-    primaryPhoto: 'https://images.unsplash.com/photo-1517841905240-472988babdf9?auto=format&fit=crop&q=80&w=800',
-    profileName: 'Anjali & Vikram',
-    bio: 'Passionate about sustainable living and weekend farming. 🌿🐥',
-    relationshipStatus: 'Married',
-    location: { city: 'Pune', country: 'India' },
-    isProfileComplete: true,
-    answers: [{ questionId: 'q1', selectedOptionIds: ['q1-settled'] }]
   }
 ];
 
 const COMMUNITIES = [
   {
     name: 'Gourmet Couples Club',
-    description: 'A community for couples who bond over finding the best brunch spots, hidden cafes, and street food. Bring your appetite!',
+    description: 'A community for foodies.',
     city: 'All Cities',
     coverImageUrl: 'https://images.unsplash.com/photo-1514362545857-3bc16c4c7d1b?auto=format&fit=crop&q=80&w=800',
-    tags: ['Food', 'Social', 'Experience']
-  },
-  {
-    name: 'Brew & Bond',
-    description: 'We love testing out new microbreweries and hidden culinary gems across Indiranagar, Koramangala and beyond!',
-    city: 'Bengaluru',
-    coverImageUrl: 'https://images.unsplash.com/photo-1511081692775-05d0f180a065?auto=format&fit=crop&q=80&w=800',
-    tags: ['Coffee', 'Drinks', 'Network']
-  },
-  {
-    name: 'Mumbai Art Crawl',
-    description: 'Exploring art galleries, experimental theatre, and vibrant cultural exhibitions through the city together.',
-    city: 'Mumbai',
-    coverImageUrl: 'https://images.unsplash.com/photo-1460661419201-fd4cecdf8a8b?auto=format&fit=crop&q=80&w=800',
-    tags: ['Art', 'Culture', 'Museums']
-  },
-  {
-    name: 'Beach & Chill',
-    description: 'For couples based in or visiting Chennai who love beach volleyball, sunrise yoga, or just watching the waves at Marina.',
-    city: 'Chennai',
-    coverImageUrl: 'https://images.unsplash.com/photo-1507525428034-b723cf961d3e?auto=format&fit=crop&q=80&w=800',
-    tags: ['Beach', 'Outdoor', 'Relax']
+    tags: ['Food']
   }
 ];
 
-const seedData = async () => {
+async function seed() {
   try {
-    const MONGO_URI_BASE = process.env.MONGODB_URI || 'mongodb://localhost:27017';
-    
-    // 1. CLEAN DEFAULT DB (remove old seed)
-    logger.info('Cleaning default database...');
-    await mongoose.connect(MONGO_URI_BASE);
-    await User.deleteMany({ phone: { $regex: /^seed_phone/ } });
-    await Couple.deleteMany({ coupleId: { $regex: /^seed_couple/ } });
-    await mongoose.disconnect();
+    console.log('🌱 Starting Seeding...');
 
-    // 2. SEED SAWA_DB
-    logger.info('Seeding sawa_db...');
-    await mongoose.connect(MONGO_URI_BASE, { dbName: 'sawa_db' });
-    
-    // Delete only seed entities to preserve user's real accounts
-    await User.deleteMany({ phone: { $regex: /^seed_phone/ } });
-    await Couple.deleteMany({ coupleId: { $regex: /^seed_couple/ } });
-    await Community.deleteMany({});
-    await Message.deleteMany({});
-    await Match.deleteMany({});
-    await Prompt.deleteMany({});
-    await Report.deleteMany({});
-    
-    logger.info('Seeding sawa_db...');
+    // 1. Seed Admin
+    const adminEmail = 'admin@gmail.com';
+    const adminPass = await bcrypt.hash('adminsawa', 10);
+    await prisma.user.upsert({
+      where: { email: adminEmail },
+      update: { password: adminPass },
+      create: { 
+        email: adminEmail, 
+        password: adminPass, 
+        role: 'admin', 
+        name: 'System Admin', 
+        phone: '0000000000', 
+        isPhoneVerified: true 
+      }
+    });
+    console.log('✅ Admin seeded');
 
-    // Seed Prompts
-    await Prompt.create([
-      { text: "What's your favorite family activity?", category: "chat_shortcut" },
-      { text: "Wanna hangout?", category: "chat_shortcut" },
-      { text: "Movie this weekend?", category: "chat_shortcut" },
-      { text: "Coffee sometime this week?", category: "chat_shortcut" },
-      { text: "Any plans for the holidays?", category: "chat_shortcut" },
-    ]);
-
-    // Seed Couples & Users
-    for (let i = 0; i < COUPLES.length; i++) {
-       const cd = COUPLES[i];
-       const user1 = await User.create({
-         phone: `seed_phone1_${i}`,
-         name: cd.profileName.split(' & ')[0],
-         coupleId: cd.coupleId,
-         role: 'primary',
-         isPhoneVerified: true
-       });
-       const user2 = await User.create({
-         phone: `seed_phone2_${i}`,
-         name: cd.profileName.split(' & ')[1],
-         coupleId: cd.coupleId,
-         role: 'partner',
-         isPhoneVerified: true
-       });
-       await Couple.create({
-         ...cd,
-         partner1: user1._id,
-         partner2: user2._id
-       });
+    // 2. Seed Prompts
+    const prompts = [
+      "What's your favorite family activity?",
+      'Wanna hangout?',
+      'Movie this weekend?',
+      'Coffee sometime this week?',
+      'Any plans for the holidays?',
+    ];
+    for (const text of prompts) {
+      await prisma.prompt.upsert({
+        where: { text },
+        update: {},
+        create: { text, category: 'chat_shortcut', isActive: true }
+      });
     }
+    console.log('✅ Prompts seeded');
 
-    const allCouples = await Couple.find({ coupleId: { $regex: /^seed_couple/ } });
-    for (let i = 0; i < COMMUNITIES.length; i++) {
-        const commData = COMMUNITIES[i];
-        const member1 = allCouples[i % allCouples.length]._id;
-        const member2 = allCouples[(i + 1) % allCouples.length]._id;
-        await Community.create({
-          ...commData,
-          members: [member1, member2],
-          admins: [member1]
+    // 3. Seed Couples & Users
+    for (let i = 0; i < COUPLES.length; i++) {
+        const c = COUPLES[i];
+        
+        // Step A: Upsert Couple (no members yet)
+        const couple = await prisma.couple.upsert({
+            where: { coupleId: c.coupleId },
+            update: {
+                profileName: c.profileName,
+                bio: c.bio,
+                locationCity: c.locationCity,
+                isProfileComplete: true
+            },
+            create: { 
+                coupleId: c.coupleId,
+                profileName: c.profileName,
+                primaryPhoto: c.primaryPhoto,
+                bio: c.bio,
+                relationshipStatus: c.relationshipStatus,
+                locationCity: c.locationCity,
+                locationCountry: c.locationCountry,
+                isProfileComplete: true,
+                answers: {
+                    create: (c.answers as any[]).map(a => ({
+                        questionId: a.questionId,
+                        selectedOptionIds: a.selectedOptionIds
+                    }))
+                }
+            }
+        });
+
+        // Step B: Upsert Users (now they can point to coupleId)
+        const u1 = await prisma.user.upsert({
+            where: { phone: `seed_phone1_${i}` },
+            update: { coupleId: c.coupleId },
+            create: { 
+                phone: `seed_phone1_${i}`, 
+                name: c.profileName.split(' & ')[0], 
+                coupleId: c.coupleId, 
+                role: 'primary', 
+                isPhoneVerified: true 
+            }
+        });
+        const u2 = await prisma.user.upsert({
+            where: { phone: `seed_phone2_${i}` },
+            update: { coupleId: c.coupleId },
+            create: { 
+                phone: `seed_phone2_${i}`, 
+                name: c.profileName.split(' & ')[1], 
+                coupleId: c.coupleId, 
+                role: 'partner', 
+                isPhoneVerified: true 
+            }
+        });
+        
+        // Step C: Link partners back to couple
+        await prisma.couple.update({
+            where: { id: couple.id },
+            data: { partner1Id: u1.id, partner2Id: u2.id }
         });
     }
+    console.log('✅ Couples seeded');
 
-    logger.info('Seeding complete in sawa_db!');
+    // 4. Seed Communities
+    for (const comm of COMMUNITIES) {
+        await prisma.community.upsert({
+            where: { name: comm.name },
+            update: {},
+            create: {
+                name: comm.name,
+                description: comm.description,
+                city: comm.city,
+                coverImageUrl: comm.coverImageUrl,
+                tags: comm.tags,
+                admins: { create: { couple: { connect: { coupleId: COUPLES[0].coupleId } } } },
+                members: { create: { couple: { connect: { coupleId: COUPLES[0].coupleId } } } }
+            }
+        });
+    }
+    console.log('✅ Communities seeded');
+
+    console.log('🚀 Seeding complete!');
     process.exit(0);
-  } catch (error) {
-    logger.error('Error during seeding:', error);
+  } catch (err) {
+    console.error('❌ Seeding failed:', err);
     process.exit(1);
   }
-};
+}
 
-seedData();
+seed();
