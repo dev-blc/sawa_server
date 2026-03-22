@@ -42,6 +42,7 @@ export const registerChatHandlers = (io: SocketIOServer, socket: Socket): void =
           senderCoupleId: socket.coupleId,
           senderUserId: socket.userId,
           senderName: socket.userName || data.senderIndividualName || 'User',
+          senderRole: socket.userRole, // NEW: for role-based coloring
           accent: getCoupleCommunityColor(socket.coupleId),
           content: data.content,
           contentType: data.contentType ?? 'text',
