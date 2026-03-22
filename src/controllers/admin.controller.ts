@@ -104,10 +104,12 @@ export class AdminController {
   async deleteCommunity(req: Request, res: Response) {
     try {
       const { id } = req.params;
-      // Delete in order to satisfy FK constraints
+      // Delete in order to satisfy all FK constraints
       await prisma.$transaction([
         prisma.message.deleteMany({ where: { communityId: id } }),
         prisma.communityMember.deleteMany({ where: { communityId: id } }),
+        prisma.communityAdmin.deleteMany({ where: { communityId: id } }),
+        prisma.communityJoinRequest.deleteMany({ where: { communityId: id } }),
         prisma.community.delete({ where: { id } }),
       ]);
       res.status(200).json({ success: true, message: 'Community deleted' });
