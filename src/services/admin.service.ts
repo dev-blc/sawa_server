@@ -68,6 +68,22 @@ export class AdminService {
   }
 
   async getCouples() {
+    const questionMap: Record<string, string> = {
+      q1: 'Life Stage', q2: 'Couple Personality', q3: 'Favorite Activities',
+      q4: 'Meeting Frequency', q5: 'What makes a good match', q6: 'Things to avoid',
+    };
+    const optionLabelMap: Record<string, string> = {
+      'q1-career': 'Building careers', 'q1-family': 'Family first', 'q1-settled': 'Newly settled', 'q1-living': 'Living it up',
+      'q2-hosts': "The Hosts", 'q2-yes-couple': "The 'yes' couple", 'q2-planners': 'The Planners', 'q2-explorers': 'The Explorers',
+      'q3-dinners-home': 'Dinners at home', 'q3-restaurants': 'Exploring new restaurants', 'q3-outdoor': 'Outdoor activities/nature',
+      'q3-cultural': 'Cultural events/museums', 'q3-drinks': 'Casual drinks', 'q3-trips': 'Weekend trips/travel',
+      'q4-once-month': 'Meeting once a month', 'q4-twice-month': 'Meeting twice a month', 'q4-once-week': 'Meeting once a week', 'q4-when-fits': 'Meeting whenever it fits',
+      'q5-similar-stage': 'Matches in a similar life stage', 'q5-shared-interests': 'Shared interests', 'q5-small-groups': 'Small group settings',
+      'q5-structured-plans': 'Structured plans', 'q5-clear-boundaries': 'Clear boundaries', 'q5-weekend-availability': 'Weekend availability',
+      'q6-late-night': 'Avoiding late-night plans', 'q6-large-groups': 'Avoiding very large groups', 'q6-alcohol-centric': 'Avoiding alcohol-centric meetups',
+      'q6-last-minute': 'Avoiding last-minute/spontaneous plans',
+    };
+
     const dummyCities = ['Chennai', 'Goa', 'Mumbai', 'Delhi', 'Bangalore', 'Pune'];
 
     const couples = await prisma.couple.findMany({
@@ -75,6 +91,7 @@ export class AdminService {
       include: { 
         partner1: true,
         partner2: true,
+        answers: true,
       },
       take: 100,
     });
@@ -87,10 +104,16 @@ export class AdminService {
       compatibilityScore: Math.floor(Math.random() * 30) + 70,
       streakDays: 0,
       status: c.isProfileComplete ? 'engaged' : 'new',
+      bio: c.bio,
+      primaryPhoto: c.primaryPhoto,
       partners: [
         c.partner1 ? { id: c.partner1.id, name: c.partner1.name, phone: c.partner1.phone } : null,
         c.partner2 ? { id: c.partner2.id, name: c.partner2.name, phone: c.partner2.phone } : null,
-      ].filter(Boolean)
+      ].filter(Boolean),
+      answers: c.answers.map(a => ({
+        question: questionMap[a.questionId] || a.questionId,
+        options: a.selectedOptionIds.map(oid => optionLabelMap[oid] || oid)
+      }))
     }));
   }
 
