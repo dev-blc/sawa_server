@@ -22,13 +22,15 @@ export class CommunityService {
       where,
       include: {
         members: true,
-        admins: true
+        admins: true,
+        joinRequests: { where: { coupleId: me.coupleId } }
       }
     });
 
     return comms.map((c: any) => {
       const isMember = c.members.some((m: any) => m.coupleId === me.coupleId);
       const isAdmin = c.admins.some((a: any) => a.coupleId === me.coupleId);
+      const isRequested = c.joinRequests.length > 0;
       
       return {
         _id: c.id,
@@ -40,6 +42,7 @@ export class CommunityService {
         imageUri: c.coverImageUrl,
         isMember,
         isAdmin,
+        isRequested,
         members: Array.from({ length: c.members.length }).map((_, i) => ({
           _id: `member-${i}`,
           id: `member-${i}`,
@@ -265,6 +268,7 @@ export class CommunityService {
 
     const isMember = c.members.some((m: any) => m.coupleId === me.coupleId);
     const isAdmin = c.admins.some((a: any) => a.coupleId === me.coupleId);
+    const isRequested = c.joinRequests.some((r: any) => r.coupleId === me.coupleId);
     
     const invitation = await prisma.notification.findFirst({
         where: { recipientId: me.coupleId, type: 'community', data: { path: ['communityId'], equals: communityId } as any }
@@ -288,6 +292,7 @@ export class CommunityService {
       imageUri: c.coverImageUrl,
       isMember,
       isAdmin,
+      isRequested,
       isInvited: !!invitation,
       hosts,
       members: c.members.map((m: any) => ({
