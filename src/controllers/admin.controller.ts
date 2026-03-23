@@ -43,7 +43,7 @@ export class AdminController {
     try {
       logger.info('🛰️ Admin fetching dashboard data...');
       
-      const [stats, users, couples, communities, activities, prompts, reports] = await Promise.all([
+      const [stats, users, couples, communities, activities, prompts, reports, chartData, userLogs, communityLogs] = await Promise.all([
         adminService.getStats(),
         adminService.getUsers(),
         adminService.getCouples(),
@@ -51,6 +51,9 @@ export class AdminController {
         adminService.getActivities(),
         adminService.getPrompts(),
         adminService.getReports(),
+        adminService.getChartData(),
+        adminService.getUserLogs(),
+        adminService.getCommunityLogs(),
       ]);
 
       res.status(200).json({
@@ -63,11 +66,24 @@ export class AdminController {
           activities,
           prompts,
           reports,
+          chartData,
+          userLogs,
+          communityLogs,
         },
       });
     } catch (err: any) {
       logger.error('❌ Admin Fetch Error:', err.message);
       res.status(500).json({ success: false, message: 'Internal server error' });
+    }
+  }
+
+  async addCommunity(req: Request, res: Response) {
+    try {
+      const data = req.body;
+      const c = await adminService.createCommunity(data);
+      res.status(201).json({ success: true, data: c });
+    } catch (err: any) {
+      res.status(500).json({ success: false, message: err.message });
     }
   }
 

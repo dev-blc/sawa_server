@@ -19,10 +19,30 @@ export class AdminService {
   }
 
   async getUsers() {
+    const questionMap: Record<string, string> = {
+      q1: 'Life Stage', q2: 'Couple Personality', q3: 'Favorite Activities',
+      q4: 'Meeting Frequency', q5: 'What makes a good match', q6: 'Things to avoid',
+    };
+    const optionLabelMap: Record<string, string> = {
+      'q1-career': 'Building careers', 'q1-family': 'Family first', 'q1-settled': 'Newly settled', 'q1-living': 'Living it up',
+      'q2-hosts': "The Hosts", 'q2-yes-couple': "The 'yes' couple", 'q2-planners': 'The Planners', 'q2-explorers': 'The Explorers',
+      'q3-dinners-home': 'Dinners at home', 'q3-restaurants': 'Exploring new restaurants', 'q3-outdoor': 'Outdoor activities/nature',
+      'q3-cultural': 'Cultural events/museums', 'q3-drinks': 'Casual drinks', 'q3-trips': 'Weekend trips/travel',
+      'q4-once-month': 'Meeting once a month', 'q4-twice-month': 'Meeting twice a month', 'q4-once-week': 'Meeting once a week', 'q4-when-fits': 'Meeting whenever it fits',
+      'q5-similar-stage': 'Matches in a similar life stage', 'q5-shared-interests': 'Shared interests', 'q5-small-groups': 'Small group settings',
+      'q5-structured-plans': 'Structured plans', 'q5-clear-boundaries': 'Clear boundaries', 'q5-weekend-availability': 'Weekend availability',
+      'q6-late-night': 'Avoiding late-night plans', 'q6-large-groups': 'Avoiding very large groups', 'q6-alcohol-centric': 'Avoiding alcohol-centric meetups',
+      'q6-last-minute': 'Avoiding last-minute/spontaneous plans',
+    };
+
     const users = await prisma.user.findMany({
       orderBy: { createdAt: 'desc' },
       take: 100,
-      include: { coupleProfile: true },
+      include: { 
+        coupleProfile: {
+          include: { answers: true }
+        } 
+      },
     });
 
     return users.map(u => ({
@@ -33,6 +53,14 @@ export class AdminService {
       city: u.coupleProfile?.locationCity || 'Unknown',
       status: u.isPhoneVerified ? 'active' : 'inactive',
       joinedAt: u.createdAt,
+      profile: u.coupleProfile ? {
+        bio: u.coupleProfile.bio,
+        primaryPhoto: u.coupleProfile.primaryPhoto,
+        answers: u.coupleProfile.answers.map(a => ({
+          question: questionMap[a.questionId] || a.questionId,
+          options: a.selectedOptionIds.map(oid => optionLabelMap[oid] || oid)
+        }))
+      } : null
     }));
   }
 
@@ -56,15 +84,32 @@ export class AdminService {
   async getCommunities() {
     const comms = await prisma.community.findMany({
       orderBy: { createdAt: 'desc' },
-      include: { members: true },
+      include: { 
+        members: { include: { couple: true } },
+        admins: { include: { couple: true } }
+      },
     });
 
     return comms.map(c => ({
       _id: c.id,
       id: c.id,
       name: c.name,
+      description: c.description,
+      city: c.city,
+      coverImageUrl: c.coverImageUrl,
+      tags: c.tags,
       category: c.tags?.[0] || c.city || 'General',
-      members: c.members.length,
+      memberCount: c.members.length,
+      members: c.members.map(m => ({
+        id: m.coupleId,
+        name: m.couple.profileName || 'Anonymous',
+        photo: m.couple.primaryPhoto
+      })),
+      hosts: c.admins.map(a => ({
+        id: a.coupleId,
+        name: a.couple.profileName || 'Anonymous',
+        photo: a.couple.primaryPhoto
+      })),
       growthRate: 0,
     }));
   }
@@ -153,6 +198,68 @@ export class AdminService {
       status: r.status,
       createdAt: r.createdAt,
     }));
+  }
+
+  async getChartData() {
+    // Generate last 6 months growth data
+    const data = [];
+    for (let i = 5; i >= 0; i--) {
+      const date = new Date();
+      date.setMonth(date.getMonth() - i);
+      const month = date.toLocaleString('default', { month: 'short' });
+      
+      const startOfMonth = new Date(date.getFullYear(), date.getMonth(), 1);
+      const endOfMonth = new Date(date.getFullYear(), date.getMonth() + 1, 0);
+
+      const [u, c, comm] = await Promise.all([
+        prisma.user.count({ where: { createdAt: { lte: endOfMonth } } }),
+        prisma.couple.count({ where: { createdAt: { lte: endOfMonth } } }),
+        prisma.community.count({ where: { createdAt: { lte: endOfMonth } } }),
+      ]);
+
+      data.push({ name: month, users: u, couples: c, communities: comm });
+    }
+    return data;
+  }
+
+  async getUserLogs() {
+    const users = await prisma.user.findMany({
+      orderBy: { createdAt: 'desc' },
+      take: 20,
+    });
+    return users.map(u => ({
+      id: u.id,
+      title: 'New Registration',
+      actor: u.name || u.phone || 'New User',
+      happenedAt: u.createdAt,
+      type: 'user_registration'
+    }));
+  }
+
+  async getCommunityLogs() {
+    const comms = await prisma.community.findMany({
+      orderBy: { createdAt: 'desc' },
+      take: 20,
+    });
+    return comms.map(c => ({
+      id: c.id,
+      title: 'Community Created',
+      actor: c.name,
+      happenedAt: c.createdAt,
+      type: 'community_creation'
+    }));
+  }
+
+  async createCommunity(data: { name: string; description?: string; city: string; tags?: string[]; coverImageUrl?: string }) {
+    return prisma.community.create({
+      data: {
+        name: data.name,
+        description: data.description,
+        city: data.city,
+        tags: data.tags || [],
+        coverImageUrl: data.coverImageUrl,
+      }
+    });
   }
 
   async addPrompt(text: string, category: string) {
