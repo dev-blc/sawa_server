@@ -52,7 +52,7 @@ export class AdminService {
       id: u.id,
       name: u.name || 'Unknown',
       phone: u.phone,
-      city: u.coupleProfile?.locationCity || dummyCities[idx % dummyCities.length],
+      city: (u.coupleProfile?.locationCity && u.coupleProfile?.locationCity !== 'Unknown') ? u.coupleProfile.locationCity : dummyCities[idx % dummyCities.length],
       status: u.isPhoneVerified ? 'active' : 'inactive',
       joinedAt: u.createdAt,
       coupleId: u.coupleId,
@@ -83,7 +83,7 @@ export class AdminService {
       _id: c.coupleId,
       id: c.coupleId,
       pairName: c.profileName || 'Anonymous Pair',
-      city: c.locationCity || dummyCities[idx % dummyCities.length],
+      city: (c.locationCity && c.locationCity !== 'Unknown') ? c.locationCity : dummyCities[idx % dummyCities.length],
       compatibilityScore: Math.floor(Math.random() * 30) + 70,
       streakDays: 0,
       status: c.isProfileComplete ? 'engaged' : 'new',
@@ -109,13 +109,15 @@ export class AdminService {
     ]);
 
     users.forEach((u, idx) => {
-      const city = u.coupleProfile?.locationCity || dummyCities[idx % dummyCities.length];
+      const dbCity = u.coupleProfile?.locationCity;
+      const city = (dbCity && dbCity !== 'Unknown') ? dbCity : dummyCities[idx % dummyCities.length];
       if (!distribution[city]) distribution[city] = { city, users: 0, couples: 0 };
       distribution[city].users++;
     });
 
     couples.forEach((c, idx) => {
-      const city = c.locationCity || dummyCities[idx % dummyCities.length];
+      const dbCity = c.locationCity;
+      const city = (dbCity && dbCity !== 'Unknown') ? dbCity : dummyCities[idx % dummyCities.length];
       if (!distribution[city]) distribution[city] = { city, users: 0, couples: 0 };
       distribution[city].couples++;
     });
