@@ -20,17 +20,26 @@ export class CommunityService {
 
     const comms = await prisma.community.findMany({
       where,
-      include: {
-        members: true,
-        admins: true,
-        joinRequests: { where: { coupleId: me.coupleId } }
+      select: {
+        id: true,
+        name: true,
+        description: true,
+        city: true,
+        coverImageUrl: true,
+        _count: {
+          select: { members: true }
+        },
+        members: { where: { coupleId: me.coupleId }, select: { coupleId: true } },
+        admins: { where: { coupleId: me.coupleId }, select: { coupleId: true } },
+        joinRequests: { where: { coupleId: me.coupleId }, select: { coupleId: true } }
       }
     });
 
     return comms.map((c: any) => {
-      const isMember = c.members.some((m: any) => m.coupleId === me.coupleId);
-      const isAdmin = c.admins.some((a: any) => a.coupleId === me.coupleId);
+      const isMember = c.members.length > 0;
+      const isAdmin = c.admins.length > 0;
       const isRequested = c.joinRequests.length > 0;
+      const membersCount = c._count.members;
       
       return {
         _id: c.id,
@@ -38,12 +47,12 @@ export class CommunityService {
         title: c.name,
         about: c.description,
         city: c.city,
-        couples: c.members.length,
+        couples: membersCount,
         imageUri: c.coverImageUrl,
         isMember,
         isAdmin,
         isRequested,
-        members: Array.from({ length: c.members.length }).map((_, i) => ({
+        members: Array.from({ length: Math.min(membersCount, 5) }).map((_, i) => ({
           _id: `member-${i}`,
           id: `member-${i}`,
           name: `Couple ${i + 1}`,
@@ -60,11 +69,16 @@ export class CommunityService {
 
     const memberships = await prisma.communityMember.findMany({
       where: { coupleId: me.coupleId },
-      include: {
+      select: {
         community: {
-          include: {
-            members: true,
-            admins: true
+          select: {
+            id: true,
+            name: true,
+            description: true,
+            city: true,
+            coverImageUrl: true,
+            _count: { select: { members: true } },
+            admins: { where: { coupleId: me.coupleId }, select: { coupleId: true } }
           }
         }
       }
@@ -72,14 +86,14 @@ export class CommunityService {
 
     return memberships.map((m: any) => {
       const c = m.community;
-      const isAdmin = c.admins.some((a: any) => a.coupleId === me.coupleId);
+      const isAdmin = c.admins?.length > 0;
       return {
         _id: c.id,
         id: c.id,
         title: c.name,
         about: c.description,
         city: c.city,
-        couples: c.members.length,
+        couples: c._count.members,
         imageUri: c.coverImageUrl,
         isMember: true,
         isAdmin,

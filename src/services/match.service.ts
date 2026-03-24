@@ -40,7 +40,14 @@ export class MatchService {
 
     const potentialCouples = await prisma.couple.findMany({
       where,
-      take: 10
+      take: 10,
+      select: {
+        id: true,
+        coupleId: true,
+        profileName: true,
+        primaryPhoto: true,
+        locationCity: true,
+      }
     });
 
     return potentialCouples.map((c: any) => ({
@@ -253,7 +260,15 @@ export class MatchService {
 
     const matches = await prisma.match.findMany({ 
       where: { OR: [{ couple1Id: meId }, { couple2Id: meId }], status: 'accepted' },
-      include: { couple1: true, couple2: true }
+      select: {
+        id: true,
+        couple1Id: true,
+        couple2Id: true,
+        status: true,
+        createdAt: true,
+        couple1: { select: { id: true, coupleId: true, profileName: true, primaryPhoto: true, locationCity: true } },
+        couple2: { select: { id: true, coupleId: true, profileName: true, primaryPhoto: true, locationCity: true } }
+      }
     });
 
     return matches.map((m: any) => {
