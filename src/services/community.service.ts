@@ -174,6 +174,16 @@ export class CommunityService {
 
     if (invitation) {
        await prisma.communityMember.create({ data: { communityId, coupleId: me.coupleId } });
+       
+       // Clean up the invitation so it can't be reused after an exit
+       await prisma.notification.deleteMany({
+         where: { 
+           recipientId: me.coupleId, 
+           type: 'community', 
+           data: { path: ['communityId'], equals: communityId } as any 
+         }
+       });
+
        return { status: 'joined' };
     }
 
@@ -207,6 +217,15 @@ export class CommunityService {
 
     await prisma.communityMember.deleteMany({ where: { communityId, coupleId: me.coupleId } });
     await prisma.communityAdmin.deleteMany({ where: { communityId, coupleId: me.coupleId } });
+
+    // Ensure no old invitations linger after leaving
+    await prisma.notification.deleteMany({
+      where: { 
+        recipientId: me.coupleId, 
+        type: 'community', 
+        data: { path: ['communityId'], equals: communityId } as any 
+      }
+    });
 
     const remainingAdmins = await prisma.communityAdmin.findMany({ where: { communityId } });
     const remainingMembers = await prisma.communityMember.findMany({ where: { communityId } });
