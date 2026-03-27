@@ -19,15 +19,14 @@ export class AuthService {
     const existingYours = await userRepository.findByPhone(yourPhone);
     const existingPartner = await userRepository.findByPhone(partnerPhone);
 
-    let coupleId: string;
-
     if (existingYours && existingYours.isPhoneVerified) {
-      coupleId = existingYours.coupleId || crypto.randomUUID();
-    } else if (existingPartner && existingPartner.isPhoneVerified) {
-      coupleId = existingPartner.coupleId || crypto.randomUUID();
-    } else {
-      coupleId = crypto.randomUUID();
+      throw new AppError('This number is already registered. Please Sign In instead.', 400, 'USER_EXISTS');
     }
+    if (existingPartner && existingPartner.isPhoneVerified) {
+      throw new AppError('Partner number is already registered to another account.', 400, 'PARTNER_EXISTS');
+    }
+
+    const coupleId = crypto.randomUUID();
 
     // Ensure the Couple entity exists first to satisfy foreign key constraints for the User records
     await prisma.couple.upsert({
