@@ -23,6 +23,9 @@ export const registerChatHandlers = (io: SocketIOServer, socket: Socket): void =
       chatType?: 'private' | 'group'; 
       audioDuration?: number; 
       senderIndividualName?: string;
+      repliedToId?: string;
+      repliedToText?: string;
+      repliedToName?: string;
       clientMessageId?: string;
     }) => {
       if (!socket.userId || !socket.coupleId) return;
@@ -49,6 +52,9 @@ export const registerChatHandlers = (io: SocketIOServer, socket: Socket): void =
           contentType: data.contentType ?? 'text',
           audioDuration: data.audioDuration,
           timestamp,
+          repliedToId: data.repliedToId,
+          repliedToText: data.repliedToText,
+          repliedToName: data.repliedToName,
         };
 
         // Broadcast to room immediately
@@ -89,6 +95,9 @@ export const registerChatHandlers = (io: SocketIOServer, socket: Socket): void =
                 content: data.content,
                 contentType: (data.contentType || 'text') as any,
                 audioDuration: data.audioDuration,
+                repliedToId: data.repliedToId,
+                repliedToText: data.repliedToText,
+                repliedToName: data.repliedToName,
                 createdAt: new Date(timestamp),
               }
             });

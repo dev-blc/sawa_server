@@ -34,6 +34,9 @@ export const getPrivateMessages = async (req: Request, res: Response): Promise<v
       timestamp: m.createdAt,
       readBy: m.readBy || [],
       audioDuration: m.audioDuration,
+      repliedToId: m.repliedToId,
+      repliedToText: m.repliedToText,
+      repliedToName: m.repliedToName,
       senderImage: undefined 
     };
   });
@@ -59,6 +62,9 @@ export const sendPrivateMessage = async (req: Request, res: Response): Promise<v
       content,
       contentType: (contentType || 'text') as any,
       audioDuration: req.body.audioDuration,
+      repliedToId: req.body.repliedToId,
+      repliedToText: req.body.repliedToText,
+      repliedToName: req.body.repliedToName,
     }
   });
 
@@ -87,11 +93,15 @@ export const getGroupMessages = async (req: Request, res: Response): Promise<voi
       content: m.content,
       contentType: m.contentType,
       senderCoupleId: m.sender?.coupleId,
+      senderName: m.sender?.profileName || 'Unknown Couple', 
       senderIndividualName: m.senderName, 
       accent: getCoupleCommunityColor(m.sender?.coupleId || ''),
       timestamp: m.createdAt,
       readBy: m.readBy || [],
       audioDuration: m.audioDuration,
+      repliedToId: m.repliedToId,
+      repliedToText: m.repliedToText,
+      repliedToName: m.repliedToName,
     };
   });
 
@@ -116,6 +126,9 @@ export const sendGroupMessage = async (req: Request, res: Response): Promise<voi
       content,
       contentType: (contentType || 'text') as any,
       audioDuration: req.body.audioDuration,
+      repliedToId: req.body.repliedToId,
+      repliedToText: req.body.repliedToText,
+      repliedToName: req.body.repliedToName,
     }
   });
 
