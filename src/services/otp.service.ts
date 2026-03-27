@@ -9,7 +9,7 @@ import { logger } from '../utils/logger';
  * TOGGLE: Set this to true to enable real Twilio SMS.
  * If false, the app uses dummy OTP '1234' and logs invitations to console.
  */
-const USE_TWILIO = false; 
+const USE_TWILIO = true; 
 
 const TWILIO_SID = process.env.TWILIO_ACCOUNT_SID;
 const TWILIO_AUTH = process.env.TWILIO_AUTH_TOKEN;
