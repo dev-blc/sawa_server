@@ -32,8 +32,10 @@ export class AuthService {
     await userRepository.upsertByPhone(yourPhone, coupleId, 'primary');
     await userRepository.upsertByPhone(partnerPhone, coupleId, 'partner');
 
+    const partnerCodeMsg = `Welcome to SAWA! Use {{code}} to verify your shared profile. Download it here: https://apps.apple.com/in/app/sawa-made-for-two/id514584879`;
+
     await otpService.generateAndStore(yourPhone, coupleId);
-    await otpService.generateAndStore(partnerPhone, coupleId);
+    await otpService.generateAndStore(partnerPhone, coupleId, partnerCodeMsg);
 
     logger.info(`[AuthService] OTPs issued for entity: ${coupleId}`);
     return { coupleId };
