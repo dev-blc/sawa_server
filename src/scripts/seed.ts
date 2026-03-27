@@ -60,7 +60,6 @@ async function seed() {
     // 2. Seed Prompts
     const prompts = [
       "What's your favorite family activity?",
-      'Wanna hangout?',
       'Movie this weekend?',
       'Coffee sometime this week?',
       'Any plans for the holidays?',
