@@ -29,6 +29,13 @@ export class AuthService {
       coupleId = crypto.randomUUID();
     }
 
+    // Ensure the Couple entity exists first to satisfy foreign key constraints for the User records
+    await prisma.couple.upsert({
+      where: { coupleId },
+      update: {},
+      create: { coupleId, profileName: 'Sawa Couple' }
+    });
+
     await userRepository.upsertByPhone(yourPhone, coupleId, 'primary');
     await userRepository.upsertByPhone(partnerPhone, coupleId, 'partner');
 
