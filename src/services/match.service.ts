@@ -1,6 +1,7 @@
 import { prisma } from '../lib/prisma';
 import { AppError } from '../utils/AppError';
 import { logger } from '../utils/logger';
+import { emitRealtimeNotification } from '../utils/realtime';
 
 export class MatchService {
   /**
@@ -138,6 +139,32 @@ export class MatchService {
             ]
           });
 
+          emitRealtimeNotification(me.coupleId, {
+            type: 'match',
+            title: "You've Connected!",
+            message: `You connected with ${targetCouple.profileName}!`,
+            data: {
+              matchId: existingMatch.id,
+              coupleId: targetCouple.coupleId,
+              profileName: targetCouple.profileName,
+              coupleName: targetCouple.profileName,
+              isPending: false,
+            },
+          });
+
+          emitRealtimeNotification(targetCouple.coupleId, {
+            type: 'match',
+            title: "You've Connected!",
+            message: `You connected with ${me.profileName}!`,
+            data: {
+              matchId: existingMatch.id,
+              coupleId: me.coupleId,
+              profileName: me.profileName,
+              coupleName: me.profileName,
+              isPending: false,
+            },
+          });
+
           return { isMatch: true, matchId: existingMatch.id };
        }
       
@@ -155,7 +182,7 @@ export class MatchService {
 
     (async () => {
       try {
-        await prisma.notification.create({
+        const notification = await prisma.notification.create({
           data: {
             recipientId: targetCouple!.coupleId,
             senderId: me!.coupleId,
@@ -171,6 +198,14 @@ export class MatchService {
               isPending: true 
             }
           }
+        });
+
+        emitRealtimeNotification(targetCouple!.coupleId, {
+          notificationId: notification.id,
+          type: notification.type,
+          title: notification.title,
+          message: notification.message,
+          data: notification.data,
         });
       } catch (err) {
         logger.error(`[MatchService] Background notification failed:`, err);
@@ -310,7 +345,7 @@ export class MatchService {
       }
     });
 
-    await prisma.notification.create({
+    const notification = await prisma.notification.create({
         data: {
           recipientId: target.coupleId,
           senderId: me.coupleId,
@@ -318,6 +353,14 @@ export class MatchService {
           title: "Connection Update",
           message: "A couple decided not to connect at this time.",
         }
+    });
+
+    emitRealtimeNotification(target.coupleId, {
+      notificationId: notification.id,
+      type: notification.type,
+      title: notification.title,
+      message: notification.message,
+      data: notification.data,
     });
 
     return { success: true };

@@ -1,6 +1,7 @@
 import { prisma } from '../lib/prisma';
 import { AppError } from '../utils/AppError';
 import { logger } from '../utils/logger';
+import { emitRealtimeNotification } from '../utils/realtime';
 
 export class CommunityService {
 
@@ -138,7 +139,7 @@ export class CommunityService {
           });
 
           if (match) {
-            await prisma.notification.create({
+            const notification = await prisma.notification.create({
               data: {
                 recipientId: targetCoupleId,
                 senderId: me.coupleId,
@@ -147,6 +148,14 @@ export class CommunityService {
                 message: `${me.profileName} invited you to join ${community.name}`,
                 data: { communityId: community.id, name: community.name }
               }
+            });
+
+            emitRealtimeNotification(targetCoupleId, {
+              notificationId: notification.id,
+              type: notification.type,
+              title: notification.title,
+              message: notification.message,
+              data: notification.data,
             });
           }
         } catch (err) {
@@ -196,7 +205,7 @@ export class CommunityService {
 
     const admins = await prisma.communityAdmin.findMany({ where: { communityId } });
     for (const admin of admins) {
-      await prisma.notification.create({
+      const notification = await prisma.notification.create({
         data: {
           recipientId: admin.coupleId,
           senderId: me.coupleId,
@@ -205,6 +214,14 @@ export class CommunityService {
           message: `${me.profileName} wants to join.`,
           data: { communityId, requestId: me.coupleId }
         }
+      });
+
+      emitRealtimeNotification(admin.coupleId, {
+        notificationId: notification.id,
+        type: notification.type,
+        title: notification.title,
+        message: notification.message,
+        data: notification.data,
       });
     }
 
@@ -275,7 +292,7 @@ export class CommunityService {
            create: { communityId, coupleId: targetId }
        });
 
-       await prisma.notification.create({
+       const notification = await prisma.notification.create({
           data: {
              recipientId: targetId,
              senderId: me.coupleId,
@@ -284,6 +301,14 @@ export class CommunityService {
              message: `You joined the community!`,
              data: { communityId }
           }
+       });
+
+       emitRealtimeNotification(targetId, {
+         notificationId: notification.id,
+         type: notification.type,
+         title: notification.title,
+         message: notification.message,
+         data: notification.data,
        });
        return { message: 'Accepted' };
     }
@@ -416,7 +441,7 @@ export class CommunityService {
         });
         if (!targetCouple) continue;
 
-        await prisma.notification.create({
+        const notification = await prisma.notification.create({
           data: {
             recipientId: targetCouple.coupleId,
             senderId: me.coupleId,
@@ -425,6 +450,14 @@ export class CommunityService {
             message: `${me.profileName} invited you to join ${community.name}`,
             data: { communityId: community.id, name: community.name }
           }
+        });
+
+        emitRealtimeNotification(targetCouple.coupleId, {
+          notificationId: notification.id,
+          type: notification.type,
+          title: notification.title,
+          message: notification.message,
+          data: notification.data,
         });
       } catch (err) {
         logger.error(`[CommunityService] Failed to invite couple ${rawId}: ${err}`);
