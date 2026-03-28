@@ -358,6 +358,34 @@ export class CommunityService {
     const isMember = c.members.some((m: any) => m.coupleId === me.coupleId);
     const isAdmin = c.admins.some((a: any) => a.coupleId === me.coupleId);
     const isRequested = c.joinRequests.some((r: any) => r.coupleId === me.coupleId);
+
+    const memberCoupleIds = c.members
+      .map((m: any) => m.coupleId)
+      .filter((coupleId: string) => coupleId && coupleId !== me.coupleId);
+
+    const acceptedMatches = memberCoupleIds.length
+      ? await prisma.match.findMany({
+          where: {
+            status: 'accepted',
+            OR: [
+              { couple1Id: me.coupleId, couple2Id: { in: memberCoupleIds } },
+              { couple2Id: me.coupleId, couple1Id: { in: memberCoupleIds } }
+            ]
+          },
+          select: {
+            id: true,
+            couple1Id: true,
+            couple2Id: true
+          }
+        })
+      : [];
+
+    const acceptedMatchByCoupleId = new Map(
+      acceptedMatches.map((match: any) => [
+        match.couple1Id === me.coupleId ? match.couple2Id : match.couple1Id,
+        match
+      ])
+    );
     
     const invitation = await prisma.notification.findFirst({
         where: { recipientId: me.coupleId, type: 'community', data: { path: ['communityId'], equals: communityId } as any }
@@ -384,14 +412,20 @@ export class CommunityService {
       isRequested,
       isInvited: !!invitation,
       hosts,
-      members: c.members.map((m: any) => ({
-        id: m.couple.id,
-        coupleId: m.couple.coupleId,
-        name: m.couple.profileName,
-        city: m.couple.locationCity || 'Unknown',
-        accent: '#DBCBA6',
-        image: m.couple.primaryPhoto
-      })),
+      members: c.members.map((m: any) => {
+        const matchedConnection = acceptedMatchByCoupleId.get(m.couple.coupleId);
+
+        return {
+          id: m.couple.id,
+          coupleId: m.couple.coupleId,
+          name: m.couple.profileName,
+          city: m.couple.locationCity || 'Unknown',
+          accent: '#DBCBA6',
+          image: m.couple.primaryPhoto,
+          isAlreadyMatched: !!matchedConnection,
+          matchId: matchedConnection?.id || null
+        };
+      }),
       joinRequests: isAdmin ? c.joinRequests.map((r: any) => ({
         id: r.couple.id,
         coupleId: r.couple.coupleId,
