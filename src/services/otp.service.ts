@@ -24,20 +24,22 @@ export class OtpService {
       data: { phone, coupleId, otpCode: code, expiresAt }
     });
 
+    const formattedPhone = phone.startsWith('+') ? phone : `+${phone}`;
+
     // Send via Twilio if configured
     if (twilioClient && env.TWILIO_PHONE_NUMBER) {
       try {
         await twilioClient.messages.create({
           body: `Your SAWA verification code is: ${code}`,
           from: env.TWILIO_PHONE_NUMBER,
-          to: phone
+          to: formattedPhone
         });
-        logger.info(`[OtpService] Real SMS sent to ${phone}`);
+        logger.info(`[OtpService] Real SMS sent to ${formattedPhone}`);
       } catch (err) {
-        logger.error(`[OtpService] Twilio failed for ${phone}:`, err);
+        logger.error(`[OtpService] Twilio failed for ${formattedPhone}:`, err);
       }
     } else {
-      logger.info(`[OtpService] Twilio not configured. Stubbed OTP '${code}' created for ${phone}`);
+      logger.info(`[OtpService] Twilio not configured. Stubbed OTP '${code}' created for ${formattedPhone}`);
     }
 
     return code;
@@ -108,15 +110,17 @@ export class OtpService {
   async sendInvitation(phone: string, message: string): Promise<boolean> {
     if (twilioClient && env.TWILIO_PHONE_NUMBER) {
       try {
+        const formattedPhone = phone.startsWith('+') ? phone : `+${phone}`;
         await twilioClient.messages.create({
           body: message,
           from: env.TWILIO_PHONE_NUMBER,
-          to: phone
+          to: formattedPhone
         });
-        logger.info(`[OtpService] Invitation SMS sent to ${phone}`);
+        logger.info(`[OtpService] Invitation SMS sent to ${formattedPhone}`);
         return true;
       } catch (err) {
-        logger.error(`[OtpService] Twilio invitation failed for ${phone}:`, err);
+        const formattedPhone = phone.startsWith('+') ? phone : `+${phone}`;
+        logger.error(`[OtpService] Twilio invitation failed for ${formattedPhone}:`, err);
         return false;
       }
     }
