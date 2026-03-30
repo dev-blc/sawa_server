@@ -117,7 +117,12 @@ export class MatchService {
                   matchId: existingMatch.id, 
                   coupleId: targetCouple.coupleId, 
                   profileName: targetCouple.profileName,
-                  coupleName: targetCouple.profileName, // Legacy fallback
+                  primaryPhoto: targetCouple.primaryPhoto,
+                  location: targetCouple.locationCity,
+                  bio: targetCouple.bio,
+                  tags: targetCouple.activities, // Use activities for tags
+                  vibes: targetCouple.socialVibes,
+                  matchCriteria: targetCouple.matchCriteria,
                   isPending: false 
                 }
               },
@@ -131,7 +136,12 @@ export class MatchService {
                   matchId: existingMatch.id, 
                   coupleId: me.coupleId, 
                   profileName: me.profileName,
-                  coupleName: me.profileName, // Legacy fallback
+                  primaryPhoto: me.primaryPhoto,
+                  location: me.locationCity,
+                  bio: me.bio,
+                  tags: me.activities, // Use activities for tags
+                  vibes: me.socialVibes,
+                  matchCriteria: me.matchCriteria,
                   isPending: false 
                 }
               }
@@ -162,14 +172,19 @@ export class MatchService {
             type: 'match',
             title: 'New Connection Request!',
             message: `${me!.profileName} wants to connect with you!`,
-            data: { 
-              matchId: newMatch.id, 
-              _id: newMatch.id, 
-              coupleId: me!.coupleId, 
-              profileName: me!.profileName, 
-              coupleName: me!.profileName, // Legacy fallback
-              isPending: true 
-            }
+              data: { 
+                matchId: newMatch.id, 
+                _id: newMatch.id, 
+                coupleId: me!.coupleId, 
+                profileName: me!.profileName, 
+                primaryPhoto: me!.primaryPhoto,
+                location: me!.locationCity,
+                bio: me!.bio,
+                tags: me!.activities, // Use activities for tags
+                vibes: me!.socialVibes,
+                matchCriteria: me!.matchCriteria,
+                isPending: true 
+              }
           }
         });
       } catch (err) {
@@ -363,6 +378,15 @@ export class MatchService {
         OR: [{ couple1Id: me.coupleId, couple2Id: target.coupleId }, { couple2Id: me.coupleId, couple1Id: target.coupleId }]
       }
     });
+
+    // 3. Emit event to trigger UI refresh for blocker
+    const io = (global as any).io;
+    if (io) {
+      io.to(`couple:${me.coupleId}`).emit('match:accepted', { 
+        targetCoupleId: target.coupleId, 
+        action: 'blocked' 
+      });
+    }
 
     return { success: true };
   }
