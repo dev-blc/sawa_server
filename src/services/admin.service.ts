@@ -276,18 +276,32 @@ export class AdminService {
   async getReports() {
     const list = await prisma.report.findMany({
       orderBy: { createdAt: 'desc' },
-      include: { reporter: true, target: true },
+      include: { reporter: true },
     });
 
-    return list.map(r => ({
-      _id: r.id,
-      id: r.id,
-      reporter: r.reporter?.profileName || 'Unknown',
-      target: r.target?.profileName || 'Unknown',
-      reason: r.reason,
-      status: r.status,
-      createdAt: r.createdAt,
+    const reportsWithTargets = await Promise.all(list.map(async (r: any) => {
+      let targetName = 'Unknown Target';
+      
+      const cp = await (prisma.couple as any).findUnique({ where: { coupleId: r.targetId }, select: { profileName: true } });
+      if (cp) {
+        targetName = cp.profileName || 'Anonymous Couple';
+      } else {
+        const cm = await (prisma.community as any).findUnique({ where: { id: r.targetId }, select: { name: true } });
+        if (cm) targetName = cm.name;
+      }
+
+      return {
+        _id: r.id,
+        id: r.id,
+        reporter: r.reporter?.profileName || 'Unknown',
+        target: targetName,
+        reason: r.reason,
+        status: r.status,
+        createdAt: r.createdAt,
+      };
     }));
+    
+    return reportsWithTargets;
   }
 
   async getChartData() {

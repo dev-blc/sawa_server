@@ -64,7 +64,6 @@ model Couple {
   sentNotifications     Notification[]         @relation("Notification_sender")
   answers               OnboardingAnswer[]
   reportsGiven          Report[]               @relation("Report_reporter")
-  reportsReceived       Report[]               @relation("Report_targetCouple")
   users                 User[]                 @relation("CouplePartners")
 
   @@index([coupleId])
@@ -99,7 +98,6 @@ model Community {
 
   @@index([city])
   @@map("communities")
-  reportsReceived Report[] @relation("Report_targetCommunity")
 }
 
 model CommunityMember {
@@ -240,8 +238,6 @@ model Report {
   createdAt  DateTime     @default(now())
   updatedAt  DateTime     @updatedAt
   reporter   Couple       @relation("Report_reporter", fields: [reporterId], references: [coupleId])
-  targetCouple    Couple?      @relation("Report_targetCouple", fields: [targetId], references: [coupleId], onUpdate: NoAction, onDelete: NoAction, map: "reports_targetCouple_rel")
-  targetCommunity Community?   @relation("Report_targetCommunity", fields: [targetId], references: [id], onUpdate: NoAction, onDelete: NoAction, map: "reports_targetComm_rel")
 
   @@map("reports")
 }
