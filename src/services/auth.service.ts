@@ -21,13 +21,20 @@ export class AuthService {
 
     let coupleId: string;
 
-    if (existingYours && existingYours.isPhoneVerified) {
-      coupleId = existingYours.coupleId || crypto.randomUUID();
-    } else if (existingPartner && existingPartner.isPhoneVerified) {
-      coupleId = existingPartner.coupleId || crypto.randomUUID();
+    if (existingYours && existingYours.coupleId) {
+      coupleId = existingYours.coupleId;
+    } else if (existingPartner && existingPartner.coupleId) {
+      coupleId = existingPartner.coupleId;
     } else {
       coupleId = crypto.randomUUID();
     }
+
+    // Ensure Couple exists before User due to FK constraint
+    await prisma.couple.upsert({
+      where: { coupleId },
+      update: {},
+      create: { coupleId },
+    });
 
     await userRepository.upsertByPhone(yourPhone, coupleId, 'primary');
     await userRepository.upsertByPhone(partnerPhone, coupleId, 'partner');
