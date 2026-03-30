@@ -63,7 +63,8 @@ model Couple {
   receivedNotifications Notification[]         @relation("Notification_recipient")
   sentNotifications     Notification[]         @relation("Notification_sender")
   answers               OnboardingAnswer[]
-  reports               Report[]               @relation("Report_reporter")
+  reportsGiven          Report[]               @relation("Report_reporter")
+  reportsReceived       Report[]               @relation("Report_target")
   users                 User[]                 @relation("CouplePartners")
 
   @@index([coupleId])
@@ -238,6 +239,7 @@ model Report {
   createdAt  DateTime     @default(now())
   updatedAt  DateTime     @updatedAt
   reporter   Couple       @relation("Report_reporter", fields: [reporterId], references: [coupleId])
+  target     Couple?      @relation("Report_target", fields: [targetId], references: [coupleId], onUpdate: NoAction, onDelete: NoAction)
 
   @@map("reports")
 }
