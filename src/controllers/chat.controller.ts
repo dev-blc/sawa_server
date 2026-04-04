@@ -4,6 +4,59 @@ import { AppError } from '../utils/AppError';
 import { prisma } from '../lib/prisma';
 import { getCoupleCommunityColor } from '../utils/communityColors';
 
+export const getUnreadCounts = async (req: Request, res: Response): Promise<void> => {
+  if (!req.user) throw new AppError('Unauthorized', 401);
+  const { coupleId } = req.user;
+  if (!coupleId) throw new AppError('Couple ID required', 400);
+
+  const matches = await prisma.match.findMany({
+    where: {
+      OR: [{ couple1Id: coupleId }, { couple2Id: coupleId }],
+      status: 'accepted',
+    },
+    select: { id: true },
+  });
+
+  const counts: Record<string, { unreadCount: number; lastMessage: string | null; lastMessageTime: string | null }> = {};
+
+  await Promise.all(
+    matches.map(async (match) => {
+      const [unreadCount, lastMsg] = await Promise.all([
+        prisma.message.count({
+          where: {
+            matchId: match.id,
+            chatType: 'private',
+            senderId: { not: coupleId },
+            NOT: { readBy: { has: coupleId } },
+          },
+        }),
+        prisma.message.findFirst({
+          where: { matchId: match.id, chatType: 'private' },
+          orderBy: { createdAt: 'desc' },
+          select: { content: true, createdAt: true, contentType: true },
+        }),
+      ]);
+
+      counts[match.id] = {
+        unreadCount,
+        lastMessage:
+          lastMsg
+            ? lastMsg.contentType === 'text'
+              ? lastMsg.content
+              : lastMsg.contentType === 'audio'
+              ? '🎵 Voice message'
+              : lastMsg.contentType === 'image'
+              ? '📷 Photo'
+              : lastMsg.content
+            : null,
+        lastMessageTime: lastMsg?.createdAt?.toISOString() ?? null,
+      };
+    }),
+  );
+
+  sendSuccess({ res, data: { counts } });
+};
+
 export const getPrivateMessages = async (req: Request, res: Response): Promise<void> => {
   if (!req.user) throw new AppError('Unauthorized', 401);
   const { matchId } = req.params;

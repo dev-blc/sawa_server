@@ -392,7 +392,8 @@ export class CoupleService {
         partner2: true,
         communityMembers: {
             include: { community: true }
-        }
+        },
+        answers: true,
       }
     });
 

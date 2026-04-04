@@ -38,6 +38,15 @@ export class MatchService {
        }
     }
 
+    const Q3_TITLES: Record<string, string> = {
+      'q3-dinners-home': 'Dinners at home',
+      'q3-restaurants': 'Exploring restaurants',
+      'q3-outdoor': 'Outdoor activities',
+      'q3-cultural': 'Cultural events',
+      'q3-drinks': 'Casual drinks',
+      'q3-trips': 'Weekend trips',
+    };
+
     const potentialCouples = await prisma.couple.findMany({
       where,
       take: 10,
@@ -47,23 +56,36 @@ export class MatchService {
         profileName: true,
         primaryPhoto: true,
         locationCity: true,
-      }
+        answers: {
+          where: { questionId: 'q3' },
+          select: { selectedOptionIds: true },
+        },
+      },
     });
 
-    return potentialCouples.map((c: any) => ({
-      _id: c.id,
-      coupleId: c.coupleId,
-      profileName: c.profileName,
-      primaryPhoto: c.primaryPhoto || 'https://images.unsplash.com/photo-1511285560929-80b456fea0bc?auto=format&fit=crop&w=400&q=80',
-      location: c.locationCity || 'Unknown',
-      distance: Math.floor(Math.random() * 10) + 2 + ' km away',
-      tags: ['Discovery', 'Adventure', 'Book', 'Fitness'].sort(() => 0.5 - Math.random()).slice(0, 3), 
-      matchScore: Math.floor(Math.random() * 20) + 80, 
-      insights: [
-        'Both career-focused and socially intentional',
-        'Similar pace - you both prefer meeting once or twice a month',
-      ]
-    }));
+    return potentialCouples.map((c: any) => {
+      const q3Answer = c.answers?.[0];
+      const tags: string[] = q3Answer
+        ? (q3Answer.selectedOptionIds as string[])
+            .map((id: string) => Q3_TITLES[id])
+            .filter(Boolean)
+        : [];
+
+      return {
+        _id: c.id,
+        coupleId: c.coupleId,
+        profileName: c.profileName,
+        primaryPhoto: c.primaryPhoto || 'https://images.unsplash.com/photo-1511285560929-80b456fea0bc?auto=format&fit=crop&w=400&q=80',
+        location: c.locationCity || 'Unknown',
+        distance: Math.floor(Math.random() * 10) + 2 + ' km away',
+        tags,
+        matchScore: Math.floor(Math.random() * 20) + 80,
+        insights: [
+          'Both career-focused and socially intentional',
+          'Similar pace - you both prefer meeting once or twice a month',
+        ],
+      };
+    });
   }
 
   /**

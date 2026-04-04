@@ -6,11 +6,15 @@ import {
   getGroupMessages,
   sendPrivateMessage,
   sendGroupMessage,
+  getUnreadCounts,
 } from '../controllers/chat.controller';
 
 const router = Router();
 
 router.use(authenticate);
+
+// GET /api/v1/chats/unread-counts
+router.get('/unread-counts', asyncHandler(getUnreadCounts));
 
 // GET /api/v1/chats/private/:matchId
 router.get('/private/:matchId', asyncHandler(getPrivateMessages));
