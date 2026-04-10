@@ -7,14 +7,18 @@ import {
   sendPrivateMessage,
   sendGroupMessage,
   getUnreadCounts,
+  getGroupUnreadCounts,
 } from '../controllers/chat.controller';
 
 const router = Router();
 
 router.use(authenticate);
 
-// GET /api/v1/chats/unread-counts
+// GET /api/v1/chats/unread-counts  (private chats)
 router.get('/unread-counts', asyncHandler(getUnreadCounts));
+
+// GET /api/v1/chats/group-unread-counts  (group / community chats)
+router.get('/group-unread-counts', asyncHandler(getGroupUnreadCounts));
 
 // GET /api/v1/chats/private/:matchId
 router.get('/private/:matchId', asyncHandler(getPrivateMessages));

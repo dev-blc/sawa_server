@@ -57,6 +57,65 @@ export const getUnreadCounts = async (req: Request, res: Response): Promise<void
   sendSuccess({ res, data: { counts } });
 };
 
+export const getGroupUnreadCounts = async (req: Request, res: Response): Promise<void> => {
+  if (!req.user) throw new AppError('Unauthorized', 401);
+  const { coupleId } = req.user;
+  if (!coupleId) throw new AppError('Couple ID required', 400);
+
+  // All communities this couple belongs to
+  const memberships = await prisma.communityMember.findMany({
+    where: { coupleId },
+    select: { communityId: true },
+  });
+
+  const counts: Record<
+    string,
+    { unreadCount: number; lastMessage: string | null; lastMessageTime: string | null }
+  > = {};
+
+  await Promise.all(
+    memberships.map(async ({ communityId }) => {
+      const [unreadCount, lastMsg] = await Promise.all([
+        prisma.message.count({
+          where: {
+            chatType: 'group',
+            communityId,
+            senderId: { not: coupleId },
+            NOT: { readBy: { has: coupleId } },
+          },
+        }),
+        prisma.message.findFirst({
+          where: { chatType: 'group', communityId },
+          orderBy: { createdAt: 'desc' },
+          select: { content: true, createdAt: true, contentType: true, senderName: true },
+        }),
+      ]);
+
+      let lastMessagePreview: string | null = null;
+      if (lastMsg) {
+        const firstName = (lastMsg.senderName || 'Someone').split(' ')[0];
+        const text =
+          lastMsg.contentType === 'text'
+            ? lastMsg.content
+            : lastMsg.contentType === 'audio'
+            ? '🎵 Voice message'
+            : lastMsg.contentType === 'image'
+            ? '📷 Photo'
+            : lastMsg.content;
+        lastMessagePreview = `${firstName}: ${text}`;
+      }
+
+      counts[communityId] = {
+        unreadCount,
+        lastMessage: lastMessagePreview,
+        lastMessageTime: lastMsg?.createdAt?.toISOString() ?? null,
+      };
+    }),
+  );
+
+  sendSuccess({ res, data: { counts } });
+};
+
 export const getPrivateMessages = async (req: Request, res: Response): Promise<void> => {
   if (!req.user) throw new AppError('Unauthorized', 401);
   const { matchId } = req.params;
