@@ -185,34 +185,28 @@ export const registerChatHandlers = (io: SocketIOServer, socket: Socket): void =
     if (!socket.userId || !socket.coupleId) return;
     
     try {
-      const couple = await prisma.couple.findUnique({ where: { coupleId: socket.coupleId } });
-      if (!couple) return;
+      const coupleId = socket.coupleId;
 
-      const messagesToUpdate = await prisma.message.findMany({
-          where: {
-              OR: [
-                  { matchId: data.chatId },
-                  { communityId: data.chatId }
-              ],
-              senderId: { not: couple.coupleId },
-              NOT: { readBy: { has: couple.coupleId } }
-          }
-      });
-
-      for (const msg of messagesToUpdate) {
-          await prisma.message.update({
-              where: { id: msg.id },
-              data: { readBy: { set: [...msg.readBy, couple.coupleId] } }
-          });
-      }
+      // Single atomic UPDATE: append coupleId to readBy for all unread messages
+      // in this chat that were not sent by this couple.
+      await prisma.$executeRaw`
+        UPDATE "Message"
+        SET "readBy" = array_append("readBy", ${coupleId})
+        WHERE (
+          "matchId"     = ${data.chatId}
+          OR "communityId" = ${data.chatId}
+        )
+        AND "senderId" != ${coupleId}
+        AND NOT (${coupleId} = ANY("readBy"))
+      `;
 
       io.to(`chat:${data.chatId}`).emit(SOCKET_EVENTS.CHAT_READ, {
         chatId: data.chatId,
-        readByCoupleId: socket.coupleId
+        readByCoupleId: coupleId
       });
 
       await prisma.notification.updateMany({
-        where: { recipientId: couple.coupleId, type: 'message' },
+        where: { recipientId: coupleId, type: 'message' },
         data: { read: true }
       });
 
