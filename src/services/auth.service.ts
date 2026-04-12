@@ -11,7 +11,7 @@ export class AuthService {
   /**
    * STEP 1 — Send OTP
    */
-  async sendOtp(yourPhone: string, partnerPhone: string): Promise<{ coupleId: string; testCode?: string }> {
+  async sendOtp(yourPhone: string, partnerPhone: string): Promise<{ coupleId: string }> {
     if (yourPhone === partnerPhone) {
       throw new AppError('Your number and partner number cannot be the same', 400, 'SAME_NUMBER');
     }
@@ -47,12 +47,11 @@ export class AuthService {
 
     const partnerCodeMsg = `Welcome to SAWA! Use {{code}} to verify your shared profile. Download it here: https://apps.apple.com/in/app/sawa-made-for-two/id514584879`;
 
-    const { code: yourCode, smsSent: yourSmsSent } = await otpService.generateAndStore(yourPhone, coupleId);
+    await otpService.generateAndStore(yourPhone, coupleId);
     await otpService.generateAndStore(partnerPhone, coupleId, partnerCodeMsg);
 
     logger.info(`[AuthService] OTPs issued for entity: ${coupleId}`);
-    // Only expose testCode when SMS was not actually sent (dev/test mode)
-    return { coupleId, testCode: yourSmsSent ? undefined : yourCode };
+    return { coupleId };
   }
 
   /**
@@ -85,18 +84,7 @@ export class AuthService {
       throw new AppError("Partner's OTP is invalid or expired", 400, 'INVALID_PARTNER_OTP');
     }
 
-    let coupleId = yourResult.coupleId!;
-    if (coupleId.startsWith('bypass-')) {
-        if (partnerResult.coupleId?.startsWith('bypass-')) {
-            const [uY, uP] = await Promise.all([
-                   userRepository.findByPhone(yourPhone),
-                   userRepository.findByPhone(partnerPhone)
-            ]);
-            coupleId = uY?.coupleId || uP?.coupleId || crypto.randomUUID();
-        } else {
-            coupleId = partnerResult.coupleId!;
-        }
-    }
+    const coupleId = yourResult.coupleId!;
 
     // 1. Ensure the parent Couple exists first (sequentially to avoid race conditions)
     const existingYours = await userRepository.findByPhone(yourPhone);
@@ -203,18 +191,14 @@ export class AuthService {
   /**
    * LOGIN STEP 1
    */
-  async loginSendOtp(phone: string): Promise<{ coupleId: string; testCode?: string }> {
+  async loginSendOtp(phone: string): Promise<{ coupleId: string }> {
     const user = await userRepository.findByPhone(phone);
     if (!user) {
       throw new AppError('No account found with this number.', 404, 'USER_NOT_FOUND');
     }
 
-    const { code, smsSent } = await otpService.generateAndStore(phone, user.coupleId || '');
-    return {
-      coupleId: user.coupleId || '',
-      // Only expose the code when SMS was not sent (dev/test mode without Twilio)
-      testCode: smsSent ? undefined : code,
-    };
+    await otpService.generateAndStore(phone, user.coupleId || '');
+    return { coupleId: user.coupleId || '' };
   }
 
   /**
@@ -236,30 +220,11 @@ export class AuthService {
       throw new AppError('Invalid or expired OTP', 400, 'INVALID_OTP');
     }
 
-    let user = await userRepository.findByPhone(phone);
-    let coupleId = result.coupleId;
+    const user = await userRepository.findByPhone(phone);
+    const coupleId = result.coupleId;
 
     if (!user) {
-       if (otp === '1234') {
-          coupleId = (coupleId.startsWith('bypass-')) ? crypto.randomUUID() : coupleId;
-          
-          // CRITICAL: Ensure Couple exists BEFORE upserting the user to avoid FK violation
-          await prisma.couple.upsert({
-            where: { coupleId },
-            update: {},
-            create: {
-                coupleId,
-                profileName: 'Sawa Couple',
-                isProfileComplete: false,
-                isSubscribed: false
-            }
-          });
-
-          user = await userRepository.upsertByPhone(phone, coupleId, 'primary');
-          await userRepository.markVerified(phone);
-       } else {
-          throw new AppError('User not found', 404, 'USER_NOT_FOUND');
-       }
+      throw new AppError('No account found with this number.', 404, 'USER_NOT_FOUND');
     }
 
     let couple = null;
