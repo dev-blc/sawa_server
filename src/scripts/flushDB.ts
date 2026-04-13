@@ -3,24 +3,34 @@ import path from 'path';
 import dotenv from 'dotenv';
 
 /**
- * Load DATABASE_URL from the first env file that defines it.
- * Order: server/.env, cwd .env, repo root .env (so `npm run db:flush` works from server/).
+ * Load DATABASE_URL by directly reading and parsing candidate .env files.
+ * Uses manual parsing so it works regardless of dotenv caching or module load order.
  */
 function loadDatabaseUrlFromEnvFiles(): void {
   const candidates = [
-    path.resolve(__dirname, '../../.env'),
-    path.resolve(process.cwd(), '.env'),
-    path.resolve(process.cwd(), '../.env'),
+    path.resolve(__dirname, '../../.env'),       // server/src/scripts → server/.env
+    path.resolve(__dirname, '../../../.env'),     // fallback one level up
+    path.resolve(process.cwd(), '.env'),          // cwd (server/) → server/.env
+    path.resolve(process.cwd(), 'server/.env'),   // cwd (repo root) → server/.env
   ];
 
   for (const envPath of candidates) {
     if (!fs.existsSync(envPath)) continue;
-    dotenv.config({ path: envPath, override: true });
-    if (process.env.DATABASE_URL?.trim()) {
-      console.log('Loaded env file:', envPath);
-      return;
+    try {
+      const content = fs.readFileSync(envPath, 'utf8');
+      const match = content.match(/^DATABASE_URL=(.+)$/m);
+      if (match) {
+        process.env.DATABASE_URL = match[1].trim().replace(/^["']|["']$/g, '');
+        console.log('Loaded DATABASE_URL from:', envPath);
+        return;
+      }
+    } catch {
+      // try next candidate
     }
   }
+
+  // Final fallback: try dotenv on the server/.env path
+  dotenv.config({ path: path.resolve(process.cwd(), '.env'), override: true });
 }
 
 loadDatabaseUrlFromEnvFiles();
