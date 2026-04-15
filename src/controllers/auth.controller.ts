@@ -60,8 +60,7 @@ export const validateLoginVerifyOtp = validate(LoginVerifyOtpSchema);
  * Body: { yourPhone, partnerPhone }
  *
  * Creates/finds a shared coupleId for both phones.
- * Generates dummy OTPs and stores them.
- * In DEV: OTP codes are logged in server console.
+ * Sends real OTPs via Twilio to both numbers.
  */
 export const sendOtp = async (req: Request, res: Response): Promise<void> => {
   const { yourPhone, partnerPhone } = req.body as z.infer<typeof SendOtpSchema>;
@@ -80,8 +79,7 @@ export const sendOtp = async (req: Request, res: Response): Promise<void> => {
  * POST /api/v1/auth/verify-otp
  * Body: { yourPhone, yourOtp, partnerPhone, partnerOtp }
  *
- * DUMMY MODE: accepts any 4-digit entry for both OTPs.
- * Returns JWT token pair for the primary user.
+ * Verifies both OTPs via Twilio. Returns JWT token pair for the primary user.
  */
 export const verifyOtp = async (req: Request, res: Response): Promise<void> => {
   const { yourPhone, yourOtp, partnerPhone, partnerOtp } =
