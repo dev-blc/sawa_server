@@ -334,5 +334,11 @@ export const markChatRead = async (req: Request, res: Response): Promise<void> =
     AND NOT (${coupleId} = ANY("readBy"))
   `;
 
+  // Notify the calling user's socket so BottomToggleBar refreshes its badge counts immediately.
+  const io = (global as any).io;
+  if (io) {
+    io.to(`couple:${coupleId}`).emit('chat:markRead', { chatId, coupleId });
+  }
+
   sendSuccess({ res, data: { chatId, read: true } });
 };
