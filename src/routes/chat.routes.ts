@@ -8,6 +8,8 @@ import {
   sendGroupMessage,
   getUnreadCounts,
   getGroupUnreadCounts,
+  editMessage,
+  deleteMessage,
 } from '../controllers/chat.controller';
 
 const router = Router();
@@ -31,5 +33,11 @@ router.get('/group/:communityId', asyncHandler(getGroupMessages));
 
 // POST /api/v1/chats/group/:communityId
 router.post('/group/:communityId', asyncHandler(sendGroupMessage));
+
+// PATCH /api/v1/chats/messages/:messageId  (edit a message)
+router.patch('/messages/:messageId', asyncHandler(editMessage));
+
+// DELETE /api/v1/chats/messages/:messageId?forEveryone=true|false
+router.delete('/messages/:messageId', asyncHandler(deleteMessage));
 
 export default router;

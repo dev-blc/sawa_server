@@ -246,3 +246,42 @@ export const sendGroupMessage = async (req: Request, res: Response): Promise<voi
 
   sendSuccess({ res, data: { message: { ...message, _id: message.id } }, statusCode: 201 });
 };
+
+export const editMessage = async (req: Request, res: Response): Promise<void> => {
+  if (!req.user) throw new AppError('Unauthorized', 401);
+  const { messageId } = req.params;
+  const { content } = req.body;
+  const { coupleId } = req.user;
+
+  if (!content?.trim()) throw new AppError('Content is required', 400);
+
+  const message = await prisma.message.findUnique({ where: { id: messageId } });
+  if (!message) throw new AppError('Message not found', 404);
+  if (message.senderId !== coupleId) throw new AppError('Not authorized to edit this message', 403);
+  if (message.contentType !== 'text') throw new AppError('Only text messages can be edited', 400);
+
+  const updated = await prisma.message.update({
+    where: { id: messageId },
+    data: { content: content.trim() },
+  });
+
+  sendSuccess({ res, data: { message: { ...updated, _id: updated.id } } });
+};
+
+export const deleteMessage = async (req: Request, res: Response): Promise<void> => {
+  if (!req.user) throw new AppError('Unauthorized', 401);
+  const { messageId } = req.params;
+  const forEveryone = req.query.forEveryone === 'true';
+  const { coupleId } = req.user;
+
+  const message = await prisma.message.findUnique({ where: { id: messageId } });
+  if (!message) throw new AppError('Message not found', 404);
+
+  if (forEveryone) {
+    if (message.senderId !== coupleId) throw new AppError('Not authorized to delete this message for everyone', 403);
+    await prisma.message.delete({ where: { id: messageId } });
+  }
+  // "Delete for me" is handled client-side only — no DB change needed
+
+  sendSuccess({ res, data: { messageId, forEveryone } });
+};
