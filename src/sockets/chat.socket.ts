@@ -195,18 +195,27 @@ export const registerChatHandlers = (io: SocketIOServer, socket: Socket): void =
     try {
       const coupleId = socket.coupleId;
 
-      // Single atomic UPDATE: append coupleId to readBy for all unread messages
-      // in this chat that were not sent by this couple.
-      await prisma.$executeRaw`
-        UPDATE "Message"
-        SET "readBy" = array_append("readBy", ${coupleId})
-        WHERE (
-          "matchId"     = ${data.chatId}
-          OR "communityId" = ${data.chatId}
-        )
-        AND "senderId" != ${coupleId}
-        AND NOT (${coupleId} = ANY("readBy"))
-      `;
+      // Find unread messages and mark them read using Prisma ORM to avoid
+      // silent type-cast failures on the PostgreSQL text[] array operators.
+      const unread = await prisma.message.findMany({
+        where: {
+          OR: [{ matchId: data.chatId }, { communityId: data.chatId }],
+          senderId: { not: coupleId },
+          NOT: { readBy: { has: coupleId } },
+        },
+        select: { id: true },
+      });
+
+      if (unread.length > 0) {
+        await Promise.all(
+          unread.map((msg) =>
+            prisma.message.update({
+              where: { id: msg.id },
+              data: { readBy: { push: coupleId } },
+            }),
+          ),
+        );
+      }
 
       io.to(`chat:${data.chatId}`).emit(SOCKET_EVENTS.CHAT_READ, {
         chatId: data.chatId,

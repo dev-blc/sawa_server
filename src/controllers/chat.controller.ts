@@ -323,16 +323,28 @@ export const markChatRead = async (req: Request, res: Response): Promise<void> =
   const { chatId } = req.params;
   if (!chatId) throw new AppError('Chat ID required', 400);
 
-  await prisma.$executeRaw`
-    UPDATE "Message"
-    SET "readBy" = array_append("readBy", ${coupleId})
-    WHERE (
-      "matchId"     = ${chatId}
-      OR "communityId" = ${chatId}
-    )
-    AND "senderId" != ${coupleId}
-    AND NOT (${coupleId} = ANY("readBy"))
-  `;
+  // Find every message in this chat that the current user hasn't read yet.
+  // Using ORM (instead of $executeRaw) avoids silent type-cast failures on the
+  // PostgreSQL text[] array operators.
+  const unread = await prisma.message.findMany({
+    where: {
+      OR: [{ matchId: chatId }, { communityId: chatId }],
+      senderId: { not: coupleId },
+      NOT: { readBy: { has: coupleId } },
+    },
+    select: { id: true },
+  });
+
+  if (unread.length > 0) {
+    await Promise.all(
+      unread.map((msg) =>
+        prisma.message.update({
+          where: { id: msg.id },
+          data: { readBy: { push: coupleId } },
+        }),
+      ),
+    );
+  }
 
   // Notify the calling user's socket so BottomToggleBar refreshes its badge counts immediately.
   const io = (global as any).io;
@@ -340,5 +352,5 @@ export const markChatRead = async (req: Request, res: Response): Promise<void> =
     io.to(`couple:${coupleId}`).emit('chat:markRead', { chatId, coupleId });
   }
 
-  sendSuccess({ res, data: { chatId, read: true } });
+  sendSuccess({ res, data: { chatId, read: true, markedCount: unread.length } });
 };
