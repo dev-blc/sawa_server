@@ -10,6 +10,7 @@ import {
   getGroupUnreadCounts,
   editMessage,
   deleteMessage,
+  markChatRead,
 } from '../controllers/chat.controller';
 
 const router = Router();
@@ -39,5 +40,8 @@ router.patch('/messages/:messageId', asyncHandler(editMessage));
 
 // DELETE /api/v1/chats/messages/:messageId?forEveryone=true|false
 router.delete('/messages/:messageId', asyncHandler(deleteMessage));
+
+// POST /api/v1/chats/:chatId/read  — mark all messages in a chat as read
+router.post('/:chatId/read', asyncHandler(markChatRead));
 
 export default router;

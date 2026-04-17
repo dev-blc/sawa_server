@@ -309,3 +309,30 @@ export const deleteMessage = async (req: Request, res: Response): Promise<void> 
 
   sendSuccess({ res, data: { messageId, forEveryone } });
 };
+
+/**
+ * POST /api/v1/chats/:chatId/read
+ * Marks all messages in a private or group chat as read for the current user.
+ * Called by the client when opening any chat thread — more reliable than socket-only approach.
+ */
+export const markChatRead = async (req: Request, res: Response): Promise<void> => {
+  if (!req.user) throw new AppError('Unauthorized', 401);
+  const { coupleId } = req.user;
+  if (!coupleId) throw new AppError('Couple ID required', 400);
+
+  const { chatId } = req.params;
+  if (!chatId) throw new AppError('Chat ID required', 400);
+
+  await prisma.$executeRaw`
+    UPDATE "Message"
+    SET "readBy" = array_append("readBy", ${coupleId})
+    WHERE (
+      "matchId"     = ${chatId}
+      OR "communityId" = ${chatId}
+    )
+    AND "senderId" != ${coupleId}
+    AND NOT (${coupleId} = ANY("readBy"))
+  `;
+
+  sendSuccess({ res, data: { chatId, read: true } });
+};
