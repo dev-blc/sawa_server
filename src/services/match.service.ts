@@ -141,10 +141,15 @@ export class MatchService {
     if (existingMatch) {
       // The other person sent us a hello — accept it
       if (existingMatch.status === 'skipped') {
-        // Reset skipped to pending so the request starts fresh
+        // Reset skipped to pending; ensure initiator (me) is couple1 so getIncomingRequests finds it
         await prisma.match.update({
           where: { id: existingMatch.id },
-          data: { status: 'pending', actionById: me.coupleId }
+          data: {
+            status: 'pending',
+            actionById: me.coupleId,
+            couple1Id: me.coupleId,
+            couple2Id: targetCouple.coupleId,
+          }
         });
         return { isMatch: false };
       }
@@ -341,13 +346,18 @@ export class MatchService {
       meId = me.coupleId;
     }
 
+    // Incoming requests: pending matches where the OTHER person initiated (actionById ≠ meId)
     const pending = await prisma.match.findMany({ 
-      where: { couple2Id: meId, status: 'pending' },
-      include: { couple1: true }
+      where: {
+        status: 'pending',
+        actionById: { not: meId },
+        OR: [{ couple1Id: meId }, { couple2Id: meId }],
+      },
+      include: { couple1: true, couple2: true }
     });
 
     return pending.map((m: any) => {
-      const otherCouple = m.couple1;
+      const otherCouple = m.couple1Id === meId ? m.couple2 : m.couple1;
       if (!otherCouple) return null;
 
       return {
