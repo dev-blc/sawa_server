@@ -289,6 +289,7 @@ export class CoupleService {
     const updateData: any = {};
     if (data.bio !== undefined) updateData.bio = data.bio;
     if (data.relationshipStatus !== undefined) updateData.relationshipStatus = data.relationshipStatus;
+    if ((data as any).isOpenToMeeting !== undefined) updateData.isOpenToMeeting = (data as any).isOpenToMeeting;
 
     // Location handling — accept both top-level (locationCity/locationCountry)
     // and nested ({ location: { city, country } }) shapes from clients.

@@ -32,6 +32,7 @@ export class MatchService {
     const where: any = {
       coupleId: { not: me.coupleId, notIn: [...interactedIds, ...blockedIds] },
       isProfileComplete: true,
+      isOpenToMeeting: true,
     };
 
     if (cityFilter && cityFilter !== 'All City' && cityFilter !== 'All Cities' && cityFilter !== 'Unknown') {

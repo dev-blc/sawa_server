@@ -48,6 +48,7 @@ model Couple {
   locationCountry       String?
   isProfileComplete     Boolean                @default(false)
   isSubscribed          Boolean                @default(false)
+  isOpenToMeeting       Boolean                @default(true)
   meetingFrequency      String?
   socialVibes           String[]               @default([])
   activities            String[]               @default([])
@@ -168,27 +169,27 @@ model Match {
 }
 
 model Message {
-  id            String      @id @default(cuid()) @map("_id")
-  chatType      ChatType
-  matchId       String?
-  communityId   String?
-  senderId      String
+  id                   String      @id @default(cuid()) @map("_id")
+  chatType             ChatType
+  matchId              String?
+  communityId          String?
+  senderId             String
   senderUserId         String?
   senderName           String
   senderIndividualName String?
   content              String
-  contentType   ContentType @default(text)
-  audioDuration Int?
-  repliedToId   String?
-  repliedToText String?
-  repliedToName String?
-  readBy        String[]    @default([])
-  createdAt     DateTime    @default(now())
-  updatedAt     DateTime    @updatedAt
-  community     Community?  @relation(fields: [communityId], references: [id])
-  match         Match?      @relation("Message_privateChat", fields: [matchId], references: [id])
-  sender        Couple      @relation("Message_sender", fields: [senderId], references: [coupleId])
-  senderUser    User?       @relation("Message_senderUser", fields: [senderUserId], references: [id])
+  contentType          ContentType @default(text)
+  audioDuration        Int?
+  repliedToId          String?
+  repliedToText        String?
+  repliedToName        String?
+  readBy               String[]    @default([])
+  createdAt            DateTime    @default(now())
+  updatedAt            DateTime    @updatedAt
+  community            Community?  @relation(fields: [communityId], references: [id])
+  match                Match?      @relation("Message_privateChat", fields: [matchId], references: [id])
+  sender               Couple      @relation("Message_sender", fields: [senderId], references: [coupleId])
+  senderUser           User?       @relation("Message_senderUser", fields: [senderUserId], references: [id])
 
   @@index([matchId, createdAt])
   @@index([communityId, createdAt])

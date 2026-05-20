@@ -61,6 +61,7 @@ const CompleteOnboardingSchema = z.object({
 const UpdateMyCoupleSchema = z.object({
   bio: z.string().optional(),
   relationshipStatus: z.string().optional(),
+  isOpenToMeeting: z.boolean().optional(),
   preferences: z.any().optional(),
   matchCriteria: z.union([z.string(), z.array(z.string())]).optional(),
   yourName: z.string().optional(),
