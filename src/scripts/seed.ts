@@ -58,12 +58,8 @@ async function seed() {
     console.log('✅ Admin seeded');
 
     // 2. Seed Prompts
-    const prompts = [
-      "What's your favorite family activity?",
-      'Movie this weekend?',
-      'Coffee sometime this week?',
-      'Any plans for the holidays?',
-    ];
+    const { DEFAULT_CHAT_PROMPTS } = await import('../constants/chatPrompts');
+    const prompts = [...DEFAULT_CHAT_PROMPTS];
     for (const text of prompts) {
       await prisma.prompt.upsert({
         where: { text },

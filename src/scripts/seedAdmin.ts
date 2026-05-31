@@ -52,15 +52,9 @@ async function seedAdmin() {
     }
 
     // Seed default prompts
-    const DEFAULT_PROMPTS = [
-      "Hello, how are you?",
-      "Let's connect!",
-      "I'd love to chat more.",
-      "Are you free this weekend?",
-      "Coffee sometime?"
-    ];
+    const { DEFAULT_CHAT_PROMPTS } = await import('../constants/chatPrompts');
 
-    for (const text of DEFAULT_PROMPTS) {
+    for (const text of DEFAULT_CHAT_PROMPTS) {
       const exists = await prisma.prompt.findFirst({ where: { text } });
       if (!exists) {
         await prisma.prompt.create({

@@ -1,36 +1,71 @@
-import mongoose from 'mongoose';
-import dotenv from 'dotenv';
-import path from 'path';
-import { Couple } from '../src/models/Couple.model';
-import { User } from '../src/models/User.model';
+import { prisma } from '../src/lib/prisma';
 
-dotenv.config({ path: path.join(__dirname, '../.env') });
+async function main() {
+  const users = await prisma.user.findMany({
+    orderBy: { createdAt: 'desc' },
+    select: {
+      id: true,
+      phone: true,
+      name: true,
+      email: true,
+      role: true,
+      coupleId: true,
+      isPhoneVerified: true,
+      createdAt: true,
+      coupleProfile: {
+        select: { coupleId: true, profileName: true, locationCity: true },
+      },
+    },
+  });
 
+  const couples = await prisma.couple.findMany({
+    orderBy: { createdAt: 'desc' },
+    select: {
+      coupleId: true,
+      profileName: true,
+      locationCity: true,
+      createdAt: true,
+      partner1: { select: { id: true, phone: true, name: true } },
+      partner2: { select: { id: true, phone: true, name: true } },
+    },
+  });
 
-const MONGO_URI = process.env.MONGODB_URI || 'mongodb://localhost:27017/sawa';
+  console.log(`\n=== USERS (${users.length}) ===\n`);
+  users.forEach((u, i) => {
+    console.log(
+      `${i + 1}. ${u.name || '(no name)'}\n` +
+        `   phone: ${u.phone || '-'}\n` +
+        `   email: ${u.email || '-'}\n` +
+        `   userId: ${u.id}\n` +
+        `   coupleId: ${u.coupleId || '-'}\n` +
+        `   profile: ${u.coupleProfile?.profileName || '-'}\n` +
+        `   verified: ${u.isPhoneVerified}\n` +
+        `   created: ${u.createdAt.toISOString().slice(0, 10)}\n`,
+    );
+  });
 
-async function listUsers() {
-  try {
-    await mongoose.connect(MONGO_URI, { dbName: 'sawa_db' });
-
-    
-    const couples = await Couple.find({});
-    console.log(`--- COUPLE DOCUMENTS (${couples.length}) ---`);
-    couples.forEach((c: any) => {
-      console.log(`- ${c.profileName}: _id=${c._id}, coupleId=${c.coupleId}, Complete: ${c.isProfileComplete}`);
-    });
-
-    const users = await User.find({}).sort({ createdAt: -1 }).limit(10);
-    console.log(`\n--- RECENT RAW USERS (Max 10) ---`);
-    users.forEach((u: any) => {
-      console.log(`- ${u.name || '[Unnamed]'} pt: ${u.phone} ID: ${u._id} Role: ${u.role} CoupleID: ${u.coupleId}`);
-    });
-
-  } finally {
-    await mongoose.disconnect();
-  }
+  console.log(`\n=== COUPLES (${couples.length}) ===\n`);
+  couples.forEach((c, i) => {
+    const p1 = c.partner1
+      ? `${c.partner1.name || '?'} (${c.partner1.phone || c.partner1.id})`
+      : '—';
+    const p2 = c.partner2
+      ? `${c.partner2.name || '?'} (${c.partner2.phone || c.partner2.id})`
+      : '—';
+    console.log(
+      `${i + 1}. ${c.profileName || 'Unnamed'}\n` +
+        `   coupleId: ${c.coupleId}\n` +
+        `   city: ${c.locationCity || '-'}\n` +
+        `   partner1: ${p1}\n` +
+        `   partner2: ${p2}\n` +
+        `   created: ${c.createdAt.toISOString().slice(0, 10)}\n`,
+    );
+  });
 }
 
-listUsers();
-
-
+main()
+  .catch((e) => {
+    console.error(e);
+    process.exit(1);
+  })
+  .finally(() => prisma.$disconnect());
