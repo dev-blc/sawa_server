@@ -63,6 +63,7 @@ const UpdateMyCoupleSchema = z.object({
   relationshipStatus: z.string().optional(),
   isOpenToMeeting: z.boolean().optional(),
   preferences: z.any().optional(),
+  activities: z.array(z.string()).optional(),
   matchCriteria: z.union([z.string(), z.array(z.string())]).optional(),
   yourName: z.string().optional(),
   yourDob: z.string().optional(),
@@ -78,6 +79,8 @@ const UpdateMyCoupleSchema = z.object({
     .optional(),
   locationCity: z.string().optional(),
   locationCountry: z.string().optional(),
+  locationLatitude: z.number().optional(),
+  locationLongitude: z.number().optional(),
 });
 
 export const validateSetupProfile = validate(SetupProfileSchema);

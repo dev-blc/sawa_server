@@ -127,22 +127,24 @@ export const getPrivateMessages = async (req: Request, res: Response): Promise<v
     },
     include: {
       sender: { select: { coupleId: true } },
-      senderUser: { select: { role: true } },
+      senderUser: { select: { role: true, name: true } },
     },
     orderBy: { createdAt: 'desc' },
     take: 100,
   });
 
   const finalMessages = messages.reverse().map((m: any) => {
+    const individualName =
+      m.senderIndividualName || m.senderUser?.name || m.senderName || 'User';
     return {
       _id: m.id,
       content: m.content,
       contentType: m.contentType,
-      senderName: m.senderName,
+      senderName: individualName,
       senderUserId: m.senderUserId,
       senderRole: m.senderUser?.role,
-      senderCoupleId: m.sender?.coupleId, 
-      senderIndividualName: m.senderName,
+      senderCoupleId: m.sender?.coupleId,
+      senderIndividualName: individualName,
       timestamp: m.createdAt,
       readBy: m.readBy || [],
       audioDuration: m.audioDuration,
@@ -161,16 +163,27 @@ export const sendPrivateMessage = async (req: Request, res: Response): Promise<v
   const { matchId } = req.params;
   const { content, contentType } = req.body;
 
-  const { userId, coupleId, userName } = req.user!;
+  const { userId, coupleId } = req.user!;
   if (!coupleId) throw new AppError('Couple ID required', 400);
-  
+
+  const senderUser = await prisma.user.findUnique({
+    where: { id: userId },
+    select: { name: true },
+  });
+  const senderName =
+    req.body.senderIndividualName ||
+    senderUser?.name ||
+    req.body.senderName ||
+    'User';
+
   const message = await prisma.message.create({
     data: {
       chatType: 'private',
       matchId: matchId,
       senderId: coupleId,
       senderUserId: userId,
-      senderName: userName || 'User',
+      senderName,
+      senderIndividualName: senderName,
       content,
       contentType: (contentType || 'text') as any,
       audioDuration: req.body.audioDuration,
@@ -225,8 +238,18 @@ export const sendGroupMessage = async (req: Request, res: Response): Promise<voi
   const { communityId } = req.params;
   const { content, contentType } = req.body;
 
-  const { userId, coupleId, userName } = req.user!;
+  const { userId, coupleId } = req.user!;
   if (!coupleId) throw new AppError('Couple ID required', 400);
+
+  const senderUser = await prisma.user.findUnique({
+    where: { id: userId },
+    select: { name: true },
+  });
+  const senderName =
+    req.body.senderIndividualName ||
+    senderUser?.name ||
+    req.body.senderName ||
+    'User';
 
   const message = await prisma.message.create({
     data: {
@@ -234,7 +257,8 @@ export const sendGroupMessage = async (req: Request, res: Response): Promise<voi
       communityId: communityId,
       senderId: coupleId,
       senderUserId: userId,
-      senderName: userName || 'User',
+      senderName,
+      senderIndividualName: senderName,
       content,
       contentType: (contentType || 'text') as any,
       audioDuration: req.body.audioDuration,

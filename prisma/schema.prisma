@@ -46,6 +46,8 @@ model Couple {
   secondaryPhotos       String[]               @default([])
   locationCity          String?
   locationCountry       String?
+  locationLatitude      Float?
+  locationLongitude     Float?
   isProfileComplete     Boolean                @default(false)
   isSubscribed          Boolean                @default(false)
   isOpenToMeeting       Boolean                @default(true)

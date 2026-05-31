@@ -4,6 +4,20 @@ import { authenticate } from '../middleware/authenticate';
 
 const router = express.Router();
 
+/** GET /reports/stats/:targetId — report + block counts for a couple (lightweight). */
+router.get('/stats/:targetId', authenticate, async (req: any, res) => {
+  try {
+    const { targetId } = req.params;
+    const [reportCount, blockCount] = await Promise.all([
+      prisma.report.count({ where: { targetId } }),
+      prisma.couple.count({ where: { blocked: { has: targetId } } }),
+    ]);
+    return res.json({ success: true, data: { reportCount, blockCount } });
+  } catch (err: any) {
+    return res.status(500).json({ success: false, message: err.message });
+  }
+});
+
 router.post('/', authenticate, async (req: any, res) => {
     try {
         const { targetId, reason, details } = req.body;

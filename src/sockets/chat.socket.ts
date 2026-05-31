@@ -38,8 +38,9 @@ export const registerChatHandlers = (io: SocketIOServer, socket: Socket): void =
         const timestamp = new Date().toISOString();
         const clientMessageId = data.clientMessageId || `srv-${Date.now()}`;
 
-        const senderName = data.senderName || socket.userName || 'User';
-        const senderIndividualName = data.senderIndividualName || socket.userName || 'User';
+        const senderIndividualName =
+          data.senderIndividualName || data.senderName || socket.userName || 'User';
+        const senderName = senderIndividualName;
 
         // 1. IMMEDIATE BROADCAST (Ultra-low latency 🚀)
         const broadcastData = {
@@ -126,34 +127,16 @@ export const registerChatHandlers = (io: SocketIOServer, socket: Socket): void =
                  const recipientId = match.couple1Id === socket.coupleId ? match.couple2Id : match.couple1Id;
                  const me = match.couple1Id === socket.coupleId ? match.couple1 : match.couple2;
                  
-                 const existingUnread = await prisma.notification.findFirst({
-                   where: {
-                     recipientId: recipientId,
-                     type: 'message',
-                     read: false,
-                     data: { path: ['matchId'], equals: chatId } as any
-                   }
+                 const { upsertGroupedNotification } = await import('../services/notification.service');
+                 await upsertGroupedNotification({
+                   recipientId,
+                   senderId: socket.coupleId,
+                   type: 'message',
+                   title: `New Message from ${me?.profileName || 'Couple'}`,
+                   message: `You have new messages from ${me?.profileName || 'Couple'}`,
+                   groupKey: `message:match:${chatId}:${socket.coupleId}`,
+                   data: { matchId: chatId, coupleName: me?.profileName },
                  });
-
-                 if (!existingUnread) {
-                   const notif = await prisma.notification.create({
-                     data: {
-                       recipientId: recipientId,
-                       senderId: socket.coupleId,
-                       type: 'message',
-                       title: `New Message from ${me?.profileName || 'Couple'}`,
-                       message: `You have new messages from ${me?.profileName || 'Couple'}`,
-                       data: { matchId: chatId, coupleName: me?.profileName }
-                     }
-                   });
-                   emitRealtimeNotification(recipientId, {
-                     notificationId: notif.id,
-                     type: 'message',
-                     title: notif.title,
-                     message: notif.message,
-                     data: notif.data,
-                   });
-                 }
               }
             } else if (chatType === 'group') {
               const community = await prisma.community.findUnique({
@@ -163,34 +146,20 @@ export const registerChatHandlers = (io: SocketIOServer, socket: Socket): void =
               if (community) {
                  const others = community.members.filter((m: any) => m.coupleId !== socket.coupleId);
                  for (const member of others) {
-                    const existing = await prisma.notification.findFirst({
-                       where: {
-                          recipientId: member.coupleId,
-                          type: 'message',
-                          read: false,
-                          data: { path: ['communityId'], equals: chatId } as any
-                       }
+                    const { upsertGroupedNotification } = await import('../services/notification.service');
+                    await upsertGroupedNotification({
+                      recipientId: member.coupleId,
+                      senderId: socket.coupleId,
+                      type: 'message',
+                      title: `New in ${community.name}`,
+                      message: `New message in the group`,
+                      groupKey: `message:community:${community.id}:${socket.coupleId}`,
+                      data: {
+                        communityId: community.id,
+                        communityName: community.name,
+                        chatOnly: true,
+                      },
                     });
-
-                    if (!existing) {
-                       const notif = await prisma.notification.create({
-                          data: {
-                             recipientId: member.coupleId,
-                             senderId: socket.coupleId,
-                             type: 'message',
-                             title: `New in ${community.name}`,
-                             message: `New message in the group`,
-                             data: { communityId: community.id, communityName: community.name, chatOnly: true }
-                          }
-                       });
-                       emitRealtimeNotification(member.coupleId, {
-                         notificationId: notif.id,
-                         type: 'message',
-                         title: notif.title,
-                         message: notif.message,
-                         data: notif.data,
-                       });
-                    }
                  }
               }
             }

@@ -2,6 +2,7 @@ import { prisma } from '../lib/prisma';
 import { AppError } from '../utils/AppError';
 import { logger } from '../utils/logger';
 import { emitRealtimeNotification } from '../utils/realtime';
+import { upsertGroupedNotification } from './notification.service';
 
 export class CommunityService {
 
@@ -235,25 +236,31 @@ export class CommunityService {
 
     await prisma.communityJoinRequest.create({ data: { communityId, coupleId: me.coupleId } });
 
-    const admins = await prisma.communityAdmin.findMany({ where: { communityId } });
-    for (const admin of admins) {
-      const notification = await prisma.notification.create({
-        data: {
-          recipientId: admin.coupleId,
-          senderId: me.coupleId,
-          type: 'community',
-          title: 'New Join Request',
-          message: `${me.profileName} wants to join.`,
-          data: { communityId, requestId: me.coupleId }
-        }
-      });
+    const community = await prisma.community.findUnique({
+      where: { id: communityId },
+      select: { name: true },
+    });
 
-      emitRealtimeNotification(admin.coupleId, {
-        notificationId: notification.id,
-        type: notification.type,
-        title: notification.title,
-        message: notification.message,
-        data: notification.data,
+    const admins = await prisma.communityAdmin.findMany({ where: { communityId } });
+    const notificationData = {
+      communityId,
+      requestId: me.coupleId,
+      requestType: 'join',
+      requesterCoupleId: me.coupleId,
+      requesterName: me.profileName,
+      communityName: community?.name || 'Community',
+      primaryPhoto: me.primaryPhoto || null,
+    };
+
+    for (const admin of admins) {
+      await upsertGroupedNotification({
+        recipientId: admin.coupleId,
+        senderId: me.coupleId,
+        type: 'community',
+        title: 'New Join Request',
+        message: `${me.profileName} wants to join.`,
+        groupKey: `community:join:${communityId}:${me.coupleId}`,
+        data: notificationData,
       });
     }
 
@@ -266,6 +273,7 @@ export class CommunityService {
 
     await prisma.communityMember.deleteMany({ where: { communityId, coupleId: me.coupleId } });
     await prisma.communityAdmin.deleteMany({ where: { communityId, coupleId: me.coupleId } });
+    await prisma.communityJoinRequest.deleteMany({ where: { communityId, coupleId: me.coupleId } });
 
     // Ensure no old invitations linger after leaving
     await prisma.notification.deleteMany({
@@ -317,6 +325,15 @@ export class CommunityService {
 
     await prisma.communityJoinRequest.deleteMany({ where: { communityId, coupleId: targetId } });
 
+    await prisma.notification.deleteMany({
+      where: {
+        senderId: targetId,
+        type: 'community',
+        title: 'New Join Request',
+        data: { path: ['communityId'], equals: communityId } as any,
+      },
+    });
+
     if (decision === 'accept') {
        await prisma.communityMember.upsert({
            where: { communityId_coupleId: { communityId, coupleId: targetId } },
@@ -331,8 +348,8 @@ export class CommunityService {
              type: 'community',
              title: 'Request Accepted!',
              message: `You joined the community!`,
-             data: { communityId }
-          }
+             data: { communityId, requestType: 'accepted' },
+          },
        });
 
        emitRealtimeNotification(targetId, {

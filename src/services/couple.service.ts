@@ -229,6 +229,7 @@ export class CoupleService {
         };
         const optionLabelMap: Record<string, string> = {
           'q1-career': 'Building careers', 'q1-family': 'Family first', 'q1-settled': 'Newly settled', 'q1-living': 'Living it up',
+          'q1-growing': 'Growing together', 'q1-adventure': 'Always exploring',
           'q2-hosts': "The Hosts", 'q2-yes-couple': "The 'yes' couple", 'q2-planners': 'The Planners', 'q2-explorers': 'The Explorers',
           'q3-dinners-home': 'Dinners at home', 'q3-restaurants': 'Exploring new restaurants', 'q3-outdoor': 'Outdoor activities/nature',
           'q3-cultural': 'Cultural events/museums', 'q3-drinks': 'Casual drinks', 'q3-trips': 'Weekend trips/travel',
@@ -280,6 +281,8 @@ export class CoupleService {
       location?: { city?: string; country?: string };
       locationCity?: string;
       locationCountry?: string;
+      locationLatitude?: number;
+      locationLongitude?: number;
     },
     requestingUserId?: string
   ) {
@@ -301,7 +304,13 @@ export class CoupleService {
     if (incomingCountry !== undefined && incomingCountry !== null && String(incomingCountry).trim().length > 0) {
       updateData.locationCountry = String(incomingCountry).trim();
     }
-    
+    const lat = data.locationLatitude;
+    const lng = data.locationLongitude;
+    if (lat != null && lng != null && Number.isFinite(lat) && Number.isFinite(lng)) {
+      updateData.locationLatitude = lat;
+      updateData.locationLongitude = lng;
+    }
+
     // 1. Photos processing
     if (data.primaryPhotoBase64 && data.primaryPhotoBase64.length > 10) {
       updateData.primaryPhoto = data.primaryPhotoBase64.startsWith('data:') 
@@ -318,6 +327,10 @@ export class CoupleService {
     }
 
     // 2. Map preferences if provided
+    if (Array.isArray((data as any).activities)) {
+      updateData.activities = (data as any).activities;
+    }
+
     if (data.preferences) {
         if (data.preferences.meetingFrequency) updateData.meetingFrequency = data.preferences.meetingFrequency;
         if (data.preferences.socialVibes) updateData.socialVibes = data.preferences.socialVibes;

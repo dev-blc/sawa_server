@@ -2,6 +2,17 @@ import { prisma } from '../lib/prisma';
 import { AppError } from '../utils/AppError';
 import { logger } from '../utils/logger';
 import { emitRealtimeNotification } from '../utils/realtime';
+import {
+  upsertMatchConnectedNotification,
+  upsertMatchPendingNotification,
+} from './notification.service';
+import { distanceLabelBetween } from '../utils/geo';
+
+const COUPLE_GEO_SELECT = {
+  locationCity: true,
+  locationLatitude: true,
+  locationLongitude: true,
+} as const;
 
 export class MatchService {
   /**
@@ -59,7 +70,10 @@ export class MatchService {
         coupleId: true,
         profileName: true,
         primaryPhoto: true,
-        locationCity: true,
+        ...COUPLE_GEO_SELECT,
+        bio: true,
+        matchCriteria: true,
+        relationshipStatus: true,
         answers: {
           where: { questionId: 'q3' },
           select: { selectedOptionIds: true },
@@ -82,7 +96,10 @@ export class MatchService {
         profileName: c.profileName,
         primaryPhoto: c.primaryPhoto || 'https://images.unsplash.com/photo-1511285560929-80b456fea0bc?auto=format&fit=crop&w=400&q=80',
         location: c.locationCity || 'Unknown',
-        distance: Math.floor(Math.random() * 10) + 2 + ' km away',
+        bio: c.bio || undefined,
+        matchCriteria: c.matchCriteria || undefined,
+        relationshipStatus: c.relationshipStatus || undefined,
+        distance: distanceLabelBetween(me, c),
         tags,
         matchScore: Math.floor(Math.random() * 20) + 80,
         insights: [
@@ -157,33 +174,17 @@ export class MatchService {
         // Previously this returned early without any notification, silently dropping the request.
         (async () => {
           try {
-            const notification = await prisma.notification.create({
-              data: {
-                recipientId: targetCouple.coupleId,
-                senderId: me.coupleId,
-                type: 'match',
-                title: 'New Connection Request!',
-                message: `${me.profileName} wants to connect with you!`,
-                data: {
-                  matchId: updatedMatch.id,
-                  coupleId: me.coupleId,
-                  profileName: me.profileName,
-                  primaryPhoto: me.primaryPhoto,
-                  location: me.locationCity,
-                  bio: me.bio,
-                  tags: me.activities,
-                  vibes: me.socialVibes,
-                  matchCriteria: me.matchCriteria,
-                  isPending: true,
-                }
-              }
-            });
-            emitRealtimeNotification(targetCouple.coupleId, {
-              notificationId: notification.id,
-              type: notification.type,
-              title: notification.title,
-              message: notification.message,
-              data: notification.data,
+            await upsertMatchPendingNotification({
+              recipientId: targetCouple.coupleId,
+              senderId: me.coupleId,
+              matchId: updatedMatch.id,
+              profileName: me.profileName || 'Couple',
+              primaryPhoto: me.primaryPhoto,
+              location: me.locationCity,
+              bio: me.bio,
+              tags: me.activities,
+              vibes: me.socialVibes,
+              matchCriteria: me.matchCriteria,
             });
           } catch (err) {
             logger.error('[MatchService] Failed to notify skipped couple of new hello:', err);
@@ -208,80 +209,31 @@ export class MatchService {
           // Delete the original "New Connection Request" pending notifications for this match
           // so they no longer show "Say Hello Back" after accepting.
           // The new "You've Connected!" notifications created below replace them.
-          await prisma.$executeRaw`
-            DELETE FROM notifications
-            WHERE type = 'match'
-              AND data->>'matchId' = ${existingMatch.id}
-              AND data->>'isPending' = 'true'
-          `.catch(() => {}); // non-critical
-
-          await prisma.notification.createMany({
-            data: [
-              {
-                recipientId: me.coupleId,
-                senderId: targetCouple.coupleId,
-                type: 'match',
-                title: "You've Connected!",
-                message: `You connected with ${targetCouple.profileName}!`,
-                data: { 
-                  matchId: existingMatch.id, 
-                  coupleId: targetCouple.coupleId, 
-                  profileName: targetCouple.profileName,
-                  primaryPhoto: targetCouple.primaryPhoto,
-                  location: targetCouple.locationCity,
-                  bio: targetCouple.bio,
-                  tags: targetCouple.activities, // Use activities for tags
-                  vibes: targetCouple.socialVibes,
-                  matchCriteria: targetCouple.matchCriteria,
-                  isPending: false 
-                }
-              },
-              {
-                recipientId: targetCouple.coupleId,
-                senderId: me.coupleId,
-                type: 'match',
-                title: "You've Connected!",
-                message: `You connected with ${me.profileName}!`,
-                data: { 
-                  matchId: existingMatch.id, 
-                  coupleId: me.coupleId, 
-                  profileName: me.profileName,
-                  primaryPhoto: me.primaryPhoto,
-                  location: me.locationCity,
-                  bio: me.bio,
-                  tags: me.activities, // Use activities for tags
-                  vibes: me.socialVibes,
-                  matchCriteria: me.matchCriteria,
-                  isPending: false 
-                }
-              }
-            ]
+          await upsertMatchConnectedNotification({
+            recipientId: me.coupleId,
+            senderId: targetCouple.coupleId,
+            matchId: existingMatch.id,
+            coupleId: targetCouple.coupleId,
+            profileName: targetCouple.profileName || 'Couple',
+            primaryPhoto: targetCouple.primaryPhoto,
+            location: targetCouple.locationCity,
+            bio: targetCouple.bio,
+            tags: targetCouple.activities,
+            vibes: targetCouple.socialVibes,
+            matchCriteria: targetCouple.matchCriteria,
           });
-
-          emitRealtimeNotification(me.coupleId, {
-            type: 'match',
-            title: "You've Connected!",
-            message: `You connected with ${targetCouple.profileName}!`,
-            data: {
-              matchId: existingMatch.id,
-              coupleId: targetCouple.coupleId,
-              profileName: targetCouple.profileName,
-              coupleName: targetCouple.profileName,
-              isPending: false,
-            },
-          });
-
-          emitRealtimeNotification(targetCouple.coupleId, {
-            type: 'match',
-            title: "You've Connected!",
-            message: `You connected with ${me.profileName}!`,
-            data: {
-              matchId: existingMatch.id,
-              coupleId: me.coupleId,
-              profileName: me.profileName,
-              coupleName: me.profileName,
-              isPending: false,
-            },
+          await upsertMatchConnectedNotification({
+            recipientId: targetCouple.coupleId,
+            senderId: me.coupleId,
+            matchId: existingMatch.id,
+            coupleId: me.coupleId,
+            profileName: me.profileName || 'Couple',
+            primaryPhoto: me.primaryPhoto,
+            location: me.locationCity,
+            bio: me.bio,
+            tags: me.activities,
+            vibes: me.socialVibes,
+            matchCriteria: me.matchCriteria,
           });
 
           // Emit match:accepted so both couples' PrivateChatScreen lists refresh instantly
@@ -313,35 +265,17 @@ export class MatchService {
 
     (async () => {
       try {
-        const notification = await prisma.notification.create({
-          data: {
-            recipientId: targetCouple!.coupleId,
-            senderId: me!.coupleId,
-            type: 'match',
-            title: 'New Connection Request!',
-            message: `${me!.profileName} wants to connect with you!`,
-              data: { 
-                matchId: newMatch.id, 
-                _id: newMatch.id, 
-                coupleId: me!.coupleId, 
-                profileName: me!.profileName, 
-                primaryPhoto: me!.primaryPhoto,
-                location: me!.locationCity,
-                bio: me!.bio,
-                tags: me!.activities, // Use activities for tags
-                vibes: me!.socialVibes,
-                matchCriteria: me!.matchCriteria,
-                isPending: true 
-              }
-          }
-        });
-
-        emitRealtimeNotification(targetCouple!.coupleId, {
-          notificationId: notification.id,
-          type: notification.type,
-          title: notification.title,
-          message: notification.message,
-          data: notification.data,
+        await upsertMatchPendingNotification({
+          recipientId: targetCouple!.coupleId,
+          senderId: me!.coupleId,
+          matchId: newMatch.id,
+          profileName: me!.profileName || 'Couple',
+          primaryPhoto: me!.primaryPhoto,
+          location: me!.locationCity,
+          bio: me!.bio,
+          tags: me!.activities,
+          vibes: me!.socialVibes,
+          matchCriteria: me!.matchCriteria,
         });
       } catch (err) {
         logger.error(`[MatchService] Background notification failed:`, err);
@@ -396,15 +330,24 @@ export class MatchService {
   }
 
   async getIncomingRequests(requestingCoupleId: string, coupleMongoId?: string) {
-    let meId;
+    let meId: string;
+    let meGeo: { locationCity?: string | null; locationLatitude?: number | null; locationLongitude?: number | null };
     if (coupleMongoId) {
-      const meProfile = await prisma.couple.findUnique({ where: { id: coupleMongoId }, select: { coupleId: true } });
+      const meProfile = await prisma.couple.findUnique({
+        where: { id: coupleMongoId },
+        select: { coupleId: true, ...COUPLE_GEO_SELECT },
+      });
       if (!meProfile) throw new AppError('Profile not found', 404);
       meId = meProfile.coupleId;
+      meGeo = meProfile;
     } else {
-      const me = await prisma.couple.findUnique({ where: { coupleId: requestingCoupleId }, select: { id: true, coupleId: true } });
+      const me = await prisma.couple.findUnique({
+        where: { coupleId: requestingCoupleId },
+        select: { id: true, coupleId: true, ...COUPLE_GEO_SELECT },
+      });
       if (!me) throw new AppError('Profile not found', 404);
       meId = me.coupleId;
+      meGeo = me;
     }
 
     // Incoming requests: pending matches where the OTHER person initiated (actionById ≠ meId)
@@ -428,7 +371,7 @@ export class MatchService {
         profileName: otherCouple.profileName || 'Someone',
         primaryPhoto: otherCouple.primaryPhoto,
         location: otherCouple.locationCity || 'Unknown',
-        distance: Math.floor(Math.random() * 8) + 1 + 'km away',
+        distance: distanceLabelBetween(meGeo, otherCouple),
         status: 'pending',
         createdAt: m.createdAt
       };
@@ -437,14 +380,23 @@ export class MatchService {
 
   async getMatches(requestingCoupleId: string, coupleMongoId?: string) {
     let meId: string;
+    let meGeo: { locationCity?: string | null; locationLatitude?: number | null; locationLongitude?: number | null };
     if (coupleMongoId) {
-      const meProfile = await prisma.couple.findUnique({ where: { id: coupleMongoId }, select: { coupleId: true } });
+      const meProfile = await prisma.couple.findUnique({
+        where: { id: coupleMongoId },
+        select: { coupleId: true, ...COUPLE_GEO_SELECT },
+      });
       if (!meProfile) throw new AppError('Profile not found', 404);
       meId = meProfile.coupleId;
+      meGeo = meProfile;
     } else {
-      const me = await prisma.couple.findUnique({ where: { coupleId: requestingCoupleId }, select: { id: true, coupleId: true } });
+      const me = await prisma.couple.findUnique({
+        where: { coupleId: requestingCoupleId },
+        select: { id: true, coupleId: true, ...COUPLE_GEO_SELECT },
+      });
       if (!me) throw new AppError('Profile not found', 404);
       meId = me.coupleId;
+      meGeo = me;
     }
 
     const matches = await prisma.match.findMany({ 
@@ -455,8 +407,24 @@ export class MatchService {
         couple2Id: true,
         status: true,
         createdAt: true,
-        couple1: { select: { id: true, coupleId: true, profileName: true, primaryPhoto: true, locationCity: true } },
-        couple2: { select: { id: true, coupleId: true, profileName: true, primaryPhoto: true, locationCity: true } }
+        couple1: {
+          select: {
+            id: true,
+            coupleId: true,
+            profileName: true,
+            primaryPhoto: true,
+            ...COUPLE_GEO_SELECT,
+          },
+        },
+        couple2: {
+          select: {
+            id: true,
+            coupleId: true,
+            profileName: true,
+            primaryPhoto: true,
+            ...COUPLE_GEO_SELECT,
+          },
+        },
       }
     });
 
@@ -471,96 +439,103 @@ export class MatchService {
           profileName: otherCouple.profileName || 'Unknown Couple',
           primaryPhoto: otherCouple.primaryPhoto,
           location: otherCouple.locationCity || 'Unknown',
-          distance: Math.floor(Math.random() * 8) + 1 + 'km away',
+          distance: distanceLabelBetween(meGeo, otherCouple),
           status: m.status,
           createdAt: m.createdAt
         };
     }).filter(Boolean);
   }
 
-  async acceptMatch(requestingCoupleId: string, targetCoupleIdStr: string, coupleMongoId?: string, matchId?: string) {
-    // If the caller provides the exact matchId (from the notification data), use it directly
-    // to accept the correct pending match — avoids edge cases where actionById lookup picks
-    // the wrong match (e.g. when Kiran had also sent a pending hello to the same couple).
-    if (matchId) {
-      const me = coupleMongoId
-        ? await prisma.couple.findUnique({ where: { id: coupleMongoId }, select: { coupleId: true } })
-        : await prisma.couple.findUnique({ where: { coupleId: requestingCoupleId }, select: { coupleId: true } });
-      if (!me) throw new AppError('Profile not found', 404);
+  /** Accept an incoming pending match by id (used by notifications + accept endpoint). */
+  private async acceptPendingMatchRecord(
+    match: { id: string; actionById: string; couple1Id: string; couple2Id: string },
+    me: { coupleId: string },
+  ) {
+    const initiatorCoupleId = match.actionById;
+    const otherCoupleId =
+      match.couple1Id === me.coupleId ? match.couple2Id : match.couple1Id;
 
+    await prisma.match.update({
+      where: { id: match.id },
+      data: { status: 'accepted', actionById: me.coupleId },
+    });
+
+    const targetCouple = await prisma.couple.findUnique({
+      where: { coupleId: initiatorCoupleId },
+    });
+    const meCouple = await prisma.couple.findUnique({
+      where: { coupleId: me.coupleId },
+      select: { profileName: true, coupleId: true },
+    });
+
+    if (targetCouple && meCouple) {
+      const meFull = await prisma.couple.findUnique({ where: { coupleId: me.coupleId } });
+      await upsertMatchConnectedNotification({
+        recipientId: me.coupleId,
+        senderId: targetCouple.coupleId,
+        matchId: match.id,
+        coupleId: targetCouple.coupleId,
+        profileName: targetCouple.profileName || 'Couple',
+        primaryPhoto: targetCouple.primaryPhoto,
+        location: targetCouple.locationCity,
+        bio: targetCouple.bio,
+        tags: targetCouple.activities,
+        vibes: targetCouple.socialVibes,
+        matchCriteria: targetCouple.matchCriteria,
+      });
+      await upsertMatchConnectedNotification({
+        recipientId: targetCouple.coupleId,
+        senderId: me.coupleId,
+        matchId: match.id,
+        coupleId: me.coupleId,
+        profileName: meCouple.profileName || 'Couple',
+        primaryPhoto: meFull?.primaryPhoto,
+        location: meFull?.locationCity,
+        bio: meFull?.bio,
+        tags: meFull?.activities,
+        vibes: meFull?.socialVibes,
+        matchCriteria: meFull?.matchCriteria,
+      });
+
+      const io = (global as any).io;
+      if (io) {
+        io.to(`couple:${me.coupleId}`).emit('match:accepted', { matchId: match.id });
+        io.to(`couple:${targetCouple.coupleId}`).emit('match:accepted', { matchId: match.id });
+      }
+    }
+
+    return { isMatch: true, matchId: match.id, otherCoupleId };
+  }
+
+  async acceptMatch(requestingCoupleId: string, targetCoupleIdStr: string, coupleMongoId?: string, matchId?: string) {
+    const me = coupleMongoId
+      ? await prisma.couple.findUnique({ where: { id: coupleMongoId }, select: { coupleId: true } })
+      : await prisma.couple.findUnique({ where: { coupleId: requestingCoupleId }, select: { coupleId: true } });
+    if (!me) throw new AppError('Profile not found', 404);
+
+    // Prefer exact matchId from notification — avoids picking the wrong pending row.
+    if (matchId) {
       const match = await prisma.match.findUnique({ where: { id: matchId } });
       if (!match) {
-        // matchId not found, fall back to sayHello
         return this.sayHello(requestingCoupleId, targetCoupleIdStr, coupleMongoId);
       }
 
-      // Already accepted — return the existing matchId so client can open chat
+      const iAmInvolved =
+        match.couple1Id === me.coupleId || match.couple2Id === me.coupleId;
+      if (!iAmInvolved) {
+        return this.sayHello(requestingCoupleId, targetCoupleIdStr, coupleMongoId);
+      }
+
       if (match.status === 'accepted') {
         return { isMatch: true, matchId: match.id };
       }
 
-      if (match.status === 'pending' && match.actionById !== me.coupleId) {
-        // The other couple initiated — accept it
-        await prisma.match.update({
-          where: { id: match.id },
-          data: { status: 'accepted', actionById: me.coupleId }
-        });
-
-        const targetCouple = await prisma.couple.findUnique({
-          where: { coupleId: match.actionById }
-        });
-
-        // Delete old pending notifications and create connected ones
-        await prisma.$executeRaw`
-          DELETE FROM notifications
-          WHERE type = 'match'
-            AND data->>'matchId' = ${match.id}
-            AND data->>'isPending' = 'true'
-        `.catch(() => {});
-
-        if (targetCouple) {
-          await prisma.notification.createMany({
-            data: [
-              {
-                recipientId: me.coupleId,
-                senderId: targetCouple.coupleId,
-                type: 'match',
-                title: "You've Connected!",
-                message: `You connected with ${targetCouple.profileName}!`,
-                data: {
-                  matchId: match.id,
-                  coupleId: targetCouple.coupleId,
-                  profileName: targetCouple.profileName,
-                  isPending: false,
-                }
-              },
-              {
-                recipientId: targetCouple.coupleId,
-                senderId: me.coupleId,
-                type: 'match',
-                title: "You've Connected!",
-                message: `You connected with ${(await prisma.couple.findUnique({ where: { coupleId: me.coupleId }, select: { profileName: true } }))?.profileName}!`,
-                data: {
-                  matchId: match.id,
-                  coupleId: me.coupleId,
-                  isPending: false,
-                }
-              }
-            ]
-          }).catch(() => {});
-
-          const io = (global as any).io;
-          if (io) {
-            io.to(`couple:${me.coupleId}`).emit('match:accepted', { matchId: match.id });
-            io.to(`couple:${targetCouple.coupleId}`).emit('match:accepted', { matchId: match.id });
-          }
+      if (match.status === 'pending') {
+        if (match.actionById === me.coupleId) {
+          return { isMatch: false, reason: 'outgoing_pending' };
         }
-
-        return { isMatch: true, matchId: match.id };
+        return this.acceptPendingMatchRecord(match, me);
       }
-
-      // My own pending hello or unknown state — fall through to sayHello
-      return this.sayHello(requestingCoupleId, targetCoupleIdStr, coupleMongoId);
     }
 
     return this.sayHello(requestingCoupleId, targetCoupleIdStr, coupleMongoId);
