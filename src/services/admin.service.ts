@@ -405,8 +405,9 @@ export class AdminService {
         let targetName = 'Unknown';
         let targetType: 'user' | 'community' = 'user';
 
-        const cp = await (prisma.couple as any).findUnique({
-          where: { coupleId: blockedId },
+        // blocked[] may contain coupleId (UUID) OR Mongo id, check both
+        const cp = await (prisma.couple as any).findFirst({
+          where: { OR: [{ coupleId: blockedId }, { id: blockedId }] },
           select: { profileName: true },
         });
         if (cp) {

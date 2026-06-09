@@ -642,15 +642,22 @@ export class MatchService {
     });
     if (!target) throw new AppError('Target profile not found', 404);
 
-    // 1. Add to blocked list
-    await prisma.couple.update({
-      where: { coupleId: me.coupleId },
-      data: {
-        blocked: {
-          push: target.coupleId
+    // 1. Add to blocked list + create report record (so admin can see the block)
+    await Promise.all([
+      prisma.couple.update({
+        where: { coupleId: me.coupleId },
+        data: { blocked: { push: target.coupleId } }
+      }),
+      prisma.report.create({
+        data: {
+          reporterId: me.coupleId,
+          targetId: target.coupleId,
+          reason: 'Blocked user',
+          details: 'User blocked from app',
+          status: 'pending',
         }
-      }
-    });
+      }),
+    ]);
 
     // 2. Destroy matches permanently
     await prisma.match.deleteMany({
