@@ -464,7 +464,7 @@ export class CommunityService {
   async updateCommunity(
     requestingCoupleId: string,
     communityId: string,
-    data: { name?: string; description?: string; coverImageUrl?: string },
+    data: { name?: string; description?: string; coverImageUrl?: string; coverImageBase64?: string },
   ) {
     const me = await prisma.couple.findUnique({ where: { coupleId: requestingCoupleId } });
     if (!me) throw new AppError('Profile not found', 404);
@@ -477,7 +477,12 @@ export class CommunityService {
     const updateData: Record<string, any> = {};
     if (data.name?.trim()) updateData.name = data.name.trim();
     if (data.description !== undefined) updateData.description = data.description;
-    if (data.coverImageUrl !== undefined) updateData.coverImageUrl = data.coverImageUrl;
+    if (data.coverImageBase64 && data.coverImageBase64.length > 10) {
+      const prefix = data.coverImageBase64.startsWith('data:') ? '' : 'data:image/jpeg;base64,';
+      updateData.coverImageUrl = prefix + data.coverImageBase64;
+    } else if (data.coverImageUrl !== undefined) {
+      updateData.coverImageUrl = data.coverImageUrl;
+    }
 
     const community = await prisma.community.update({
       where: { id: communityId },

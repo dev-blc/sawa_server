@@ -104,12 +104,13 @@ export const inviteToCommunity = async (req: Request, res: Response): Promise<vo
 export const updateCommunity = async (req: Request, res: Response): Promise<void> => {
   const { coupleId } = req.user!;
   const { id } = req.params;
-  const { name, description, coverImageUrl } = req.body;
+  const { name, description, coverImageUrl, coverImageBase64 } = req.body;
 
   const community = await communityService.updateCommunity(coupleId!, id, {
     name,
     description,
     coverImageUrl,
+    coverImageBase64,
   });
 
   sendSuccess({ res, statusCode: 200, data: { community }, message: 'Community updated!' });
