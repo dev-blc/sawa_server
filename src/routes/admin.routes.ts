@@ -27,6 +27,7 @@ router.post(
   '/communities/:communityId/requests/:requestId/:decision',
   controller.processJoinRequestAsAdmin,
 );
+router.get('/blocks', controller.getBlocks);
 router.patch('/reports/:id', controller.resolveReport);
 router.post('/notifications', controller.sendNotification);
 router.post('/flush-database', controller.flushDatabase);

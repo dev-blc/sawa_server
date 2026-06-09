@@ -390,6 +390,52 @@ export class AdminService {
     return reportsWithTargets;
   }
 
+  async getBlocks() {
+    // Find all couples that have blocked at least one entity
+    const couples = await prisma.couple.findMany({
+      where: { blocked: { isEmpty: false } },
+      select: { coupleId: true, profileName: true, blocked: true },
+      orderBy: { coupleId: 'asc' },
+    });
+
+    // For each blocked ID, resolve whether it's a couple or community
+    const rows: any[] = [];
+    for (const c of couples) {
+      for (const blockedId of c.blocked) {
+        let targetName = 'Unknown';
+        let targetType: 'user' | 'community' = 'user';
+
+        const cp = await (prisma.couple as any).findUnique({
+          where: { coupleId: blockedId },
+          select: { profileName: true },
+        });
+        if (cp) {
+          targetName = cp.profileName || 'Anonymous Couple';
+          targetType = 'user';
+        } else {
+          const cm = await (prisma.community as any).findUnique({
+            where: { id: blockedId },
+            select: { name: true },
+          });
+          if (cm) {
+            targetName = cm.name;
+            targetType = 'community';
+          }
+        }
+
+        rows.push({
+          id: `${c.coupleId}:${blockedId}`,
+          blockerName: c.profileName || 'Unknown',
+          blockerCoupleId: c.coupleId,
+          targetName,
+          targetId: blockedId,
+          targetType,
+        });
+      }
+    }
+    return rows;
+  }
+
   async getChartData() {
     // Generate last 6 months growth data
     const data = [];

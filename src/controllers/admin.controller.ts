@@ -43,7 +43,7 @@ export class AdminController {
     try {
       logger.info('🛰️ Admin fetching dashboard data...');
       
-      const [stats, users, couples, communities, activities, prompts, reports, chartData, userLogs, communityLogs, cityDistribution] = await Promise.all([
+      const [stats, users, couples, communities, activities, prompts, reports, blocks, chartData, userLogs, communityLogs, cityDistribution] = await Promise.all([
         adminService.getStats(),
         adminService.getUsers(),
         adminService.getCouples(),
@@ -51,6 +51,7 @@ export class AdminController {
         adminService.getActivities(),
         adminService.getPrompts(),
         adminService.getReports(),
+        adminService.getBlocks(),
         adminService.getChartData(),
         adminService.getUserLogs(),
         adminService.getCommunityLogs(),
@@ -67,6 +68,7 @@ export class AdminController {
           activities,
           prompts,
           reports,
+          blocks,
           chartData,
           userLogs,
           communityLogs,
@@ -257,6 +259,15 @@ export class AdminController {
       });
     } catch (err: any) {
       logger.error('ADMIN: Database flush failed', { error: err.message });
+      res.status(500).json({ success: false, message: err.message });
+    }
+  }
+
+  async getBlocks(req: Request, res: Response) {
+    try {
+      const blocks = await adminService.getBlocks();
+      res.status(200).json({ success: true, data: { blocks } });
+    } catch (err: any) {
       res.status(500).json({ success: false, message: err.message });
     }
   }
