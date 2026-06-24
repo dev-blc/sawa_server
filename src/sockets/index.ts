@@ -73,9 +73,24 @@ export const createSocketServer = (httpServer: HTTPServer): SocketIOServer => {
       socket.userId = payload.userId;
       socket.coupleId = payload.coupleId;
 
-      const user = await prisma.user.findUnique({ where: { id: payload.userId } });
+      const user = await prisma.user.findUnique({
+        where: { id: payload.userId },
+        select: { name: true, role: true, coupleId: true },
+      });
       if (user) {
-        socket.userName = user.name || 'Unknown';
+        let resolvedName = user.name || '';
+        if (!resolvedName && user.coupleId) {
+          // Fall back to first name from couple profileName (e.g. "Kiran & Stella")
+          const couple = await prisma.couple.findUnique({
+            where: { coupleId: user.coupleId },
+            select: { profileName: true },
+          });
+          if (couple?.profileName) {
+            const parts = couple.profileName.split(/\s*&\s*/);
+            resolvedName = (user.role === 'partner' ? parts[1] : parts[0])?.trim() || '';
+          }
+        }
+        socket.userName = resolvedName || 'Unknown';
         socket.userRole = user.role;
       }
       next();

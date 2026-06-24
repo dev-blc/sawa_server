@@ -38,9 +38,15 @@ export const registerChatHandlers = (io: SocketIOServer, socket: Socket): void =
         const timestamp = new Date().toISOString();
         const clientMessageId = data.clientMessageId || `srv-${Date.now()}`;
 
-        logger.info(`[Socket:MSG] userId=${socket.userId} socket.userName="${socket.userName}" data.senderIndividualName="${data.senderIndividualName}" data.senderName="${data.senderName}"`);
+        const PLACEHOLDER_NAMES = new Set(['User', 'Me', 'Unknown', '']);
+        const clientName =
+          (!PLACEHOLDER_NAMES.has(data.senderIndividualName || '') && data.senderIndividualName) ||
+          (!PLACEHOLDER_NAMES.has(data.senderName || '') && data.senderName) ||
+          null;
         const senderIndividualName =
-          data.senderIndividualName || data.senderName || socket.userName || 'User';
+          clientName ||
+          (socket.userName && !PLACEHOLDER_NAMES.has(socket.userName) ? socket.userName : null) ||
+          'Me';
         const senderName = senderIndividualName;
 
         // 1. IMMEDIATE BROADCAST (Ultra-low latency 🚀)
