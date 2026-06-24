@@ -38,6 +38,7 @@ export const registerChatHandlers = (io: SocketIOServer, socket: Socket): void =
         const timestamp = new Date().toISOString();
         const clientMessageId = data.clientMessageId || `srv-${Date.now()}`;
 
+        logger.info(`[Socket:MSG] userId=${socket.userId} socket.userName="${socket.userName}" data.senderIndividualName="${data.senderIndividualName}" data.senderName="${data.senderName}"`);
         const senderIndividualName =
           data.senderIndividualName || data.senderName || socket.userName || 'User';
         const senderName = senderIndividualName;
