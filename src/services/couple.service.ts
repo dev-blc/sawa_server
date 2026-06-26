@@ -461,6 +461,20 @@ export class CoupleService {
     });
   }
 
+  // Lightweight public profile — skips communityMembers and answers.
+  // Used by getCoupleById (viewing another couple's profile card).
+  async getCoupleSummary(coupleId: string): Promise<any | null> {
+    const couple = await prisma.couple.findUnique({
+      where: { coupleId },
+      include: {
+        partner1: { select: { id: true, name: true, email: true, dob: true } },
+        partner2: { select: { id: true, name: true, email: true, dob: true } },
+      }
+    });
+    if (!couple) return null;
+    return this._formatCouple({ ...couple, communities: [] });
+  }
+
   async subscribe(coupleId: string) {
     return prisma.couple.update({
       where: { coupleId },

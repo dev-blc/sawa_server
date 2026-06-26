@@ -30,8 +30,10 @@ export const createApp = (): Application => {
   );
 
   // ─── Body Parsing ────────────────────────────────────────────────────────────
-  app.use(express.json({ limit: '50mb' }));
-  app.use(express.urlencoded({ extended: true, limit: '50mb' }));
+  // 10mb covers onboarding photo uploads (base64); most API calls are <1mb.
+  // Voice audio is sent as base64 via sockets (not HTTP), so 10mb is safe.
+  app.use(express.json({ limit: '10mb' }));
+  app.use(express.urlencoded({ extended: true, limit: '10mb' }));
 
   // ─── Compression ────────────────────────────────────────────────────────────
   app.use(compression());

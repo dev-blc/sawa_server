@@ -4,9 +4,24 @@ import { logger } from '../utils/logger';
 import { emitRealtimeNotification } from '../utils/realtime';
 import { upsertGroupedNotification } from './notification.service';
 
+// In-memory TTL cache for getAllCommunities — avoids repeated heavy queries
+// for the same user within 30 seconds. Invalidated on join/leave/create.
+const commListCache = new Map<string, { data: any[]; expiresAt: number }>();
+const COMM_CACHE_TTL_MS = 30_000;
+
+function commCacheKey(coupleId: string, city?: string) {
+  return `${coupleId}:${city ?? ''}`;
+}
+
 export class CommunityService {
 
   async getAllCommunities(requestingCoupleId: string, cityFilter?: string) {
+    // Serve from cache if still fresh
+    const cacheKey = commCacheKey(requestingCoupleId, cityFilter);
+    const cached = commListCache.get(cacheKey);
+    if (cached && Date.now() < cached.expiresAt) {
+      return cached.data;
+    }
     const me = await prisma.couple.findUnique({ where: { coupleId: requestingCoupleId } });
     if (!me) throw new AppError('Profile not found', 404);
 
@@ -57,7 +72,7 @@ export class CommunityService {
         .filter(Boolean),
     );
 
-    return comms.map((c: any) => {
+    const result = comms.map((c: any) => {
       const isMember = c.members.length > 0;
       const isAdmin = c.admins.length > 0;
       const isRequested = c.joinRequests.length > 0;
@@ -85,6 +100,17 @@ export class CommunityService {
         }))
       };
     });
+
+    // Store in cache
+    commListCache.set(cacheKey, { data: result, expiresAt: Date.now() + COMM_CACHE_TTL_MS });
+    return result;
+  }
+
+  // Invalidate all cache entries for a couple (call after join/leave/create/invite)
+  invalidateCommListCache(coupleId: string) {
+    for (const key of commListCache.keys()) {
+      if (key.startsWith(`${coupleId}:`)) commListCache.delete(key);
+    }
   }
 
   async getMyCommunities(requestingCoupleId: string) {
@@ -197,6 +223,7 @@ export class CommunityService {
       }
     }
 
+    this.invalidateCommListCache(requestingCoupleId);
     return { _id: community.id, id: community.id, name: community.name };
   }
 
@@ -264,6 +291,7 @@ export class CommunityService {
       });
     }
 
+    this.invalidateCommListCache(requestingCoupleId);
     return { status: 'requested' };
   }
 
@@ -299,9 +327,11 @@ export class CommunityService {
         prisma.communityJoinRequest.deleteMany({ where: { communityId } }),
         prisma.community.delete({ where: { id: communityId } })
       ]);
+      this.invalidateCommListCache(requestingCoupleId);
       return { status: 'deleted' };
     }
 
+    this.invalidateCommListCache(requestingCoupleId);
     return { status: 'left' };
   }
 

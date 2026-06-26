@@ -212,7 +212,8 @@ export const subscribe = async (req: Request, res: Response) => {
 
 export const getCoupleById = async (req: Request, res: Response) => {
   const { id } = req.params;
-  const couple = await coupleService.getCouple(id);
+  // Use lightweight summary — public profile view doesn't need communityMembers or answers
+  const couple = await coupleService.getCoupleSummary(id);
   if (!couple) {
     throw new AppError('Couple profile not found', 404);
   }

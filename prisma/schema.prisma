@@ -122,6 +122,7 @@ model CommunityMember {
   couple      Couple    @relation(fields: [coupleId], references: [coupleId])
 
   @@unique([communityId, coupleId])
+  @@index([coupleId])
   @@map("community_members")
 }
 
@@ -133,6 +134,7 @@ model CommunityAdmin {
   couple      Couple    @relation(fields: [coupleId], references: [coupleId])
 
   @@unique([communityId, coupleId])
+  @@index([coupleId])
   @@map("community_admins")
 }
 
@@ -144,6 +146,7 @@ model CommunityJoinRequest {
   couple      Couple    @relation(fields: [coupleId], references: [coupleId])
 
   @@unique([communityId, coupleId])
+  @@index([coupleId])
   @@map("community_join_requests")
 }
 
@@ -213,6 +216,7 @@ model Notification {
   sender      Couple?          @relation("Notification_sender", fields: [senderId], references: [coupleId])
 
   @@index([recipientId, read])
+  @@index([recipientId, type])
   @@index([createdAt])
   @@map("notifications")
 }
