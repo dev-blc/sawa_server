@@ -33,7 +33,12 @@ const start = async (): Promise<void> => {
     env.RENDER_EXTERNAL_URL ||
     (env.RAILWAY_PUBLIC_DOMAIN ? `https://${env.RAILWAY_PUBLIC_DOMAIN}` : undefined);
 
-  if (rawWakeupUrl) {
+  // In PM2 cluster mode every worker runs this file. Only let worker 0 (or a
+  // non-clustered process) run the wakeup ping so we don't fire N simultaneous
+  // pings for N workers.
+  const isPrimaryWorker = !process.env.pm_id || process.env.pm_id === '0';
+
+  if (rawWakeupUrl && isPrimaryWorker) {
     const wakeupBase = rawWakeupUrl.replace(/\/$/, ''); // strip trailing slash
     // Ping every 10 minutes — well within the 15-minute sleep window on free tiers
     const WAKEUP_INTERVAL = 10 * 60 * 1000;
