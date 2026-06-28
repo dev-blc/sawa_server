@@ -15,12 +15,7 @@ const envSchema = z.object({
   RATE_LIMIT_WINDOW_MS: z.string().default('900000').transform(Number),
   RATE_LIMIT_MAX: z.string().default('10').transform(Number),
   // Optional — only required if features are enabled
-  // Prefer REDIS_INTERNAL_URL when server and Redis are in the same Railway
-  // project (no proxy hop). Falls back to REDIS_URL for local dev.
   REDIS_URL: z.string().optional(),
-  REDIS_INTERNAL_URL: z.string().optional(),
-  // Prefer DATABASE_INTERNAL_URL in production (same Railway project, no proxy).
-  DATABASE_INTERNAL_URL: z.string().optional(),
   CLOUDINARY_CLOUD_NAME: z.string().optional(),
   CLOUDINARY_API_KEY: z.string().optional(),
   CLOUDINARY_API_SECRET: z.string().optional(),

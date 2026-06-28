@@ -21,11 +21,9 @@ let _redis: Redis | null = null;
 
 function getRedis(): Redis | null {
   if (_redis) return _redis;
-  // Prefer internal Railway URL (no proxy hop) when running in production.
-  const redisUrl = env.REDIS_INTERNAL_URL || env.REDIS_URL;
-  if (!redisUrl) return null;
+  if (!env.REDIS_URL) return null;
   try {
-    _redis = new Redis(redisUrl, { maxRetriesPerRequest: 1, lazyConnect: true });
+    _redis = new Redis(env.REDIS_URL!, { maxRetriesPerRequest: 1, lazyConnect: true });
     _redis.on('error', (err) => logger.warn('[cache] Redis error:', err.message));
     return _redis;
   } catch {
