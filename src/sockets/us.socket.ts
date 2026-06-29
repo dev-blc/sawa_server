@@ -117,44 +117,43 @@ export const registerUsHandlers = (io: SocketIOServer, socket: Socket): void => 
           senderUserId: userId,
           subtype: 'us_hug',
           title: `${senderName} sent you a hug 🤗`,
-          message: payload.message || 'Sending you a big warm hug!',
+          message: 'Warm hug heading your way',
         });
         pushTitle = `${senderName} sent you a hug 🤗`;
 
       } else if (payload.kind === 'date_request') {
-        // Save notification for the partner (receiver)
+        const actLabel = payload.activity ? payload.activity : 'a date';
         await saveUsNotification({
           coupleId,
           senderUserId: userId,
           subtype: 'us_date_plan',
-          title: `${senderName} wants to plan a date 📅`,
-          message: payload.message || `${senderName} sent you a date request!`,
+          title: `📅 Date request · ${actLabel}`,
+          message: payload.date ? `Wants to go out on ${payload.date} ✨` : 'Wants to plan something special ✨',
           extraData: { date: payload.date, rawDate: payload.rawDate, activity: payload.activity, kind: 'date_request' },
         });
-        pushTitle = `${senderName} wants to plan a date 📅`;
+        pushTitle = `${senderName} wants to plan ${actLabel} 📅`;
 
       } else if (payload.kind === 'date_accept') {
-        // Save notification for the original requester (sender of this event)
         await saveUsNotification({
           coupleId,
           senderUserId: userId,
           subtype: 'us_date_plan',
-          title: `${senderName} accepted your date request 🎉`,
-          message: payload.message || `${senderName} accepted! Get ready for ${payload.activity}.`,
+          title: '🎉 Date confirmed!',
+          message: `It's on the calendar 🗓️`,
           extraData: { date: payload.date, rawDate: payload.rawDate, activity: payload.activity, kind: 'date_accept' },
         });
-        pushTitle = `${senderName} accepted your date! 🎉`;
+        pushTitle = `${senderName} confirmed the date! 🎉`;
 
       } else if (payload.kind === 'date_reject') {
         await saveUsNotification({
           coupleId,
           senderUserId: userId,
           subtype: 'us_date_plan',
-          title: `${senderName} declined the date request`,
-          message: payload.message || `${senderName} couldn't make it this time.`,
+          title: '😔 Date declined',
+          message: 'Maybe next time 🙏',
           extraData: { kind: 'date_reject' },
         });
-        pushTitle = `${senderName} declined the date request`;
+        pushTitle = `${senderName} couldn't make it this time`;
 
       } else if (payload.kind === 'date_plan') {
         // Legacy fallback
@@ -203,7 +202,7 @@ export const registerUsHandlers = (io: SocketIOServer, socket: Socket): void => 
       senderUserId: userId,
       subtype: 'us_love',
       title: `${senderName} sent you love ❤️`,
-      message: 'Open the Us space to feel the love',
+      message: 'Thinking of you 💛',
     });
 
     const partnerId = await findPartnerId(userId, coupleId);
