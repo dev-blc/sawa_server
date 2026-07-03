@@ -47,7 +47,8 @@ async function saveUsNotification(params: {
     | 'us_missyou'
     | 'us_cheerup'
     | 'us_here'
-    | 'us_appreciate';
+    | 'us_appreciate'
+    | 'us_mood';
   title: string;
   message: string;
   extraData?: Record<string, unknown>;
@@ -292,6 +293,11 @@ export const registerUsHandlers = (io: SocketIOServer, socket: Socket): void => 
       message: 'Thinking of you 💛',
     });
 
+    // Tell the partner's Notifications screen to refresh right away.
+    io.to(`couple:${coupleId}`).except(socket.id).emit('notification:new', {
+      type: 'us_love',
+    });
+
     const partnerId = await findPartnerId(userId, coupleId);
     if (partnerId) {
       pushToUser(partnerId, {
@@ -329,9 +335,29 @@ export const registerUsHandlers = (io: SocketIOServer, socket: Socket): void => 
 
       io.to(`couple:${coupleId}`).except(socket.id).emit('us:feeling', feelingPayload);
 
+      const feelingLabel = payload.feeling || 'something';
+
+      // Persist an in-app notification so the mood change shows up in the
+      // partner's Notifications screen (sender is filtered out client-side).
+      await saveUsNotification({
+        coupleId,
+        senderUserId: userId,
+        subtype: 'us_mood',
+        title: `${senderFirstName} updated their mood`,
+        message: payload.note?.trim()
+          ? `Feeling ${feelingLabel} — "${payload.note.trim()}"`
+          : `They're feeling ${feelingLabel} right now`,
+        extraData: { feeling: payload.feeling },
+      });
+
+      // Tell the partner's Notifications screen to refresh right away.
+      io.to(`couple:${coupleId}`).except(socket.id).emit('notification:new', {
+        type: 'us_mood',
+        feeling: payload.feeling,
+      });
+
       const partnerId = await findPartnerId(userId, coupleId);
       if (partnerId) {
-        const feelingLabel = payload.feeling || 'something';
         pushToUser(partnerId, {
           title: `${senderFirstName} shared how they feel`,
           body: payload.note?.trim()
