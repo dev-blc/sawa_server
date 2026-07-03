@@ -55,13 +55,15 @@ export class OtpService {
       data: { phone, coupleId, otpCode: code, expiresAt },
     });
 
-    // Append Android SMS Retriever hash if configured so Android auto-detects the OTP.
-    // Format required by Google: message must end with "<#> {11-char-hash}"
-    const hashSuffix = ANDROID_APP_HASH ? `\n\n<#> ${ANDROID_APP_HASH}` : '';
-
-    const body = customMessage
-      ? customMessage.replace('{{code}}', code) + hashSuffix
-      : `[SAWA] Your verification code is: ${code}. Valid for ${OTP_EXPIRES_IN_MINUTES} minutes.${hashSuffix}`;
+    // Google SMS Retriever API format (must be < 140 bytes):
+    //   Line 1: starts with "<#> " followed by the message
+    //   Last line: the 11-character app hash, alone on its own line
+    // Without this exact format Android will NOT intercept the SMS.
+    const body = ANDROID_APP_HASH
+      ? `<#> [SAWA] Your code: ${code}. Valid ${OTP_EXPIRES_IN_MINUTES} min.\n${ANDROID_APP_HASH}`
+      : (customMessage
+          ? customMessage.replace('{{code}}', code)
+          : `[SAWA] Your verification code is: ${code}. Valid for ${OTP_EXPIRES_IN_MINUTES} minutes.`);
 
     try {
       await twilioClient.messages.create({ body, from: TWILIO_PHONE, to: formatPhoneE164(phone) });
