@@ -19,7 +19,7 @@ export const getNotifications = async (req: Request, res: Response): Promise<voi
       sender: { select: { id: true, profileName: true, primaryPhoto: true } }
     },
     orderBy: { createdAt: 'desc' },
-    take: 50
+    take: 200  // show up to 200 most-recent rows (server dedup collapses duplicates further)
   });
 
   const formatted = dedupeNotificationsForList(
