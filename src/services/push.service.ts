@@ -151,6 +151,8 @@ export const pushToCouple = async (
         notification: {
           sound: 'default',
           channelId: 'sawa_default',
+          icon: 'ic_notification',
+          color: '#5DBE8B',
         },
       },
       apns: {
@@ -241,7 +243,7 @@ export const pushToUser = async (
       android: {
         priority: 'high',
         collapseKey: payload.collapseKey,
-        notification: { sound: 'default', channelId: 'sawa_default' },
+        notification: { sound: 'default', channelId: 'sawa_default', icon: 'ic_notification', color: '#5DBE8B' },
       },
       apns: {
         payload: { aps: { sound: 'default', badge: 1 } },
