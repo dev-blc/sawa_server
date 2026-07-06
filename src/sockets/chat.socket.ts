@@ -3,7 +3,9 @@ import { SOCKET_EVENTS } from '../constants/socketEvents';
 import { logger } from '../utils/logger';
 import { prisma } from '../lib/prisma';
 import { getCoupleCommunityColor } from '../utils/communityColors';
-import { emitRealtimeNotification } from '../utils/realtime';
+// NOTE: chat push/realtime is handled via upsertGroupedNotification() in
+// notification.service (which internally calls emitRealtimeNotification →
+// pushToCouple). Do NOT emit here too or recipients get duplicate pushes.
 
 export const registerChatHandlers = (io: SocketIOServer, socket: Socket): void => {
   socket.on(SOCKET_EVENTS.CHAT_JOIN, (data: { chatId: string }) => {
