@@ -36,6 +36,11 @@ const envSchema = z.object({
   TWILIO_AUTH_TOKEN: z.string().optional(),
   TWILIO_PHONE_NUMBER: z.string().optional(),
   GROQ_API_KEY: z.string().min(1, 'GROQ_API_KEY is required'),
+  // Admin portal bootstrap. On startup the server upserts an admin user with
+  // these credentials so the admin dashboard login always works after a deploy.
+  // Override in Railway env vars for production security.
+  ADMIN_EMAIL: z.string().default('admin@gmail.com'),
+  ADMIN_PASSWORD: z.string().default('adminsawa'),
 });
 
 const _parsed = envSchema.safeParse(process.env);

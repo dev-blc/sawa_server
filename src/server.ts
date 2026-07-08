@@ -1,13 +1,20 @@
 import http from 'http';
 import { createApp } from './app';
 import { connectDB } from './config/db';
+import { bootstrapAdmin } from './config/bootstrapAdmin';
 import { createSocketServer } from './sockets/index';
 import { env } from './config/env';
 import { logger } from './utils/logger';
 
 const start = async (): Promise<void> => {
-  // 1. Connect to MongoDB
+  // 1. Connect to the database
   await connectDB();
+
+  // 1b. Ensure an admin account exists so the dashboard login works after
+  //     every deploy. Only the primary worker runs it (idempotent regardless).
+  if (!process.env.pm_id || process.env.pm_id === '0') {
+    await bootstrapAdmin();
+  }
 
   // 2. Create Express app
   const app = createApp();

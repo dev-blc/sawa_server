@@ -90,7 +90,7 @@ async function findPartnerIdAndPhoto(
         partner1Id: true,
         partner2Id: true,
         primaryPhoto: true,
-        photos: true,
+        secondaryPhotos: true,
       },
     });
     if (!couple) return { partnerId: null, senderPhoto: null };
@@ -102,7 +102,7 @@ async function findPartnerIdAndPhoto(
     // Use the couple's primary photo as the sender's avatar in push notifications.
     const senderPhoto: string | null =
       (couple.primaryPhoto as string | null) ??
-      ((couple.photos as string[] | null)?.[0] ?? null);
+      ((couple.secondaryPhotos as string[] | null)?.[0] ?? null);
 
     return { partnerId, senderPhoto };
   } catch (err: any) {
