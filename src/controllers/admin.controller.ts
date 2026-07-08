@@ -2,7 +2,7 @@ import { Request, Response } from 'express';
 import bcrypt from 'bcryptjs';
 import { prisma } from '../lib/prisma';
 import { AdminService } from '../services/admin.service';
-import { signAccessToken } from '../utils/jwt';
+import { signAccessToken, verifyAccessToken } from '../utils/jwt';
 import { logger } from '../utils/logger';
 
 const adminService = new AdminService();
@@ -39,15 +39,68 @@ export class AdminController {
     }
   }
 
+  /**
+   * Lazily serve a couple photo / community cover image. Authenticated via a
+   * `?token=` query param (an <img> tag cannot send an Authorization header).
+   * Keeps the big /admin/data payload free of multi-MB base64 blobs.
+   */
+  async getMedia(req: Request, res: Response) {
+    try {
+      const { kind, id } = req.params;
+      const token = String(req.query.token || '');
+      if (kind !== 'couple' && kind !== 'community') {
+        return res.status(400).send('Invalid media kind');
+      }
+      if (!token) return res.status(401).send('Missing token');
+
+      let payload: { userId: string };
+      try {
+        payload = verifyAccessToken(token);
+      } catch {
+        return res.status(401).send('Invalid token');
+      }
+      const requester = await prisma.user.findUnique({
+        where: { id: payload.userId },
+        select: { role: true },
+      });
+      if (!requester || requester.role !== 'admin') {
+        return res.status(403).send('Forbidden');
+      }
+
+      const raw = await adminService.getRawImage(kind, id);
+      if (!raw) return res.status(404).send('Not found');
+
+      // Already an external URL — just redirect to it.
+      if (raw.startsWith('http')) {
+        return res.redirect(raw);
+      }
+
+      const match = raw.match(/^data:([^;]+);base64,(.*)$/s);
+      if (!match) return res.status(415).send('Unsupported image format');
+
+      const buffer = Buffer.from(match[2], 'base64');
+      res.setHeader('Content-Type', match[1]);
+      res.setHeader('Cache-Control', 'private, max-age=86400, immutable');
+      return res.end(buffer);
+    } catch (err: any) {
+      logger.error('❌ Admin getMedia Error:', err.message);
+      return res.status(500).send('Media error');
+    }
+  }
+
   async getDashboardData(req: Request, res: Response) {
     try {
       logger.info('🛰️ Admin fetching dashboard data...');
-      
+
+      // Pass the caller's token so image fields become lazy media URLs
+      // (carrying the token in the query string) instead of inline base64.
+      const token = (req.headers.authorization || '').split(' ')[1];
+
       const [stats, users, couples, communities, activities, prompts, reports, blocks, chartData, userLogs, communityLogs, cityDistribution] = await Promise.all([
         adminService.getStats(),
-        adminService.getUsers(),
-        adminService.getCouples(),
-        adminService.getCommunities(),
+        adminService.getUsers(token),
+        adminService.getCouples(token),
+        adminService.getCommunities(token),
         adminService.getActivities(),
         adminService.getPrompts(),
         adminService.getReports(),

@@ -9,6 +9,11 @@ const controller = new AdminController();
 // Public admin login
 router.post('/login', controller.adminLogin);
 
+// Lazy media (couple photo / community cover). Self-authenticates via ?token=
+// query param because <img> tags cannot send an Authorization header. Must be
+// registered BEFORE the header-based adminAuth middleware.
+router.get('/media/:kind/:id', controller.getMedia);
+
 // Protected admin routes
 router.use(adminAuth);
 

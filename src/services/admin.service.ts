@@ -16,6 +16,34 @@ const isInactive = (lastActiveAt: Date | null | undefined): boolean => {
   return new Date(lastActiveAt).getTime() < cutoff;
 };
 
+/**
+ * Build an admin media URL that lazily serves an image (couple photo / community
+ * cover) instead of embedding multi-MB base64 blobs in the /admin/data payload.
+ * The dashboard renders these directly as <img src>, so the browser fetches &
+ * caches each image on demand. The token is carried in the query string because
+ * <img> cannot send an Authorization header.
+ */
+function adminMediaUrl(kind: 'couple' | 'community', id: string, token?: string): string {
+  const base = (process.env.APP_URL || '').replace(/\/$/, '');
+  const t = token ? `?token=${encodeURIComponent(token)}` : '';
+  return `${base}/api/v1/admin/media/${kind}/${encodeURIComponent(id)}${t}`;
+}
+
+/**
+ * Returns a lightweight image reference: if the stored value is an inline base64
+ * data URL, swap it for a lazy media URL; if it's already an http(s) URL, keep it.
+ */
+function imageRef(
+  kind: 'couple' | 'community',
+  id: string | null | undefined,
+  value: string | null | undefined,
+  token?: string,
+): string | null {
+  if (!value) return null;
+  if (id && value.startsWith('data:')) return adminMediaUrl(kind, id, token);
+  return value;
+}
+
 export class AdminService {
   async getStats() {
     const dayAgo = new Date(Date.now() - 24 * 60 * 60 * 1000);
@@ -52,7 +80,7 @@ export class AdminService {
     };
   }
 
-  async getUsers() {
+  async getUsers(token?: string) {
     const questionMap: Record<string, string> = {
       q1: 'Life Stage', q2: 'Couple Personality', q3: 'Favorite Activities',
       q4: 'Meeting Frequency', q5: 'What makes a good match', q6: 'Things to avoid',
@@ -106,7 +134,7 @@ export class AdminService {
         relationshipStatus: u.coupleProfile?.relationshipStatus ?? null,
         profile: u.coupleProfile ? {
           bio: u.coupleProfile.bio,
-          primaryPhoto: u.coupleProfile.primaryPhoto,
+          primaryPhoto: imageRef('couple', u.coupleId, u.coupleProfile.primaryPhoto, token),
           relationshipStatus: u.coupleProfile.relationshipStatus,
           answers: u.coupleProfile.answers.map(a => ({
             question: questionMap[a.questionId] || a.questionId,
@@ -117,7 +145,7 @@ export class AdminService {
     });
   }
 
-  async getCouples() {
+  async getCouples(token?: string) {
     const questionMap: Record<string, string> = {
       q1: 'Life Stage', q2: 'Couple Personality', q3: 'Favorite Activities',
       q4: 'Meeting Frequency', q5: 'What makes a good match', q6: 'Things to avoid',
@@ -172,7 +200,7 @@ export class AdminService {
         bannedAt: c.bannedAt,
         banReason: c.banReason,
         bio: c.bio,
-        primaryPhoto: c.primaryPhoto,
+        primaryPhoto: imageRef('couple', c.coupleId, c.primaryPhoto, token),
         partners: [
           c.partner1 ? {
             id: c.partner1.id,
@@ -193,6 +221,22 @@ export class AdminService {
         }))
       };
     });
+  }
+
+  /** Fetch the raw stored image (base64 data URL or http URL) for lazy serving. */
+  async getRawImage(kind: 'couple' | 'community', id: string): Promise<string | null> {
+    if (kind === 'couple') {
+      const c = await prisma.couple.findUnique({
+        where: { coupleId: id },
+        select: { primaryPhoto: true },
+      });
+      return c?.primaryPhoto ?? null;
+    }
+    const cm = await prisma.community.findUnique({
+      where: { id },
+      select: { coverImageUrl: true },
+    });
+    return cm?.coverImageUrl ?? null;
   }
 
   async getCityDistribution() {
@@ -300,7 +344,7 @@ export class AdminService {
     });
   }
 
-  async getCommunities() {
+  async getCommunities(token?: string) {
     const comms = await prisma.community.findMany({
       orderBy: { createdAt: 'desc' },
       include: {
@@ -316,25 +360,25 @@ export class AdminService {
       name: c.name,
       description: c.description,
       city: c.city,
-      coverImageUrl: c.coverImageUrl,
+      coverImageUrl: imageRef('community', c.id, c.coverImageUrl, token),
       tags: c.tags,
       category: c.tags?.[0] || c.city || 'General',
       memberCount: c.members.length,
       members: c.members.map(m => ({
         id: m.coupleId,
         name: m.couple.profileName || 'Anonymous',
-        photo: m.couple.primaryPhoto
+        photo: imageRef('couple', m.coupleId, m.couple.primaryPhoto, token)
       })),
       hosts: c.admins.map(a => ({
         id: a.coupleId,
         name: a.couple.profileName || 'Anonymous',
-        photo: a.couple.primaryPhoto
+        photo: imageRef('couple', a.coupleId, a.couple.primaryPhoto, token)
       })),
       pendingRequests: c.joinRequests.map(r => ({
         id: r.id,
         coupleId: r.coupleId,
         name: r.couple.profileName || 'Anonymous',
-        photo: r.couple.primaryPhoto,
+        photo: imageRef('couple', r.coupleId, r.couple.primaryPhoto, token),
       })),
       hasNoHost: c.admins.length === 0,
       growthRate: 0,
