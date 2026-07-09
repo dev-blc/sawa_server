@@ -59,7 +59,8 @@ export function coupleCoordinates(couple: {
     Number.isFinite(lat) &&
     Number.isFinite(lng) &&
     Math.abs(lat) <= 90 &&
-    Math.abs(lng) <= 180
+    Math.abs(lng) <= 180 &&
+    lat >= 6 && lat <= 38 && lng >= 68 && lng <= 98
   ) {
     // Only trust coordinates that snap to one of the cities the app serves.
     // This prevents emulator/test GPS (e.g. Mountain View, CA → ~13 900 km
