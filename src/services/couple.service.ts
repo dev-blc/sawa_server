@@ -308,15 +308,18 @@ export class CoupleService {
     const lat = data.locationLatitude;
     const lng = data.locationLongitude;
     if (lat != null && lng != null && Number.isFinite(lat) && Number.isFinite(lng)) {
-      // Only persist coordinates that resolve to a supported city. This blocks
-      // emulator defaults like Mountain View CA (37.4°N 122°W) from being
-      // written to the DB and showing as ~13 800 km in the discovery feed.
+      // Only persist coordinates that resolve to one of the cities the app
+      // serves. This blocks emulator / test-device GPS fixes (e.g. Mountain
+      // View, CA) from being written to the DB — those would later appear as
+      // ~13 900 km from Chennai and break every distance card in the feed.
       const derivedCity = cityFromCoords(lat, lng);
       if (derivedCity) {
         updateData.locationLatitude = lat;
         updateData.locationLongitude = lng;
         updateData.locationCity = derivedCity;
       }
+      // When coordinates don't resolve to a supported city (emulator, VPN, etc.)
+      // we still honour an explicit city name sent by the client if it's valid.
     }
 
     // 1. Photos processing
