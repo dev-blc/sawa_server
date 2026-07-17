@@ -266,8 +266,24 @@ export class AuthService {
     }
 
     // ── Normal flow ───────────────────────────────────────────────────────────
-    await otpService.generateAndStore(phone, user.coupleId || '');
-    return { coupleId: user.coupleId || '' };
+    // If the user row somehow has no coupleId (legacy / migration gap), try
+    // to find their couple via the Couple table's partner references before
+    // falling back to an empty string (which would cause loginVerifyOtp to
+    // generate a fresh UUID and create a new couple from scratch).
+    let resolvedCoupleId = user.coupleId;
+    if (!resolvedCoupleId) {
+      const linked = await prisma.couple.findFirst({
+        where: { OR: [{ partner1Id: user.id }, { partner2Id: user.id }] },
+        select: { coupleId: true },
+      });
+      resolvedCoupleId = linked?.coupleId ?? null;
+      if (resolvedCoupleId) {
+        // Repair the stale user row so future logins won't need this lookup.
+        await prisma.user.update({ where: { id: user.id }, data: { coupleId: resolvedCoupleId } });
+      }
+    }
+    await otpService.generateAndStore(phone, resolvedCoupleId || '');
+    return { coupleId: resolvedCoupleId || '' };
   }
 
   /**
@@ -298,12 +314,25 @@ export class AuthService {
       throw new AppError('No account found with this number.', 404, 'USER_NOT_FOUND');
     }
 
-    // Prefer the user's stored coupleId, fall back to the one stored with the OTP
-    // token, or generate a fresh one if both are missing (legacy accounts).
-    const coupleId = user.coupleId || result.coupleId || crypto.randomUUID();
+    // Resolve coupleId with priority:
+    //   1. The user row's own coupleId (most authoritative)
+    //   2. The coupleId stored with the OTP token (set during loginSendOtp)
+    //   3. A couple where this user is partner1 or partner2 (handles legacy rows)
+    //   4. A fresh UUID (absolute last resort — new account scenario)
+    let coupleId: string = user.coupleId || result.coupleId || '';
 
-    // Persist the coupleId back to the user row if it was missing
-    if (!user.coupleId) {
+    if (!coupleId) {
+      // Neither the user row nor the OTP token has a coupleId — look up via
+      // the Couple table's partner references to avoid creating a duplicate couple.
+      const linked = await prisma.couple.findFirst({
+        where: { OR: [{ partner1Id: user.id }, { partner2Id: user.id }] },
+        select: { coupleId: true },
+      });
+      coupleId = linked?.coupleId ?? crypto.randomUUID();
+    }
+
+    // Persist the coupleId back to the user row if it was missing or stale.
+    if (!user.coupleId || user.coupleId !== coupleId) {
       await prisma.user.update({ where: { id: user.id }, data: { coupleId } });
     }
 
