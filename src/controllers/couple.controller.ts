@@ -1,6 +1,7 @@
 import { Request, Response } from 'express';
 import { z } from 'zod';
 import { coupleService } from '../services/couple.service';
+import { prisma } from '../lib/prisma';
 import { sendSuccess } from '../utils/response';
 import { validate } from '../middleware/validate';
 import { AppError } from '../utils/AppError';
@@ -9,6 +10,40 @@ import {
   setCachedCoupleProfile,
   invalidateCoupleProfile,
 } from '../lib/cache';
+
+// ─── Onboarding step derivation ─────────────────────────────────────────────
+/**
+ * Derives the onboarding step a couple should resume from, based on what's
+ * already persisted in the DB. No extra DB fields required.
+ *
+ * Steps (in order):
+ *   OnboardingLanguage → ProfileSetup → StoryPhoto → Question →
+ *   PermissionRequest → Complete
+ */
+function deriveOnboardingStep(couple: {
+  profileName: string | null;
+  partner1Id: string | null;
+  primaryPhoto: string | null;
+  isProfileComplete: boolean;
+  answers: { id: string }[];
+}): string {
+  if (couple.isProfileComplete) return 'Complete';
+
+  // Answers saved → ready for PermissionRequest ("I'm in!" screen)
+  if (couple.answers && couple.answers.length > 0) return 'PermissionRequest';
+
+  // Primary photo saved → ready for Question
+  if (couple.primaryPhoto) return 'Question';
+
+  // Profile name set (not the default) AND partner linked → ready for StoryPhoto
+  const hasRealName = couple.profileName &&
+    couple.profileName !== 'Sawa Couple' &&
+    couple.profileName.trim().length > 0;
+  if (hasRealName && couple.partner1Id) return 'StoryPhoto';
+
+  // Nothing saved yet — start from language selection
+  return 'OnboardingLanguage';
+}
 
 // ─── Validation ─────────────────────────────────────────────────────────────
 
@@ -123,6 +158,58 @@ export const uploadPhotos = async (req: Request, res: Response) => {
   await invalidateCoupleProfile(coupleId!);
 
   sendSuccess({ res, statusCode: 200, message: 'Photos uploaded successfully' });
+};
+
+/**
+ * GET /api/v1/couples/onboarding/status
+ * Returns the step the couple should resume onboarding from, derived purely
+ * from the data already in the DB.  Safe to call on every login.
+ */
+export const getOnboardingStatus = async (req: Request, res: Response) => {
+  const { coupleId, userId } = req.user!;
+
+  const couple = await prisma.couple.findUnique({
+    where: { coupleId: coupleId! },
+    select: {
+      profileName: true,
+      partner1Id: true,
+      partner2Id: true,
+      primaryPhoto: true,
+      relationshipStatus: true,
+      isProfileComplete: true,
+      answers: { select: { id: true } },
+      partner1: { select: { id: true, name: true, dob: true, email: true } },
+      partner2: { select: { id: true, name: true, dob: true, email: true } },
+    },
+  });
+
+  if (!couple) {
+    throw new AppError('Couple not found', 404);
+  }
+
+  const step = deriveOnboardingStep(couple);
+
+  // Return partial profile data so the client can pre-fill onboarding forms
+  // after a reinstall without asking the user to retype everything.
+  const resumeData = {
+    step,
+    isComplete: couple.isProfileComplete,
+    profile: {
+      profileName: couple.profileName,
+      relationshipStatus: couple.relationshipStatus,
+      yourName: couple.partner1?.name ?? null,
+      yourDob: couple.partner1?.dob ?? null,
+      yourEmail: couple.partner1?.email ?? null,
+      partnerName: couple.partner2?.name ?? null,
+      partnerDob: couple.partner2?.dob ?? null,
+      partnerEmail: couple.partner2?.email ?? null,
+    },
+    hasPhoto: !!couple.primaryPhoto,
+    hasAnswers: (couple.answers?.length ?? 0) > 0,
+    userId,
+  };
+
+  sendSuccess({ res, data: resumeData });
 };
 
 /**

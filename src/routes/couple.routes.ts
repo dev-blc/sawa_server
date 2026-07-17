@@ -15,6 +15,7 @@ import {
   validateCompleteOnboarding,
   validateUpdateMyCouple,
   completeOnboarding,
+  getOnboardingStatus,
   getCoupleById,
   subscribe,
   deleteMyAccount,
@@ -43,6 +44,9 @@ router.delete('/blocks/communities', asyncHandler(unblockCommunity));
 
 // GET /api/v1/couples/:id
 router.get('/:id', asyncHandler(getCoupleById));
+
+// GET /api/v1/couples/onboarding/status
+router.get('/onboarding/status', asyncHandler(getOnboardingStatus));
 
 // POST /api/v1/couples/onboarding/profile
 router.post('/onboarding/profile', validateSetupProfile, asyncHandler(setupProfile));
