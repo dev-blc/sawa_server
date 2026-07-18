@@ -9,13 +9,16 @@
 //      worker B. So: no REDIS_URL  →  instances = 1.
 //
 //   2. Every worker owns its own Prisma pool (connection_limit=5, see
-//      src/lib/prisma.ts). Total Postgres connections = instances × 5, so we
-//      keep the default conservative (2 workers → 10 connections) and let ops
-//      scale up explicitly via WEB_CONCURRENCY once DB headroom is confirmed.
+//      src/lib/prisma.ts). Total Postgres connections = instances × 5. Postgres
+//      max_connections=100 (verified), so 4 workers → 20 connections (~20% of
+//      the pool) leaves ample headroom for admin/migrations/scripts.
 //
-// WEB_CONCURRENCY accepts a number or the string "max" (one worker per core).
+//   3. DO NOT use "max": Railway reports the HOST core count (os.cpus() === 48
+//      on this box), so "max" would spawn 48 workers → 240 DB connections +
+//      ~19 GB of max_memory_restart headroom. The default is a safe fixed 4;
+//      scale via WEB_CONCURRENCY only after confirming the plan's vCPU/RAM.
 const hasRedis = !!process.env.REDIS_URL;
-const instances = hasRedis ? (process.env.WEB_CONCURRENCY || 2) : 1;
+const instances = hasRedis ? (process.env.WEB_CONCURRENCY || 4) : 1;
 
 module.exports = {
   apps: [
