@@ -82,6 +82,10 @@ model Couple {
 
   @@index([coupleId])
   @@index([locationCity, isProfileComplete])
+  @@index([partner1Id])
+  @@index([partner2Id])
+  @@index([isProfileComplete, isOpenToMeeting, locationCity])
+  @@index([bannedAt])
   @@map("couples")
 }
 
@@ -250,6 +254,7 @@ model Prompt {
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
+  @@index([isActive, category])
   @@map("prompts")
 }
 
