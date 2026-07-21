@@ -442,13 +442,16 @@ export class AdminService {
   }
 
   async getPrompts() {
-    const list = await prisma.prompt.findMany({ orderBy: { createdAt: 'desc' } });
+    const list = await prisma.prompt.findMany({
+      orderBy: [{ sortOrder: 'asc' }, { createdAt: 'asc' }],
+    });
     return list.map(p => ({
       _id: p.id,
       id: p.id,
       title: p.text,
       question: p.text,
       category: p.category,
+      sortOrder: p.sortOrder,
       tags: [],
       active: p.isActive,
       createdAt: p.createdAt,
@@ -719,13 +722,35 @@ export class AdminService {
   }
 
   async addPrompt(text: string, category: string) {
-    return prisma.prompt.create({ data: { text, category } });
+    // Place new prompts at the end of their category's list
+    const last = await prisma.prompt.findFirst({
+      where: { category },
+      orderBy: { sortOrder: 'desc' },
+      select: { sortOrder: true },
+    });
+    const nextOrder = (last?.sortOrder ?? -1) + 1;
+    return prisma.prompt.create({ data: { text, category, sortOrder: nextOrder } });
   }
 
   async togglePrompt(id: string) {
     const p = await prisma.prompt.findUnique({ where: { id } });
     if (!p) throw new Error('Prompt not found');
     return prisma.prompt.update({ where: { id }, data: { isActive: !p.isActive } });
+  }
+
+  async editPrompt(id: string, text: string) {
+    const p = await prisma.prompt.findUnique({ where: { id } });
+    if (!p) throw new Error('Prompt not found');
+    return prisma.prompt.update({ where: { id }, data: { text } });
+  }
+
+  async reorderPrompts(ids: string[]) {
+    // ids is the desired order; update sortOrder for each
+    await prisma.$transaction(
+      ids.map((id, index) =>
+        prisma.prompt.update({ where: { id }, data: { sortOrder: index } })
+      )
+    );
   }
 
   async deletePrompt(id: string) {

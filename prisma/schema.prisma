@@ -251,10 +251,12 @@ model Prompt {
   text      String   @unique
   category  String   @default("chat_shortcut")
   isActive  Boolean  @default(true)
+  sortOrder Int      @default(0)
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
   @@index([isActive, category])
+  @@index([category, sortOrder])
   @@map("prompts")
 }
 

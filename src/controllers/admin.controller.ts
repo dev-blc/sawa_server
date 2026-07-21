@@ -234,6 +234,33 @@ export class AdminController {
     }
   }
 
+  async editPrompt(req: Request, res: Response) {
+    try {
+      const { id } = req.params;
+      const { title } = req.body;
+      if (!title || !title.trim()) {
+        return res.status(400).json({ success: false, message: 'title is required' });
+      }
+      const p = await adminService.editPrompt(id, title.trim());
+      res.status(200).json({ success: true, data: p });
+    } catch (err: any) {
+      res.status(500).json({ success: false, message: err.message });
+    }
+  }
+
+  async reorderPrompts(req: Request, res: Response) {
+    try {
+      const { ids } = req.body;
+      if (!Array.isArray(ids) || ids.length === 0) {
+        return res.status(400).json({ success: false, message: 'ids array is required' });
+      }
+      await adminService.reorderPrompts(ids);
+      res.status(200).json({ success: true });
+    } catch (err: any) {
+      res.status(500).json({ success: false, message: err.message });
+    }
+  }
+
   async deleteUser(req: Request, res: Response) {
     try {
       const { id } = req.params;
