@@ -152,15 +152,18 @@ router.post('/planned-dates', authenticate, async (req: Request, res: Response):
   const coupleId = req.user?.coupleId;
   if (!coupleId) { res.status(400).json({ success: false, error: 'Missing couple context' }); return; }
 
-  const { activity, date, rawDate, from, time, note } = req.body as Record<string, string>;
+  const { id, activity, date, rawDate, from, time, note } = req.body as Record<string, string>;
   if (!activity || !rawDate) { res.status(400).json({ success: false, error: 'activity and rawDate are required' }); return; }
 
   try {
     const key = `us:planned_dates:${coupleId}`;
     const raw = await cacheGet(key);
     const prev: any[] = raw ? JSON.parse(raw) : [];
-    const entry = { activity, date: date ?? rawDate, rawDate, from: from || 'Your partner', time, note };
-    const updated = [...prev.filter((p: any) => p.rawDate !== rawDate), entry];
+    // Unique id lets multiple plans live on the same day; upsert by id.
+    const entryId = id || `${rawDate}__${activity}__${time ?? ''}`;
+    const entry = { id: entryId, activity, date: date ?? rawDate, rawDate, from: from || 'Your partner', time, note };
+    const idOf = (p: any) => p.id ?? `${p.rawDate}__${p.activity}__${p.time ?? ''}`;
+    const updated = [...prev.filter((p: any) => idOf(p) !== entryId), entry];
     await cacheSet(key, JSON.stringify(updated), PLANNED_DATES_TTL);
     res.json({ success: true });
   } catch (err: any) {
@@ -189,19 +192,21 @@ router.get('/planned-dates', authenticate, async (req: Request, res: Response): 
 });
 
 /**
- * DELETE /api/v1/us/planned-dates/:rawDate
- * Remove a planned date by rawDate (YYYY-MM-DD).
+ * DELETE /api/v1/us/planned-dates/:id
+ * Remove a single planned date by its unique id. Falls back to matching rawDate
+ * so older clients (that delete by YYYY-MM-DD) keep working.
  */
-router.delete('/planned-dates/:rawDate', authenticate, async (req: Request, res: Response): Promise<void> => {
+router.delete('/planned-dates/:id', authenticate, async (req: Request, res: Response): Promise<void> => {
   const coupleId = req.user?.coupleId;
-  const { rawDate } = req.params;
-  if (!coupleId || !rawDate) { res.status(400).json({ success: false }); return; }
+  const { id } = req.params;
+  if (!coupleId || !id) { res.status(400).json({ success: false }); return; }
 
   try {
     const key = `us:planned_dates:${coupleId}`;
     const raw = await cacheGet(key);
     const prev: any[] = raw ? JSON.parse(raw) : [];
-    const updated = prev.filter((p: any) => p.rawDate !== rawDate);
+    const idOf = (p: any) => p.id ?? `${p.rawDate}__${p.activity}__${p.time ?? ''}`;
+    const updated = prev.filter((p: any) => idOf(p) !== id && p.rawDate !== id);
     await cacheSet(key, JSON.stringify(updated), PLANNED_DATES_TTL);
     res.json({ success: true });
   } catch (err: any) {

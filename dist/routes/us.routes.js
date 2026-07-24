@@ -134,7 +134,7 @@ router.post('/planned-dates', authenticate_1.authenticate, async (req, res) => {
         res.status(400).json({ success: false, error: 'Missing couple context' });
         return;
     }
-    const { activity, date, rawDate, from, time, note } = req.body;
+    const { id, activity, date, rawDate, from, time, note } = req.body;
     if (!activity || !rawDate) {
         res.status(400).json({ success: false, error: 'activity and rawDate are required' });
         return;
@@ -143,8 +143,11 @@ router.post('/planned-dates', authenticate_1.authenticate, async (req, res) => {
         const key = `us:planned_dates:${coupleId}`;
         const raw = await (0, cache_1.cacheGet)(key);
         const prev = raw ? JSON.parse(raw) : [];
-        const entry = { activity, date: date ?? rawDate, rawDate, from: from || 'Your partner', time, note };
-        const updated = [...prev.filter((p) => p.rawDate !== rawDate), entry];
+        // Unique id lets multiple plans live on the same day; upsert by id.
+        const entryId = id || `${rawDate}__${activity}__${time ?? ''}`;
+        const entry = { id: entryId, activity, date: date ?? rawDate, rawDate, from: from || 'Your partner', time, note };
+        const idOf = (p) => p.id ?? `${p.rawDate}__${p.activity}__${p.time ?? ''}`;
+        const updated = [...prev.filter((p) => idOf(p) !== entryId), entry];
         await (0, cache_1.cacheSet)(key, JSON.stringify(updated), PLANNED_DATES_TTL);
         res.json({ success: true });
     }
@@ -175,13 +178,14 @@ router.get('/planned-dates', authenticate_1.authenticate, async (req, res) => {
     }
 });
 /**
- * DELETE /api/v1/us/planned-dates/:rawDate
- * Remove a planned date by rawDate (YYYY-MM-DD).
+ * DELETE /api/v1/us/planned-dates/:id
+ * Remove a single planned date by its unique id. Falls back to matching rawDate
+ * so older clients (that delete by YYYY-MM-DD) keep working.
  */
-router.delete('/planned-dates/:rawDate', authenticate_1.authenticate, async (req, res) => {
+router.delete('/planned-dates/:id', authenticate_1.authenticate, async (req, res) => {
     const coupleId = req.user?.coupleId;
-    const { rawDate } = req.params;
-    if (!coupleId || !rawDate) {
+    const { id } = req.params;
+    if (!coupleId || !id) {
         res.status(400).json({ success: false });
         return;
     }
@@ -189,7 +193,8 @@ router.delete('/planned-dates/:rawDate', authenticate_1.authenticate, async (req
         const key = `us:planned_dates:${coupleId}`;
         const raw = await (0, cache_1.cacheGet)(key);
         const prev = raw ? JSON.parse(raw) : [];
-        const updated = prev.filter((p) => p.rawDate !== rawDate);
+        const idOf = (p) => p.id ?? `${p.rawDate}__${p.activity}__${p.time ?? ''}`;
+        const updated = prev.filter((p) => idOf(p) !== id && p.rawDate !== id);
         await (0, cache_1.cacheSet)(key, JSON.stringify(updated), PLANNED_DATES_TTL);
         res.json({ success: true });
     }

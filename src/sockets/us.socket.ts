@@ -117,7 +117,7 @@ export const registerUsHandlers = (io: SocketIOServer, socket: Socket): void => 
   // ── us:nudge ──────────────────────────────────────────────────────────
   socket.on(
     'us:nudge',
-    async (payload: { kind: string; message: string; at: string; date?: string; rawDate?: string; activity?: string; time?: string; note?: string; planBy?: string }) => {
+    async (payload: { kind: string; message: string; at: string; id?: string; date?: string; rawDate?: string; activity?: string; time?: string; note?: string; planBy?: string }) => {
       if (!userId || !coupleId) return;
 
       logger.info(`[UsSocket] nudge(${payload.kind}) from ${userId} (${userName}) in couple ${coupleId}`);
@@ -130,6 +130,9 @@ export const registerUsHandlers = (io: SocketIOServer, socket: Socket): void => 
         message: payload.message,
         at: payload.at,
         from: senderName,
+        // Unique id survives the relay so both partners converge on the same entry
+        // (enables multiple plans per day + independent delete).
+        id: payload.id,
         // Name of whoever originally PLANNED the date — survives the relay so the
         // partner's calendar always shows "Planned by <real name>", not "Partner".
         planBy: payload.planBy,
@@ -174,7 +177,7 @@ export const registerUsHandlers = (io: SocketIOServer, socket: Socket): void => 
           subtype: 'us_date_plan',
           title: `Date request · ${actLabel}`,
           message: payload.note ? `${dateMsg.replace(' ✨', '')} — "${payload.note}"` : dateMsg.replace(' ✨', ''),
-          extraData: { date: payload.date, rawDate: payload.rawDate, activity: payload.activity, time: payload.time, note: payload.note, kind: 'date_request', planBy: payload.planBy || senderName },
+          extraData: { id: payload.id, date: payload.date, rawDate: payload.rawDate, activity: payload.activity, time: payload.time, note: payload.note, kind: 'date_request', planBy: payload.planBy || senderName },
         });
         pushTitle = `${senderName} want to plan ${actLabel} 📅`;
 
@@ -185,7 +188,7 @@ export const registerUsHandlers = (io: SocketIOServer, socket: Socket): void => 
           subtype: 'us_date_plan',
           title: '🎉 Date confirmed!',
           message: `It's on the calendar 🗓️`,
-          extraData: { date: payload.date, rawDate: payload.rawDate, activity: payload.activity, kind: 'date_accept' },
+          extraData: { id: payload.id, date: payload.date, rawDate: payload.rawDate, activity: payload.activity, kind: 'date_accept' },
         });
         pushTitle = `${senderName} confirmed the date! 🎉`;
 
