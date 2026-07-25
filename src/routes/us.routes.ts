@@ -4,6 +4,7 @@ import { cacheGet, cacheSet, cacheInvalidate, invalidateNotifUnreadCount } from 
 import { prisma } from '../lib/prisma';
 import { logger } from '../utils/logger';
 import { pushToUser } from '../services/push.service';
+import { cycleKey, CYCLE_INDEX_KEY, CYCLE_TTL, type CycleSettings } from '../jobs/cycleNotifier';
 
 const router = Router();
 
@@ -483,6 +484,110 @@ router.delete('/fridge-notes/:id', authenticate, async (req: Request, res: Respo
   } catch (err: any) {
     logger.warn(`[UsRoutes] fridge-notes DELETE error: ${err.message}`);
     res.status(500).json({ success: false });
+  }
+});
+
+// ═══ Menstrual cycle (Flo-style) ════════════════════════════════════════════
+// The partner-role account (the girlfriend) sets: last period start date,
+// period length and cycle length. Both partners can view; predictions are
+// computed client-side with the same math the notifier job uses.
+
+/**
+ * GET /api/v1/us/cycle
+ * Returns the couple's cycle settings, or null when not set up yet.
+ */
+router.get('/cycle', authenticate, async (req: Request, res: Response): Promise<void> => {
+  const coupleId = req.user?.coupleId;
+  if (!coupleId) { res.json({ success: true, data: null }); return; }
+  try {
+    const raw = await cacheGet(cycleKey(coupleId));
+    res.json({ success: true, data: raw ? JSON.parse(raw) : null });
+  } catch (err: any) {
+    logger.warn(`[UsRoutes] cycle GET error: ${err.message}`);
+    res.json({ success: true, data: null });
+  }
+});
+
+/**
+ * POST /api/v1/us/cycle
+ * Saves cycle settings. Only the partner-role account may set them.
+ * Notifies the primary partner that the cycle calendar was shared.
+ */
+router.post('/cycle', authenticate, async (req: Request, res: Response): Promise<void> => {
+  const coupleId = req.user?.coupleId;
+  const myUserId = req.user?.userId;
+  if (!coupleId || !myUserId) { res.status(400).json({ success: false, error: 'Missing couple context' }); return; }
+
+  const { lastPeriodStart, periodLength, cycleLength } = req.body as {
+    lastPeriodStart?: string; periodLength?: number; cycleLength?: number;
+  };
+  if (!lastPeriodStart || !/^\d{4}-\d{2}-\d{2}$/.test(lastPeriodStart)) {
+    res.status(400).json({ success: false, error: 'lastPeriodStart (YYYY-MM-DD) is required' });
+    return;
+  }
+  const pLen = Math.min(10, Math.max(2, Number(periodLength) || 5));
+  const cLen = Math.min(45, Math.max(21, Number(cycleLength) || 28));
+
+  try {
+    const me = await prisma.user.findUnique({ where: { id: myUserId }, select: { name: true, role: true } });
+    if (me?.role !== 'partner') {
+      res.status(403).json({ success: false, error: 'Only your partner can set the cycle' });
+      return;
+    }
+
+    const { partnerId, senderName } = await getPartnerAndSender(myUserId, coupleId);
+
+    const settings: CycleSettings = {
+      lastPeriodStart,
+      periodLength: pLen,
+      cycleLength: cLen,
+      updatedBy: myUserId,
+      updatedByName: senderName,
+      updatedAt: new Date().toISOString(),
+    };
+    await cacheSet(cycleKey(coupleId), JSON.stringify(settings), CYCLE_TTL);
+
+    // Register this couple with the daily notifier job.
+    const rawIndex = await cacheGet(CYCLE_INDEX_KEY);
+    const index: string[] = rawIndex ? JSON.parse(rawIndex) : [];
+    if (!index.includes(coupleId)) {
+      index.push(coupleId);
+      await cacheSet(CYCLE_INDEX_KEY, JSON.stringify(index), CYCLE_TTL);
+    }
+
+    // Tell the primary partner the calendar is ready.
+    await prisma.notification.create({
+      data: {
+        recipientId: coupleId,
+        senderId: coupleId,
+        type: 'system',
+        title: `🌸 ${senderName} shared her cycle calendar`,
+        message: 'Tap the calendar on your Us page to see it',
+        data: { subtype: 'us_cycle', senderUserId: myUserId, navigate: 'UsSpace' },
+        read: false,
+      },
+    });
+    await invalidateNotifUnreadCount(coupleId);
+
+    const io = (global as any).io;
+    if (io) {
+      io.to(`couple:${coupleId}`).emit('us:cycle:updated', settings);
+      io.to(`couple:${coupleId}`).emit('notification:new', { type: 'us_cycle' });
+    }
+
+    if (partnerId) {
+      pushToUser(partnerId, {
+        title: `🌸 ${senderName} shared her cycle calendar`,
+        body: 'Tap to see it and be there for her',
+        data: { type: 'us_cycle', navigate: 'Notifications' },
+        collapseKey: 'us_cycle',
+      }).catch(() => null);
+    }
+
+    res.json({ success: true, data: settings });
+  } catch (err: any) {
+    logger.warn(`[UsRoutes] cycle POST error: ${err.message}`);
+    res.status(500).json({ success: false, error: 'Failed to save cycle' });
   }
 });
 

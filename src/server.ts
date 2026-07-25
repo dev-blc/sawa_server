@@ -3,6 +3,7 @@ import { createApp } from './app';
 import { connectDB } from './config/db';
 import { bootstrapAdmin } from './config/bootstrapAdmin';
 import { createSocketServer } from './sockets/index';
+import { startCycleNotifier } from './jobs/cycleNotifier';
 import { env } from './config/env';
 import { logger } from './utils/logger';
 
@@ -25,6 +26,11 @@ const start = async (): Promise<void> => {
   // 4. Attach Socket.io
   const io = createSocketServer(httpServer);
   (global as any).io = io;
+
+  // 4b. Cycle nudges for the primary partner — one worker only.
+  if (!process.env.pm_id || process.env.pm_id === '0') {
+    startCycleNotifier();
+  }
 
   // 5. Start listening
   httpServer.listen(env.PORT, () => {
