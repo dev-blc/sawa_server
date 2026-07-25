@@ -95,7 +95,7 @@ function messagesFor(milestone: Milestone, girl: string, boy: string): { title: 
   }
 }
 
-async function runCheck(): Promise<void> {
+export async function runCheck(): Promise<void> {
   const { dateStr, hour } = istNow();
   // Quiet hours — only nudge between 08:00 and 21:00 IST.
   if (hour < 8 || hour >= 21) return;
