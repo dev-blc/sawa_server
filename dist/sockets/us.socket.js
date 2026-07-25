@@ -9,6 +9,8 @@ const cache_1 = require("../lib/cache");
 const feelingKey = (coupleId, userId) => `us:feeling:${coupleId}:${userId}`;
 /** Redis key for the couple's game scoreboard: { [userId]: wins }. TTL 1 year. */
 const gamePointsKey = (coupleId) => `us:game_points:${coupleId}`;
+/** Redis key for the current win streak: { userId, count }. TTL 1 year. */
+const gameStreakKey = (coupleId) => `us:game_streak:${coupleId}`;
 const GAME_POINTS_TTL = 365 * 24 * 60 * 60;
 /**
  * US Space Socket Handlers
@@ -431,8 +433,22 @@ const registerUsHandlers = (io, socket) => {
                 const pts = raw ? JSON.parse(raw) : {};
                 pts[payload.winnerUserId] = (pts[payload.winnerUserId] ?? 0) + 1;
                 await (0, cache_1.cacheSet)(gamePointsKey(coupleId), JSON.stringify(pts), GAME_POINTS_TTL);
-                // Broadcast the fresh scoreboard to BOTH partners.
-                io.to(`couple:${coupleId}`).emit('us:game:points', { points: pts });
+                // Win streak — consecutive wins by the same partner. A win by the
+                // other partner resets the streak to 1 for them.
+                let streak = { userId: payload.winnerUserId, count: 1 };
+                try {
+                    const rawStreak = await (0, cache_1.cacheGet)(gameStreakKey(coupleId));
+                    if (rawStreak) {
+                        const prev = JSON.parse(rawStreak);
+                        if (prev?.userId === payload.winnerUserId) {
+                            streak = { userId: prev.userId, count: (prev.count ?? 0) + 1 };
+                        }
+                    }
+                }
+                catch { /* start a fresh streak */ }
+                await (0, cache_1.cacheSet)(gameStreakKey(coupleId), JSON.stringify(streak), GAME_POINTS_TTL);
+                // Broadcast the fresh scoreboard + streak to BOTH partners.
+                io.to(`couple:${coupleId}`).emit('us:game:points', { points: pts, streak });
             }
         }
         catch (err) {

@@ -10,6 +10,8 @@ const feelingKey = (coupleId: string, userId: string) =>
 
 /** Redis key for the couple's game scoreboard: { [userId]: wins }. TTL 1 year. */
 const gamePointsKey = (coupleId: string) => `us:game_points:${coupleId}`;
+/** Redis key for the current win streak: { userId, count }. TTL 1 year. */
+const gameStreakKey = (coupleId: string) => `us:game_streak:${coupleId}`;
 const GAME_POINTS_TTL = 365 * 24 * 60 * 60;
 
 /**
@@ -497,8 +499,23 @@ export const registerUsHandlers = (io: SocketIOServer, socket: Socket): void => 
         const pts: Record<string, number> = raw ? JSON.parse(raw) : {};
         pts[payload.winnerUserId] = (pts[payload.winnerUserId] ?? 0) + 1;
         await cacheSet(gamePointsKey(coupleId), JSON.stringify(pts), GAME_POINTS_TTL);
-        // Broadcast the fresh scoreboard to BOTH partners.
-        io.to(`couple:${coupleId}`).emit('us:game:points', { points: pts });
+
+        // Win streak — consecutive wins by the same partner. A win by the
+        // other partner resets the streak to 1 for them.
+        let streak = { userId: payload.winnerUserId, count: 1 };
+        try {
+          const rawStreak = await cacheGet(gameStreakKey(coupleId));
+          if (rawStreak) {
+            const prev = JSON.parse(rawStreak);
+            if (prev?.userId === payload.winnerUserId) {
+              streak = { userId: prev.userId, count: (prev.count ?? 0) + 1 };
+            }
+          }
+        } catch { /* start a fresh streak */ }
+        await cacheSet(gameStreakKey(coupleId), JSON.stringify(streak), GAME_POINTS_TTL);
+
+        // Broadcast the fresh scoreboard + streak to BOTH partners.
+        io.to(`couple:${coupleId}`).emit('us:game:points', { points: pts, streak });
       }
     } catch (err: any) {
       logger.warn(`[UsSocket] game result failed: ${err.message}`);

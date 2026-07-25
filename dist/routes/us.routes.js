@@ -464,21 +464,29 @@ router.delete('/fridge-notes/:id', authenticate_1.authenticate, async (req, res)
 });
 /**
  * GET /api/v1/us/game/points
- * Tic-Tac-Toe scoreboard for the couple: { [userId]: wins }.
+ * Tic-Tac-Toe scoreboard for the couple:
+ *   { points: { [userId]: wins }, streak: { userId, count } | null }
  */
 router.get('/game/points', authenticate_1.authenticate, async (req, res) => {
     const coupleId = req.user?.coupleId;
     if (!coupleId) {
-        res.json({ success: true, data: {} });
+        res.json({ success: true, data: { points: {}, streak: null } });
         return;
     }
     try {
         const raw = await (0, cache_1.cacheGet)(`us:game_points:${coupleId}`);
-        res.json({ success: true, data: raw ? JSON.parse(raw) : {} });
+        const rawStreak = await (0, cache_1.cacheGet)(`us:game_streak:${coupleId}`);
+        res.json({
+            success: true,
+            data: {
+                points: raw ? JSON.parse(raw) : {},
+                streak: rawStreak ? JSON.parse(rawStreak) : null,
+            },
+        });
     }
     catch (err) {
         logger_1.logger.warn(`[UsRoutes] game points GET error: ${err.message}`);
-        res.json({ success: true, data: {} });
+        res.json({ success: true, data: { points: {}, streak: null } });
     }
 });
 /**
