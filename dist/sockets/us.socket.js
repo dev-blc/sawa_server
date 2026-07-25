@@ -7,6 +7,9 @@ const push_service_1 = require("../services/push.service");
 const cache_1 = require("../lib/cache");
 /** Redis key for a user's last shared feeling. TTL 7 days. */
 const feelingKey = (coupleId, userId) => `us:feeling:${coupleId}:${userId}`;
+/** Redis key for the couple's game scoreboard: { [userId]: wins }. TTL 1 year. */
+const gamePointsKey = (coupleId) => `us:game_points:${coupleId}`;
+const GAME_POINTS_TTL = 365 * 24 * 60 * 60;
 /**
  * US Space Socket Handlers
  * ─────────────────────────────────────────────────────────────────────────
@@ -333,6 +336,107 @@ const registerUsHandlers = (io, socket) => {
                 },
                 collapseKey: 'us_feeling',
             }).catch(() => null);
+        }
+    });
+    // ═══ Tic-Tac-Toe — real-time couple game ═════════════════════════════════
+    // The server is a thin, fast relay: moves are forwarded to the partner's
+    // socket immediately. It also owns the persistent scoreboard in Redis and
+    // the challenge notification (in-app + push) so an offline partner can join
+    // from their notification tray.
+    // ── us:game:challenge — invite the partner to a match ──────────────────
+    socket.on('us:game:challenge', async (payload) => {
+        if (!userId || !coupleId || !payload?.gameId)
+            return;
+        const senderName = firstName(userName || 'Your partner');
+        logger_1.logger.info(`[UsSocket] game challenge ${payload.gameId} from ${userId} in couple ${coupleId}`);
+        // 1. Instant relay so an online partner sees the invite immediately.
+        io.to(`couple:${coupleId}`).except(socket.id).emit('us:game:challenge', {
+            gameId: payload.gameId,
+            from: senderName,
+            fromUserId: userId,
+            at: new Date().toISOString(),
+        });
+        // 2. In-app notification — tapping it deep-links into the game.
+        await saveUsNotification({
+            coupleId,
+            senderUserId: userId,
+            subtype: 'us_game_challenge',
+            title: `${senderName} challenged you to Tic-Tac-Toe 🎮`,
+            message: 'Tap to accept and play!',
+            extraData: { gameId: payload.gameId },
+        });
+        io.to(`couple:${coupleId}`).except(socket.id).emit('notification:new', { type: 'us_game_challenge' });
+        // 3. Push — only to the partner's device.
+        const { partnerId, senderPhoto } = await findPartnerIdAndPhoto(userId, coupleId);
+        if (partnerId) {
+            (0, push_service_1.pushToUser)(partnerId, {
+                title: `${senderName} challenged you 🎮`,
+                body: 'Tic-Tac-Toe! Tap to accept and play',
+                data: {
+                    type: 'us_game_challenge',
+                    gameId: payload.gameId,
+                    navigate: 'Notifications',
+                    ...(senderPhoto ? { senderPhoto } : {}),
+                },
+                collapseKey: 'us_game',
+            }).catch(() => null);
+        }
+    });
+    // ── us:game:accept — partner accepts; the whole room gets the start signal
+    socket.on('us:game:accept', (payload) => {
+        if (!userId || !coupleId || !payload?.gameId)
+            return;
+        io.to(`couple:${coupleId}`).emit('us:game:start', {
+            gameId: payload.gameId,
+            accepterUserId: userId,
+            accepterName: firstName(userName || ''),
+            at: new Date().toISOString(),
+        });
+    });
+    // ── us:game:move — relay a board move to the partner (fast path) ───────
+    socket.on('us:game:move', (payload) => {
+        if (!userId || !coupleId || !payload?.gameId)
+            return;
+        io.to(`couple:${coupleId}`).except(socket.id).emit('us:game:move', {
+            gameId: payload.gameId,
+            cell: payload.cell,
+            symbol: payload.symbol,
+            byUserId: userId,
+        });
+    });
+    // ── us:game:quit — one player leaves mid-game ──────────────────────────
+    socket.on('us:game:quit', (payload) => {
+        if (!userId || !coupleId || !payload?.gameId)
+            return;
+        io.to(`couple:${coupleId}`).except(socket.id).emit('us:game:quit', {
+            gameId: payload.gameId,
+            byUserId: userId,
+            byName: firstName(userName || ''),
+        });
+    });
+    // ── us:game:result — winner's client reports; server scores it once ────
+    socket.on('us:game:result', async (payload) => {
+        if (!userId || !coupleId || !payload?.gameId)
+            return;
+        try {
+            // Idempotency guard: score each gameId exactly once even if both
+            // clients happen to report the same result.
+            const scoredKey = `us:game_scored:${coupleId}:${payload.gameId}`;
+            const already = await (0, cache_1.cacheGet)(scoredKey);
+            if (already)
+                return;
+            await (0, cache_1.cacheSet)(scoredKey, '1', 24 * 60 * 60);
+            if (!payload.draw && payload.winnerUserId) {
+                const raw = await (0, cache_1.cacheGet)(gamePointsKey(coupleId));
+                const pts = raw ? JSON.parse(raw) : {};
+                pts[payload.winnerUserId] = (pts[payload.winnerUserId] ?? 0) + 1;
+                await (0, cache_1.cacheSet)(gamePointsKey(coupleId), JSON.stringify(pts), GAME_POINTS_TTL);
+                // Broadcast the fresh scoreboard to BOTH partners.
+                io.to(`couple:${coupleId}`).emit('us:game:points', { points: pts });
+            }
+        }
+        catch (err) {
+            logger_1.logger.warn(`[UsSocket] game result failed: ${err.message}`);
         }
     });
 };

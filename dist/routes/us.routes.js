@@ -463,6 +463,25 @@ router.delete('/fridge-notes/:id', authenticate_1.authenticate, async (req, res)
     }
 });
 /**
+ * GET /api/v1/us/game/points
+ * Tic-Tac-Toe scoreboard for the couple: { [userId]: wins }.
+ */
+router.get('/game/points', authenticate_1.authenticate, async (req, res) => {
+    const coupleId = req.user?.coupleId;
+    if (!coupleId) {
+        res.json({ success: true, data: {} });
+        return;
+    }
+    try {
+        const raw = await (0, cache_1.cacheGet)(`us:game_points:${coupleId}`);
+        res.json({ success: true, data: raw ? JSON.parse(raw) : {} });
+    }
+    catch (err) {
+        logger_1.logger.warn(`[UsRoutes] game points GET error: ${err.message}`);
+        res.json({ success: true, data: {} });
+    }
+});
+/**
  * POST /api/v1/us/admin-clear-feeling
  * Admin-only: clears any user's feeling by coupleId + userId.
  * Requires ?secret=SAWA_ADMIN_2026
