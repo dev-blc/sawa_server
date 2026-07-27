@@ -57,7 +57,7 @@ export function cycleDayFor(dateStr: string, s: CycleSettings): number {
   return ((diff % len) + len) % len + 1;
 }
 
-type Milestone = 'period' | 'fertile' | 'ovulation' | 'pms';
+type Milestone = 'pre_period' | 'period' | 'fertile' | 'ovulation' | 'pms';
 
 /** Milestone that starts on this cycle day, if any. */
 function milestoneFor(day: number, s: CycleSettings): Milestone | null {
@@ -66,12 +66,19 @@ function milestoneFor(day: number, s: CycleSettings): Milestone | null {
   if (day === 1) return 'period';
   if (day === ovulation - 5) return 'fertile';
   if (day === ovulation) return 'ovulation';
+  // Advance heads-up: ~2 days before the next period (day len-1 → period on day 1).
+  if (day === len - 1) return 'pre_period';
   if (day === len - 2) return 'pms';
   return null;
 }
 
 function messagesFor(milestone: Milestone, girl: string, boy: string): { title: string; body: string } {
   switch (milestone) {
+    case 'pre_period':
+      return {
+        title: `🌸 ${girl}'s period is coming soon`,
+        body: `Hey ${boy}, ${girl} may get her period in a day or two — be extra gentle and stock up on her favourites 💗`,
+      };
     case 'period':
       return {
         title: `🌸 ${girl}'s period may start today`,
