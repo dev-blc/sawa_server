@@ -96,8 +96,8 @@ function messagesFor(milestone: Milestone, girl: string, boy: string): { title: 
       };
     case 'pms':
       return {
-        title: `🤗 PMS days ahead for ${girl}`,
-        body: `Hey ${boy}, extra patience and warm hugs will mean the world to her`,
+        title: `🫂 ${girl} may have mood swings now`,
+        body: `Hey ${boy}, ${girl} is in her PMS phase just before her period — she might feel moody or extra sensitive. Be patient, compliment her, and surprise her with something she loves 💗`,
       };
   }
 }
