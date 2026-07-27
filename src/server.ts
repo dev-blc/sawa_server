@@ -4,6 +4,7 @@ import { connectDB } from './config/db';
 import { bootstrapAdmin } from './config/bootstrapAdmin';
 import { createSocketServer } from './sockets/index';
 import { startCycleNotifier } from './jobs/cycleNotifier';
+import { migrateUsRedisToPostgres } from './jobs/migrateUsToPg';
 import { env } from './config/env';
 import { logger } from './utils/logger';
 
@@ -30,6 +31,8 @@ const start = async (): Promise<void> => {
   // 4b. Cycle nudges for the primary partner — one worker only.
   if (!process.env.pm_id || process.env.pm_id === '0') {
     startCycleNotifier();
+    // One-time backfill of Us-space data from Redis into Postgres.
+    migrateUsRedisToPostgres().catch(() => null);
   }
 
   // 5. Start listening

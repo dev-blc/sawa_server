@@ -8,12 +8,6 @@ import { invalidateNotifUnreadCount, cacheSet, cacheGet } from '../lib/cache';
 const feelingKey = (coupleId: string, userId: string) =>
   `us:feeling:${coupleId}:${userId}`;
 
-/** Redis key for the couple's game scoreboard: { [userId]: wins }. TTL 1 year. */
-const gamePointsKey = (coupleId: string) => `us:game_points:${coupleId}`;
-/** Redis key for the current win streak: { userId, count }. TTL 1 year. */
-const gameStreakKey = (coupleId: string) => `us:game_streak:${coupleId}`;
-const GAME_POINTS_TTL = 365 * 24 * 60 * 60;
-
 /**
  * US Space Socket Handlers
  * ─────────────────────────────────────────────────────────────────────────
@@ -495,26 +489,32 @@ export const registerUsHandlers = (io: SocketIOServer, socket: Socket): void => 
       await cacheSet(scoredKey, '1', 24 * 60 * 60);
 
       if (!payload.draw && payload.winnerUserId) {
-        const raw = await cacheGet(gamePointsKey(coupleId));
-        const pts: Record<string, number> = raw ? JSON.parse(raw) : {};
-        pts[payload.winnerUserId] = (pts[payload.winnerUserId] ?? 0) + 1;
-        await cacheSet(gamePointsKey(coupleId), JSON.stringify(pts), GAME_POINTS_TTL);
+        const winnerId = payload.winnerUserId;
+
+        // Durable win increment (source of truth: Postgres).
+        await prisma.usGameScore.upsert({
+          where: { coupleId_userId: { coupleId, userId: winnerId } },
+          create: { coupleId, userId: winnerId, wins: 1 },
+          update: { wins: { increment: 1 } },
+        });
 
         // Win streak — consecutive wins by the same partner. A win by the
         // other partner resets the streak to 1 for them.
-        let streak = { userId: payload.winnerUserId, count: 1 };
-        try {
-          const rawStreak = await cacheGet(gameStreakKey(coupleId));
-          if (rawStreak) {
-            const prev = JSON.parse(rawStreak);
-            if (prev?.userId === payload.winnerUserId) {
-              streak = { userId: prev.userId, count: (prev.count ?? 0) + 1 };
-            }
-          }
-        } catch { /* start a fresh streak */ }
-        await cacheSet(gameStreakKey(coupleId), JSON.stringify(streak), GAME_POINTS_TTL);
+        const state = await prisma.coupleUsState.findUnique({ where: { coupleId } });
+        const nextCount =
+          state?.gameStreakUserId === winnerId ? (state.gameStreakCount ?? 0) + 1 : 1;
+        await prisma.coupleUsState.upsert({
+          where: { coupleId },
+          create: { coupleId, gameStreakUserId: winnerId, gameStreakCount: nextCount },
+          update: { gameStreakUserId: winnerId, gameStreakCount: nextCount },
+        });
 
-        // Broadcast the fresh scoreboard + streak to BOTH partners.
+        // Read back the full scoreboard and broadcast to BOTH partners.
+        const scores = await prisma.usGameScore.findMany({ where: { coupleId } });
+        const pts: Record<string, number> = {};
+        for (const s of scores) pts[s.userId] = s.wins;
+        const streak = { userId: winnerId, count: nextCount };
+
         io.to(`couple:${coupleId}`).emit('us:game:points', { points: pts, streak });
       }
     } catch (err: any) {

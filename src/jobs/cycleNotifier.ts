@@ -22,9 +22,9 @@ export type CycleSettings = {
   lastPeriodStart: string; // YYYY-MM-DD
   periodLength: number;
   cycleLength: number;
-  updatedBy: string;
-  updatedByName: string;
-  updatedAt: string;
+  updatedBy?: string;
+  updatedByName?: string;
+  updatedAt?: string;
 };
 
 export const cycleKey = (coupleId: string) => `us:cycle:${coupleId}`;
@@ -101,15 +101,32 @@ export async function runCheck(): Promise<void> {
   if (hour < 8 || hour >= 21) return;
 
   try {
-    const rawIndex = await cacheGet(CYCLE_INDEX_KEY);
-    const coupleIds: string[] = rawIndex ? JSON.parse(rawIndex) : [];
-    if (!coupleIds.length) return;
+    // Source of truth is Postgres: every couple that has set a cycle.
+    const states = await prisma.coupleUsState.findMany({
+      where: { cycleLastPeriodStart: { not: null } },
+      select: {
+        coupleId: true,
+        cycleLastPeriodStart: true,
+        cyclePeriodLength: true,
+        cycleCycleLength: true,
+        cycleUpdatedBy: true,
+        cycleUpdatedByName: true,
+        cycleUpdatedAt: true,
+      },
+    });
+    if (!states.length) return;
 
-    for (const coupleId of coupleIds) {
+    for (const st of states) {
       try {
-        const raw = await cacheGet(cycleKey(coupleId));
-        if (!raw) continue;
-        const settings: CycleSettings = JSON.parse(raw);
+        const coupleId = st.coupleId;
+        const settings: CycleSettings = {
+          lastPeriodStart: st.cycleLastPeriodStart as string,
+          periodLength: st.cyclePeriodLength ?? 5,
+          cycleLength: st.cycleCycleLength ?? 28,
+          updatedBy: st.cycleUpdatedBy ?? '',
+          updatedByName: st.cycleUpdatedByName ?? '',
+          updatedAt: st.cycleUpdatedAt?.toISOString() ?? '',
+        };
 
         const day = cycleDayFor(dateStr, settings);
         const milestone = milestoneFor(day, settings);
@@ -163,7 +180,7 @@ export async function runCheck(): Promise<void> {
 
         logger.info(`[CycleNotifier] sent ${milestone} nudge for couple ${coupleId} (day ${day})`);
       } catch (err: any) {
-        logger.warn(`[CycleNotifier] couple ${coupleId} failed: ${err.message}`);
+        logger.warn(`[CycleNotifier] couple ${st.coupleId} failed: ${err.message}`);
       }
     }
   } catch (err: any) {

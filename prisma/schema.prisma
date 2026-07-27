@@ -277,6 +277,72 @@ model Report {
   @@map("reports")
 }
 
+// ─── Us Space (shared couple space) durable storage ──────────────────────────
+// These were previously kept only in Redis (a cache). They now live in Postgres
+// so sticky notes, planned dates, game scores and cycle data survive restarts
+// and cache eviction. Keyed by coupleId (the shared couple entity UUID).
+
+model FridgeNote {
+  id        String    @id @default(cuid()) @map("_id")
+  coupleId  String
+  text      String
+  color     String    @default("yellow")
+  byName    String
+  byUserId  String
+  ackBy     String?
+  ackAt     DateTime?
+  createdAt DateTime  @default(now())
+
+  @@index([coupleId, createdAt])
+  @@map("fridge_notes")
+}
+
+model PlannedDate {
+  id        String   @id @default(cuid()) @map("_id")
+  coupleId  String
+  activity  String
+  dateLabel String?
+  rawDate   String
+  time      String?
+  note      String?
+  fromName  String?
+  byUserId  String?
+  createdAt DateTime @default(now())
+
+  @@index([coupleId, rawDate])
+  @@map("planned_dates")
+}
+
+model UsGameScore {
+  id       String @id @default(cuid()) @map("_id")
+  coupleId String
+  userId   String
+  wins     Int    @default(0)
+
+  @@unique([coupleId, userId])
+  @@index([coupleId])
+  @@map("us_game_scores")
+}
+
+model CoupleUsState {
+  id                   String    @id @default(cuid()) @map("_id")
+  coupleId             String    @unique
+  // Menstrual cycle (set by the partner-role account)
+  cycleLastPeriodStart String?
+  cyclePeriodLength    Int?
+  cycleCycleLength     Int?
+  cycleUpdatedBy       String?
+  cycleUpdatedByName   String?
+  cycleUpdatedAt       DateTime?
+  // Tic-Tac-Toe current win streak
+  gameStreakUserId     String?
+  gameStreakCount      Int       @default(0)
+  createdAt            DateTime  @default(now())
+  updatedAt            DateTime  @updatedAt
+
+  @@map("couple_us_state")
+}
+
 enum UserRole {
   primary
   partner
