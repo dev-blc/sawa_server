@@ -287,7 +287,7 @@ router.post('/ask-feeling', authenticate, async (req: Request, res: Response): P
         senderId: coupleId,
         type: 'system',
         title: `${senderName} is asking how you feel`,
-        message: 'Share your mood with them 💭',
+        message: `Share your mood with ${senderName} 💭`,
         data: { subtype: 'us_ask_feeling', senderUserId: myUserId, navigate: 'UsSpace' },
         read: false,
       },

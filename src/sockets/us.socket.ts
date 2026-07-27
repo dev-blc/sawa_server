@@ -80,6 +80,19 @@ function firstName(name: string): string {
   return (name || '').split(/\s+/)[0] || name;
 }
 
+/**
+ * Gendered pronouns for notification copy. Product convention: the PRIMARY
+ * account is the boyfriend/husband (male → he) and the PARTNER account is the
+ * girlfriend/wife (female → she). Falls back to male if role is unknown.
+ */
+type Pronouns = { subj: string; Subj: string; obj: string; poss: string; be: string; Be: string };
+function pronounsFor(role?: string): Pronouns {
+  const female = role === 'partner';
+  return female
+    ? { subj: 'she', Subj: 'She', obj: 'her', poss: 'her', be: "she's", Be: "She's" }
+    : { subj: 'he', Subj: 'He', obj: 'him', poss: 'his', be: "he's", Be: "He's" };
+}
+
 /** Look up the partner's User.id AND the sender's profile photo. */
 async function findPartnerIdAndPhoto(
   senderUserId: string,
@@ -114,7 +127,9 @@ async function findPartnerIdAndPhoto(
 }
 
 export const registerUsHandlers = (io: SocketIOServer, socket: Socket): void => {
-  const { userId, coupleId, userName } = socket;
+  const { userId, coupleId, userName, userRole } = socket;
+  // Pronouns for the SENDER (the socket user) — used in all "from partner" copy.
+  const p = pronounsFor(userRole);
 
   // ── us:nudge ──────────────────────────────────────────────────────────
   socket.on(
@@ -222,7 +237,7 @@ export const registerUsHandlers = (io: SocketIOServer, socket: Socket): void => 
           senderUserId: userId,
           subtype: 'us_thinking',
           title: `${senderName} is thinking of you`,
-          message: 'You crossed their mind right now',
+          message: `You crossed ${p.poss} mind right now`,
         });
         pushTitle = `${senderName} is thinking of you`;
 
@@ -232,7 +247,7 @@ export const registerUsHandlers = (io: SocketIOServer, socket: Socket): void => 
           senderUserId: userId,
           subtype: 'us_missyou',
           title: `${senderName} misses you`,
-          message: 'They wish you were here',
+          message: `${p.Subj} wishes you were here`,
         });
         pushTitle = `${senderName} misses you`;
 
@@ -252,7 +267,7 @@ export const registerUsHandlers = (io: SocketIOServer, socket: Socket): void => 
           senderUserId: userId,
           subtype: 'us_here',
           title: `${senderName} is here for you`,
-          message: 'You have their full support',
+          message: `You have ${p.poss} full support`,
         });
         pushTitle = `${senderName} is here for you`;
 
@@ -262,7 +277,7 @@ export const registerUsHandlers = (io: SocketIOServer, socket: Socket): void => 
           senderUserId: userId,
           subtype: 'us_appreciate',
           title: `${senderName} appreciates you`,
-          message: 'They are grateful to have you',
+          message: `${p.Subj} is grateful to have you`,
         });
         pushTitle = `${senderName} appreciates you`;
       }
@@ -365,10 +380,10 @@ export const registerUsHandlers = (io: SocketIOServer, socket: Socket): void => 
         coupleId,
         senderUserId: userId,
         subtype: 'us_mood',
-        title: `${senderFirstName} updated their mood`,
+        title: `${senderFirstName} updated ${p.poss} mood`,
         message: payload.note?.trim()
           ? `Feeling ${feelingLabel} — "${payload.note.trim()}"`
-          : `They're feeling ${feelingLabel} right now`,
+          : `${p.Be} feeling ${feelingLabel} right now`,
         extraData: { feeling: payload.feeling },
       });
 
@@ -381,10 +396,10 @@ export const registerUsHandlers = (io: SocketIOServer, socket: Socket): void => 
       const { partnerId: feelPartnerId, senderPhoto: feelSenderPhoto } = await findPartnerIdAndPhoto(userId, coupleId);
       if (feelPartnerId) {
         pushToUser(feelPartnerId, {
-          title: `${senderFirstName} shared how they feel`,
+          title: `${senderFirstName} shared how ${p.subj} feels`,
           body: payload.note?.trim()
             ? `"${payload.note.trim()}"`
-            : `They're feeling ${feelingLabel} right now`,
+            : `${p.Be} feeling ${feelingLabel} right now`,
           data: {
             type: 'us_feeling',
             feeling: payload.feeling,
