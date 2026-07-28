@@ -3,6 +3,18 @@ import { prisma } from '../lib/prisma';
 import { OTP_EXPIRES_IN_MINUTES } from '../constants/index';
 import { logger } from '../utils/logger';
 import { AppError } from '../utils/AppError';
+import { cacheGet, cacheSet } from '../lib/cache';
+
+/**
+ * How long (seconds) a just-verified code stays "replayable". A second verify
+ * with the SAME phone+code inside this window succeeds again instead of failing
+ * with "Invalid or expired OTP". Covers the real edge cases where the token was
+ * already consumed by the first request: a double auto-submit, the user tapping
+ * Confirm while auto-fill also submits, or a lost/timed-out response that the
+ * app (or user) retries.
+ */
+const OTP_REPLAY_TTL_SECONDS = 120;
+const otpOkKey = (phone: string, code: string) => `otp_ok:${phone}:${code}`;
 
 // ─── CONFIGURATION ──────────────────────────────────────────────────────────
 
@@ -113,14 +125,27 @@ export class OtpService {
       orderBy: { createdAt: 'desc' },
     });
 
-    if (!token) {
-      return { valid: false, coupleId: null };
+    if (token) {
+      const coupleId = token.coupleId;
+      // Consume the matched code + purge any other now-stale codes for this phone.
+      await prisma.otpToken.deleteMany({ where: { phone } });
+      // Remember this success briefly so a duplicate verify with the same code
+      // (double-submit / retry / lost response) still succeeds.
+      try { await cacheSet(otpOkKey(phone, code), coupleId ?? '', OTP_REPLAY_TTL_SECONDS); } catch { /* best-effort */ }
+      return { valid: true, coupleId };
     }
 
-    const coupleId = token.coupleId;
-    // Consume the matched code + purge any other now-stale codes for this phone.
-    await prisma.otpToken.deleteMany({ where: { phone } });
-    return { valid: true, coupleId };
+    // No live token — it may have just been consumed by a duplicate request for
+    // the exact same code. Fall back to the short-lived success marker so the
+    // user isn't wrongly shown "Invalid or expired OTP".
+    try {
+      const cached = await cacheGet(otpOkKey(phone, code));
+      if (cached !== null) {
+        return { valid: true, coupleId: cached || null };
+      }
+    } catch { /* best-effort */ }
+
+    return { valid: false, coupleId: null };
   }
 
   /**
