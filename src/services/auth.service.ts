@@ -294,7 +294,9 @@ export class AuthService {
         await prisma.user.update({ where: { id: user.id }, data: { coupleId: resolvedCoupleId } });
       }
     }
-    await otpService.generateAndStore(phone, resolvedCoupleId || '');
+    // keepValidPrevious=true — don't wipe a still-valid code the user may already
+    // have received; avoids "Invalid or expired OTP" when an earlier code is used.
+    await otpService.generateAndStore(phone, resolvedCoupleId || '', undefined, true);
     return { coupleId: resolvedCoupleId || '' };
   }
 
@@ -417,8 +419,10 @@ export class AuthService {
       );
     }
 
-    // Regenerate OTP for this phone only — partner's OTP is untouched
-    await otpService.generateAndStore(phone, coupleId);
+    // Regenerate OTP for this phone only — partner's OTP is untouched.
+    // keepValidPrevious=true so the previously-sent code still works if the user
+    // enters it (common: they resend, then auto-fill grabs the first SMS).
+    await otpService.generateAndStore(phone, coupleId, undefined, true);
     logger.info(`[AuthService] OTP resent for ${phone} (coupleId: ${coupleId})`);
   }
 
