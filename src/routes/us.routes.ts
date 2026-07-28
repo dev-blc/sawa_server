@@ -675,6 +675,57 @@ router.get('/game/points', authenticate, async (req: Request, res: Response): Pr
 });
 
 /**
+ * GET /api/v1/us/game/active
+ * The couple's current shared Tic-Tac-Toe session so a partner who left the
+ * screen (or received a challenge push) can (re)join the same match:
+ *   { session: null | { gameId, status: 'pending'|'active', challengerId,
+ *                       board: (('X'|'O'|null)[]), turn: 'X'|'O' } }
+ * Auto-expires sessions with no activity for >3h so a forgotten challenge can
+ * never block new games forever.
+ */
+router.get('/game/active', authenticate, async (req: Request, res: Response): Promise<void> => {
+  const coupleId = req.user?.coupleId;
+  if (!coupleId) { res.json({ success: true, data: { session: null } }); return; }
+  try {
+    const st = await prisma.coupleUsState.findUnique({ where: { coupleId } });
+    if (!st?.gameSessionId || !st.gameSessionStatus) {
+      res.json({ success: true, data: { session: null } });
+      return;
+    }
+    const ageMs = st.gameSessionAt ? Date.now() - new Date(st.gameSessionAt).getTime() : Number.MAX_SAFE_INTEGER;
+    if (ageMs > 3 * 60 * 60 * 1000) {
+      await prisma.coupleUsState.update({
+        where: { coupleId },
+        data: {
+          gameSessionId: null, gameSessionStatus: null, gameChallengerId: null,
+          gameBoard: null, gameTurn: null, gameSessionAt: null,
+        },
+      });
+      res.json({ success: true, data: { session: null } });
+      return;
+    }
+    const board = (st.gameBoard || '_________')
+      .split('')
+      .map((c) => (c === 'X' ? 'X' : c === 'O' ? 'O' : null));
+    res.json({
+      success: true,
+      data: {
+        session: {
+          gameId: st.gameSessionId,
+          status: st.gameSessionStatus,
+          challengerId: st.gameChallengerId,
+          board,
+          turn: st.gameTurn || 'X',
+        },
+      },
+    });
+  } catch (err: any) {
+    logger.warn(`[UsRoutes] game active GET error: ${err.message}`);
+    res.json({ success: true, data: { session: null } });
+  }
+});
+
+/**
  * POST /api/v1/us/admin-clear-feeling
  * Admin-only: clears any user's feeling by coupleId + userId.
  * Requires ?secret=SAWA_ADMIN_2026

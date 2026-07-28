@@ -8,6 +8,27 @@ import { invalidateNotifUnreadCount, cacheSet, cacheGet } from '../lib/cache';
 const feelingKey = (coupleId: string, userId: string) =>
   `us:feeling:${coupleId}:${userId}`;
 
+/** An empty Tic-Tac-Toe board, encoded as 9 chars ('_' = empty cell). */
+const TTT_EMPTY_BOARD = '_________';
+
+/**
+ * Clear the couple's persisted Tic-Tac-Toe session (challenge withdrawn, quit,
+ * or game finished). Leaves the win-streak fields untouched.
+ */
+async function clearGameSession(coupleId: string, gameId?: string): Promise<void> {
+  await prisma.coupleUsState.updateMany({
+    where: gameId ? { coupleId, gameSessionId: gameId } : { coupleId },
+    data: {
+      gameSessionId: null,
+      gameSessionStatus: null,
+      gameChallengerId: null,
+      gameBoard: null,
+      gameTurn: null,
+      gameSessionAt: null,
+    },
+  });
+}
+
 /**
  * US Space Socket Handlers
  * ─────────────────────────────────────────────────────────────────────────
@@ -424,6 +445,34 @@ export const registerUsHandlers = (io: SocketIOServer, socket: Socket): void => 
     const senderName = firstName(userName || 'Your partner');
     logger.info(`[UsSocket] game challenge ${payload.gameId} from ${userId} in couple ${coupleId}`);
 
+    // 0. Persist a shared PENDING session so both partners can (re)join the same
+    //    challenge even after leaving the screen — this is what prevents the
+    //    "stale challenge" where the requester left and the partner got stuck.
+    try {
+      await prisma.coupleUsState.upsert({
+        where: { coupleId },
+        create: {
+          coupleId,
+          gameSessionId: payload.gameId,
+          gameSessionStatus: 'pending',
+          gameChallengerId: userId,
+          gameBoard: TTT_EMPTY_BOARD,
+          gameTurn: 'X',
+          gameSessionAt: new Date(),
+        },
+        update: {
+          gameSessionId: payload.gameId,
+          gameSessionStatus: 'pending',
+          gameChallengerId: userId,
+          gameBoard: TTT_EMPTY_BOARD,
+          gameTurn: 'X',
+          gameSessionAt: new Date(),
+        },
+      });
+    } catch (err: any) {
+      logger.warn(`[UsSocket] persist challenge failed: ${err.message}`);
+    }
+
     // 1. Instant relay so an online partner sees the invite immediately.
     io.to(`couple:${coupleId}`).except(socket.id).emit('us:game:challenge', {
       gameId: payload.gameId,
@@ -461,8 +510,17 @@ export const registerUsHandlers = (io: SocketIOServer, socket: Socket): void => 
   });
 
   // ── us:game:accept — partner accepts; the whole room gets the start signal
-  socket.on('us:game:accept', (payload: { gameId: string }) => {
+  socket.on('us:game:accept', async (payload: { gameId: string }) => {
     if (!userId || !coupleId || !payload?.gameId) return;
+    // Flip the shared session to ACTIVE so a rejoining partner resumes the match.
+    try {
+      await prisma.coupleUsState.updateMany({
+        where: { coupleId, gameSessionId: payload.gameId },
+        data: { gameSessionStatus: 'active', gameSessionAt: new Date() },
+      });
+    } catch (err: any) {
+      logger.warn(`[UsSocket] persist accept failed: ${err.message}`);
+    }
     io.to(`couple:${coupleId}`).emit('us:game:start', {
       gameId: payload.gameId,
       accepterUserId: userId,
@@ -472,30 +530,62 @@ export const registerUsHandlers = (io: SocketIOServer, socket: Socket): void => 
   });
 
   // ── us:game:move — relay a board move to the partner (fast path) ───────
-  socket.on('us:game:move', (payload: { gameId: string; cell: number; symbol: string }) => {
+  socket.on('us:game:move', async (payload: { gameId: string; cell: number; symbol: string }) => {
     if (!userId || !coupleId || !payload?.gameId) return;
+    // Relay first (fast path), then persist the board so both can resume.
     io.to(`couple:${coupleId}`).except(socket.id).emit('us:game:move', {
       gameId: payload.gameId,
       cell: payload.cell,
       symbol: payload.symbol,
       byUserId: userId,
     });
+    try {
+      const st = await prisma.coupleUsState.findUnique({ where: { coupleId } });
+      if (
+        st?.gameSessionId === payload.gameId &&
+        typeof payload.cell === 'number' &&
+        payload.cell >= 0 &&
+        payload.cell < 9
+      ) {
+        const arr = (st.gameBoard || TTT_EMPTY_BOARD).split('');
+        arr[payload.cell] = payload.symbol === 'O' ? 'O' : 'X';
+        await prisma.coupleUsState.update({
+          where: { coupleId },
+          data: {
+            gameBoard: arr.join(''),
+            gameTurn: payload.symbol === 'X' ? 'O' : 'X',
+            gameSessionAt: new Date(),
+          },
+        });
+      }
+    } catch (err: any) {
+      logger.warn(`[UsSocket] persist move failed: ${err.message}`);
+    }
   });
 
   // ── us:game:quit — one player leaves mid-game ──────────────────────────
-  socket.on('us:game:quit', (payload: { gameId: string }) => {
+  socket.on('us:game:quit', async (payload: { gameId: string }) => {
     if (!userId || !coupleId || !payload?.gameId) return;
     io.to(`couple:${coupleId}`).except(socket.id).emit('us:game:quit', {
       gameId: payload.gameId,
       byUserId: userId,
       byName: firstName(userName || ''),
     });
+    try {
+      await clearGameSession(coupleId, payload.gameId);
+    } catch (err: any) {
+      logger.warn(`[UsSocket] clear session on quit failed: ${err.message}`);
+    }
   });
 
   // ── us:game:result — winner's client reports; server scores it once ────
   socket.on('us:game:result', async (payload: { gameId: string; winnerUserId?: string; draw?: boolean }) => {
     if (!userId || !coupleId || !payload?.gameId) return;
     try {
+      // The round is over — always clear the shared session (win, loss, or draw)
+      // so the button returns to "Challenge" for both partners.
+      await clearGameSession(coupleId, payload.gameId).catch(() => null);
+
       // Idempotency guard: score each gameId exactly once even if both
       // clients happen to report the same result.
       const scoredKey = `us:game_scored:${coupleId}:${payload.gameId}`;

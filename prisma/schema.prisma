@@ -337,6 +337,14 @@ model CoupleUsState {
   // Tic-Tac-Toe current win streak
   gameStreakUserId     String?
   gameStreakCount      Int       @default(0)
+  // Tic-Tac-Toe live shared session so both partners can (re)join the same match
+  // even after leaving the screen. Cleared on quit / game end / stale expiry.
+  gameSessionId        String?
+  gameSessionStatus    String?   // 'pending' (challenged) | 'active' (playing)
+  gameChallengerId     String?   // the user who sent the challenge (always plays X)
+  gameBoard            String?   // 9 chars, '_' = empty, e.g. "X__O_____"
+  gameTurn             String?   // 'X' | 'O'
+  gameSessionAt        DateTime? // last activity — used to auto-expire stale games
   createdAt            DateTime  @default(now())
   updatedAt            DateTime  @updatedAt
 
