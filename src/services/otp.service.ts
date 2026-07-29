@@ -13,7 +13,7 @@ import { cacheGet, cacheSet } from '../lib/cache';
  * Confirm while auto-fill also submits, or a lost/timed-out response that the
  * app (or user) retries.
  */
-const OTP_REPLAY_TTL_SECONDS = 120;
+const OTP_REPLAY_TTL_SECONDS = 600;
 const otpOkKey = (phone: string, code: string) => `otp_ok:${phone}:${code}`;
 
 // ─── CONFIGURATION ──────────────────────────────────────────────────────────

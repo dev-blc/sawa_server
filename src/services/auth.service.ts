@@ -74,9 +74,13 @@ export class AuthService {
       userRepository.upsertByPhone(partnerPhone, coupleId, 'partner'),
     ]);
 
+    // keepValidPrevious=true — mirror the login flow. If "Send Code" fires more
+    // than once (double-tap, screen re-mount, slow-network retry) the earlier
+    // still-valid code from the FIRST SMS keeps working, so the user never sees a
+    // spurious "Invalid or expired OTP" for a code they only generated once.
     await Promise.all([
-      otpService.generateAndStore(yourPhone, coupleId),
-      otpService.generateAndStore(partnerPhone, coupleId, partnerCodeMsg),
+      otpService.generateAndStore(yourPhone, coupleId, undefined, true),
+      otpService.generateAndStore(partnerPhone, coupleId, partnerCodeMsg, true),
     ]);
 
     logger.info(`[AuthService] OTPs issued for entity: ${coupleId}`);
