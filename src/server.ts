@@ -1,6 +1,7 @@
 import http from 'http';
 import { createApp } from './app';
 import { connectDB } from './config/db';
+import { ensureSchema } from './config/ensureSchema';
 import { bootstrapAdmin } from './config/bootstrapAdmin';
 import { createSocketServer } from './sockets/index';
 import { startCycleNotifier } from './jobs/cycleNotifier';
@@ -15,6 +16,7 @@ const start = async (): Promise<void> => {
   // 1b. Ensure an admin account exists so the dashboard login works after
   //     every deploy. Only the primary worker runs it (idempotent regardless).
   if (!process.env.pm_id || process.env.pm_id === '0') {
+    await ensureSchema();
     await bootstrapAdmin();
   }
 
