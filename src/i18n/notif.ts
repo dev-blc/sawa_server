@@ -51,6 +51,31 @@ const interpolate = (tpl: string, params: NotifParams): string =>
     return val === undefined || val === null ? '' : String(val);
   });
 
+// Mood labels are sent as English keys (e.g. "Happy"). Translate them so the
+// server-rendered push body (iOS APNs + Android data) is fully localized, not
+// just the surrounding sentence. Mirrors SAWA/src/i18n/locales/*.ts `us.moods`.
+const MOODS: Record<string, Record<NotifLocale, string>> = {
+  Excited: { en: 'Excited', hi: 'उत्साहित', kn: 'ಉತ್ಸಾಹಿತ', mr: 'उत्साहित' },
+  Happy: { en: 'Happy', hi: 'खुश', kn: 'ಸಂತೋಷ', mr: 'आनंदी' },
+  Calm: { en: 'Calm', hi: 'शांत', kn: 'ಶಾಂತ', mr: 'शांत' },
+  Loved: { en: 'Loved', hi: 'प्यार भरा', kn: 'ಪ್ರೀತಿಯ', mr: 'प्रेमळ' },
+  Neutral: { en: 'Neutral', hi: 'सामान्य', kn: 'ಸಾಮಾನ್ಯ', mr: 'सामान्य' },
+  Stressed: { en: 'Stressed', hi: 'तनाव में', kn: 'ಒತ್ತಡದಲ್ಲಿ', mr: 'तणावात' },
+  Tired: { en: 'Tired', hi: 'थका हुआ', kn: 'ದಣಿದ', mr: 'थकलेले' },
+  Sad: { en: 'Sad', hi: 'दुखी', kn: 'ದುಃಖಿತ', mr: 'दुःखी' },
+  'Missing You': { en: 'Missing You', hi: 'तुम्हारी कमी', kn: 'ನಿಮ್ಮ ಕೊರತೆ', mr: 'तुझी आठवण' },
+  Missing: { en: 'Missing', hi: 'कमी', kn: 'ಕೊರತೆ', mr: 'आठवण' },
+  Frustrated: { en: 'Frustrated', hi: 'निराश', kn: 'ಹತಾಶ', mr: 'निराश' },
+  Anxious: { en: 'Anxious', hi: 'चिंतित', kn: 'ಆತಂಕ', mr: 'चिंतित' },
+  Overwhelmed: { en: 'Overwhelmed', hi: 'अभिभूत', kn: 'ಭಾರವಾದ', mr: 'भारावलेले' },
+  Low: { en: 'Low', hi: 'उदास', kn: 'ಖಿನ್ನ', mr: 'उदास' },
+};
+
+const localizeMood = (feeling: string | undefined, loc: NotifLocale): string | undefined => {
+  if (!feeling) return feeling;
+  return MOODS[feeling]?.[loc] ?? feeling;
+};
+
 // ─────────────────────────────────────────────────────────────────────────────
 // TEMPLATES
 // ─────────────────────────────────────────────────────────────────────────────
@@ -480,8 +505,12 @@ export function renderNotif(
   const entry = T[key];
   if (!entry) return { title: '', body: '' };
   const g: NotifGender = params.g === 'm' ? 'm' : 'f';
-  const title = interpolate(pick(entry.title[loc] ?? entry.title.en, g), params);
-  const body = interpolate(pick(entry.body[loc] ?? entry.body.en, g), params);
+  // Localize the mood word itself (e.g. "Happy" → "ಸಂತೋಷ") before interpolation.
+  const p: NotifParams = params.feeling
+    ? { ...params, feeling: localizeMood(params.feeling, loc) }
+    : params;
+  const title = interpolate(pick(entry.title[loc] ?? entry.title.en, g), p);
+  const body = interpolate(pick(entry.body[loc] ?? entry.body.en, g), p);
   return { title, body };
 }
 

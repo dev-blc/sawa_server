@@ -229,7 +229,7 @@ export const registerUsHandlers = (io: SocketIOServer, socket: Socket): void => 
           message: payload.note ? `${dateMsg.replace(' ✨', '')} — "${payload.note}"` : dateMsg.replace(' ✨', ''),
           extraData: { id: payload.id, date: payload.date, rawDate: payload.rawDate, activity: payload.activity, time: payload.time, note: payload.note, kind: 'date_request', planBy: payload.planBy || senderName, ...i18nData(i18nKey, i18nParams) },
         });
-        pushTitle = `${senderName} want to plan ${actLabel} 📅`;
+        pushTitle = `${senderName} wants to plan ${actLabel} 📅`;
 
       } else if (payload.kind === 'date_accept') {
         i18nKey = 'us.date.accept'; i18nParams = { name: senderName };
