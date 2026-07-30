@@ -43,6 +43,7 @@ const ensureSchema_1 = require("./config/ensureSchema");
 const bootstrapAdmin_1 = require("./config/bootstrapAdmin");
 const index_1 = require("./sockets/index");
 const cycleNotifier_1 = require("./jobs/cycleNotifier");
+const subscriptionNotifier_1 = require("./jobs/subscriptionNotifier");
 const migrateUsToPg_1 = require("./jobs/migrateUsToPg");
 const env_1 = require("./config/env");
 const logger_1 = require("./utils/logger");
@@ -65,6 +66,7 @@ const start = async () => {
     // 4b. Cycle nudges for the primary partner — one worker only.
     if (!process.env.pm_id || process.env.pm_id === '0') {
         (0, cycleNotifier_1.startCycleNotifier)();
+        (0, subscriptionNotifier_1.startSubscriptionNotifier)();
         // One-time backfill of Us-space data from Redis into Postgres.
         (0, migrateUsToPg_1.migrateUsRedisToPostgres)().catch(() => null);
     }

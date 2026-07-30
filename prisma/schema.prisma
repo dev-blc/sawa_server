@@ -375,6 +375,8 @@ model Subscription {
   trialUsed             Boolean   @default(false)
   trialStartedAt        DateTime?
   trialEndsAt           DateTime?
+  // Set when the "trial ends tomorrow" nudge was sent, to avoid duplicates.
+  trialEndingNotifiedAt DateTime?
   currentPeriodEnd      DateTime?
   autoRenew             Boolean   @default(true)
   // 'Sandbox' | 'Production' (Apple environment the transaction came from)

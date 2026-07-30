@@ -14,7 +14,7 @@ export declare class AdminService {
         name: string;
         phone: string | null;
         city: string;
-        status: "banned" | "inactive" | "active";
+        status: "active" | "banned" | "inactive";
         joinedAt: Date;
         lastActiveAt: Date | null;
         coupleId: string | null;

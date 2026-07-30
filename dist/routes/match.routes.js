@@ -2,16 +2,17 @@
 Object.defineProperty(exports, "__esModule", { value: true });
 const express_1 = require("express");
 const authenticate_1 = require("../middleware/authenticate");
+const requireEntitlement_1 = require("../middleware/requireEntitlement");
 const asyncHandler_1 = require("../utils/asyncHandler");
 const match_controller_1 = require("../controllers/match.controller");
 const router = (0, express_1.Router)();
 router.use(authenticate_1.authenticate);
 // GET /api/v1/matches/discovery -> gets discovery feed
 router.get('/discovery', (0, asyncHandler_1.asyncHandler)(match_controller_1.getDiscoveryFeed));
-// POST /api/v1/matches/say-hello
-router.post('/say-hello', match_controller_1.validateMatchAction, (0, asyncHandler_1.asyncHandler)(match_controller_1.sayHello));
-// POST /api/v1/matches/skip
-router.post('/skip', match_controller_1.validateMatchAction, (0, asyncHandler_1.asyncHandler)(match_controller_1.skipCouple));
+// POST /api/v1/matches/say-hello — counts toward the discovery quota
+router.post('/say-hello', match_controller_1.validateMatchAction, (0, requireEntitlement_1.requireEntitlement)({ gate: 'connection' }), (0, asyncHandler_1.asyncHandler)(match_controller_1.sayHello));
+// POST /api/v1/matches/skip — a skip ALSO counts toward the quota
+router.post('/skip', match_controller_1.validateMatchAction, (0, requireEntitlement_1.requireEntitlement)({ gate: 'connection' }), (0, asyncHandler_1.asyncHandler)(match_controller_1.skipCouple));
 // POST /api/v1/matches/refresh-discovery
 router.post('/refresh-discovery', (0, asyncHandler_1.asyncHandler)(match_controller_1.refreshDiscovery));
 // GET /api/v1/matches -> gets accepted connections

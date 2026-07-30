@@ -2,6 +2,7 @@
 Object.defineProperty(exports, "__esModule", { value: true });
 const express_1 = require("express");
 const authenticate_1 = require("../middleware/authenticate");
+const requireEntitlement_1 = require("../middleware/requireEntitlement");
 const asyncHandler_1 = require("../utils/asyncHandler");
 const community_controller_1 = require("../controllers/community.controller");
 const router = (0, express_1.Router)();
@@ -10,12 +11,12 @@ router.use(authenticate_1.authenticate);
 router.get('/', (0, asyncHandler_1.asyncHandler)(community_controller_1.getAllCommunities));
 // GET /api/v1/communities/mine
 router.get('/mine', (0, asyncHandler_1.asyncHandler)(community_controller_1.getMyCommunities));
-// POST /api/v1/communities
-router.post('/', community_controller_1.validateCreateCommunity, (0, asyncHandler_1.asyncHandler)(community_controller_1.createCommunity));
+// POST /api/v1/communities — creating a group requires Prime Plus
+router.post('/', community_controller_1.validateCreateCommunity, (0, requireEntitlement_1.requireEntitlement)({ gate: 'createGroup', minTier: 'PRIME_PLUS' }), (0, asyncHandler_1.asyncHandler)(community_controller_1.createCommunity));
 // GET /api/v1/communities/:id
 router.get('/:id', (0, asyncHandler_1.asyncHandler)(community_controller_1.getCommunityDetail));
-// POST /api/v1/communities/:id/join
-router.post('/:id/join', community_controller_1.validateJoinCommunity, (0, asyncHandler_1.asyncHandler)(community_controller_1.joinCommunity));
+// POST /api/v1/communities/:id/join — counts toward the group-join quota
+router.post('/:id/join', community_controller_1.validateJoinCommunity, (0, requireEntitlement_1.requireEntitlement)({ gate: 'joinGroup' }), (0, asyncHandler_1.asyncHandler)(community_controller_1.joinCommunity));
 // POST /api/v1/communities/:id/invite
 router.post('/:id/invite', (0, asyncHandler_1.asyncHandler)(community_controller_1.inviteToCommunity));
 // POST /api/v1/communities/:id/leave

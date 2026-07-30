@@ -1,5 +1,6 @@
 import { Router } from 'express';
 import { authenticate } from '../middleware/authenticate';
+import { requireEntitlement } from '../middleware/requireEntitlement';
 import { asyncHandler } from '../utils/asyncHandler';
 import {
   getDiscoveryFeed,
@@ -23,11 +24,21 @@ router.use(authenticate);
 // GET /api/v1/matches/discovery -> gets discovery feed
 router.get('/discovery', asyncHandler(getDiscoveryFeed));
 
-// POST /api/v1/matches/say-hello
-router.post('/say-hello', validateMatchAction, asyncHandler(sayHello));
+// POST /api/v1/matches/say-hello — counts toward the discovery quota
+router.post(
+  '/say-hello',
+  validateMatchAction,
+  requireEntitlement({ gate: 'connection' }),
+  asyncHandler(sayHello),
+);
 
-// POST /api/v1/matches/skip
-router.post('/skip', validateMatchAction, asyncHandler(skipCouple));
+// POST /api/v1/matches/skip — a skip ALSO counts toward the quota
+router.post(
+  '/skip',
+  validateMatchAction,
+  requireEntitlement({ gate: 'connection' }),
+  asyncHandler(skipCouple),
+);
 
 // POST /api/v1/matches/refresh-discovery
 router.post('/refresh-discovery', asyncHandler(refreshDiscovery));

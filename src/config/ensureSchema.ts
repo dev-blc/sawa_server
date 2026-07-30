@@ -42,6 +42,8 @@ export const ensureSchema = async (): Promise<void> => {
      );`,
     `CREATE UNIQUE INDEX IF NOT EXISTS "subscriptions_coupleId_key" ON "subscriptions"("coupleId");`,
     `CREATE UNIQUE INDEX IF NOT EXISTS "subscriptions_originalTransactionId_key" ON "subscriptions"("originalTransactionId");`,
+    // Dedup flag for the "trial ends tomorrow" nudge (added with subscriptionNotifier).
+    `ALTER TABLE "subscriptions" ADD COLUMN IF NOT EXISTS "trialEndingNotifiedAt" TIMESTAMP(3);`,
   ];
 
   for (const sql of statements) {

@@ -1,5 +1,6 @@
 import { Router } from 'express';
 import { authenticate } from '../middleware/authenticate';
+import { requireEntitlement } from '../middleware/requireEntitlement';
 import { asyncHandler } from '../utils/asyncHandler';
 import {
   getAllCommunities,
@@ -27,14 +28,24 @@ router.get('/', asyncHandler(getAllCommunities));
 // GET /api/v1/communities/mine
 router.get('/mine', asyncHandler(getMyCommunities));
 
-// POST /api/v1/communities
-router.post('/', validateCreateCommunity, asyncHandler(createCommunity));
+// POST /api/v1/communities — creating a group requires Prime Plus
+router.post(
+  '/',
+  validateCreateCommunity,
+  requireEntitlement({ gate: 'createGroup', minTier: 'PRIME_PLUS' }),
+  asyncHandler(createCommunity),
+);
 
 // GET /api/v1/communities/:id
 router.get('/:id', asyncHandler(getCommunityDetail));
 
-// POST /api/v1/communities/:id/join
-router.post('/:id/join', validateJoinCommunity, asyncHandler(joinCommunity));
+// POST /api/v1/communities/:id/join — counts toward the group-join quota
+router.post(
+  '/:id/join',
+  validateJoinCommunity,
+  requireEntitlement({ gate: 'joinGroup' }),
+  asyncHandler(joinCommunity),
+);
 
 // POST /api/v1/communities/:id/invite
 router.post('/:id/invite', asyncHandler(inviteToCommunity));
