@@ -6,6 +6,7 @@ const AppError_1 = require("../utils/AppError");
 const logger_1 = require("../utils/logger");
 const realtime_1 = require("../utils/realtime");
 const notification_service_1 = require("./notification.service");
+const notif_1 = require("../i18n/notif");
 const cache_1 = require("../lib/cache");
 const storage_1 = require("../lib/storage");
 /** Normalize a cover image field (base64/data-uri/url) to a stored S3 URL. */
@@ -213,6 +214,7 @@ class CommunityService {
                                     isInvited: true,
                                     invited: true,
                                     status: 'invited',
+                                    ...(0, notif_1.i18nData)('community.invite', { name: me.profileName ?? '', community: community.name }),
                                 },
                             },
                         });
@@ -279,6 +281,7 @@ class CommunityService {
             requesterName: me.profileName,
             communityName: community?.name || 'Community',
             primaryPhoto: me.primaryPhoto || null,
+            ...(0, notif_1.i18nData)('community.joinRequest', { name: me.profileName ?? '' }),
         };
         // Notify all admins in parallel instead of sequentially.
         await Promise.all(admins.map((admin) => (0, notification_service_1.upsertGroupedNotification)({
@@ -286,7 +289,7 @@ class CommunityService {
             senderId: me.coupleId,
             type: 'community',
             title: 'New Join Request',
-            message: `${me.profileName} want to join.`,
+            message: `${me.profileName} wants to join.`,
             groupKey: `community:join:${communityId}:${me.coupleId}`,
             data: notificationData,
         })));
@@ -375,7 +378,7 @@ class CommunityService {
                     type: 'community',
                     title: 'Request Accepted!',
                     message: `You joined the group!`,
-                    data: { communityId, requestType: 'accepted' },
+                    data: { communityId, requestType: 'accepted', ...(0, notif_1.i18nData)('community.requestAccepted') },
                 },
             });
             (0, realtime_1.emitRealtimeNotification)(targetId, {
@@ -653,6 +656,7 @@ class CommunityService {
                             isInvited: true,
                             invited: true,
                             status: 'invited',
+                            ...(0, notif_1.i18nData)('community.invite', { name: me.profileName ?? '', community: community.name }),
                         },
                     },
                 });

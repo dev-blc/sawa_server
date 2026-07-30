@@ -13,6 +13,11 @@ export declare const env: {
     GROQ_API_KEY: string;
     ADMIN_EMAIL: string;
     ADMIN_PASSWORD: string;
+    SUBSCRIPTIONS_ENFORCED: boolean;
+    APPLE_BUNDLE_ID: string;
+    APPLE_ENVIRONMENT: "Sandbox" | "Production";
+    APPLE_PRODUCT_PRIME: string;
+    APPLE_PRODUCT_PRIME_PLUS: string;
     REDIS_URL?: string | undefined;
     CLOUDINARY_CLOUD_NAME?: string | undefined;
     CLOUDINARY_API_KEY?: string | undefined;
@@ -31,5 +36,9 @@ export declare const env: {
     TWILIO_ACCOUNT_SID?: string | undefined;
     TWILIO_AUTH_TOKEN?: string | undefined;
     TWILIO_PHONE_NUMBER?: string | undefined;
+    APPLE_ISSUER_ID?: string | undefined;
+    APPLE_KEY_ID?: string | undefined;
+    APPLE_PRIVATE_KEY?: string | undefined;
+    APPLE_APP_APPLE_ID?: number | undefined;
 };
 //# sourceMappingURL=env.d.ts.map

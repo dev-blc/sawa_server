@@ -15,6 +15,7 @@ const admin_routes_1 = __importDefault(require("./admin.routes"));
 const prompt_routes_1 = __importDefault(require("./prompt.routes"));
 const report_routes_1 = __importDefault(require("./report.routes"));
 const us_routes_1 = __importDefault(require("./us.routes"));
+const subscription_routes_1 = __importDefault(require("./subscription.routes"));
 const router = (0, express_1.Router)();
 router.use('/auth', auth_routes_1.default);
 router.use('/users', user_routes_1.default);
@@ -27,5 +28,6 @@ router.use('/admin', admin_routes_1.default);
 router.use('/prompts', prompt_routes_1.default);
 router.use('/reports', report_routes_1.default);
 router.use('/us', us_routes_1.default);
+router.use('/subscriptions', subscription_routes_1.default);
 exports.default = router;
 //# sourceMappingURL=index.js.map

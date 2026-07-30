@@ -1,0 +1,494 @@
+"use strict";
+/**
+ * Server-side notification i18n.
+ *
+ * Every push / in-app notification is defined here as a KEY with translations in
+ * all four app languages (en/hi/kn/mr). Feature code calls `renderNotif()` with
+ * the recipient's `preferredLocale` to get a localized `{ title, body }`, and
+ * attaches `{ i18nKey, i18nParams }` to the notification `data` so the mobile app
+ * can ALSO re-render it in the user's currently-selected language (Android
+ * notifications and the in-app list are rendered client-side).
+ *
+ * Gender: `params.g` ('m' | 'f') selects gendered wording where a language needs
+ * verb/pronoun agreement. By convention the primary partner is male ('m') and the
+ * partner is female ('f') — matching the rest of the app. Never use plural "they"
+ * for a single partner.
+ */
+Object.defineProperty(exports, "__esModule", { value: true });
+exports.i18nData = exports.hasNotifKey = void 0;
+exports.renderNotif = renderNotif;
+exports.notifDataParams = notifDataParams;
+const isLocale = (l) => l === 'en' || l === 'hi' || l === 'kn' || l === 'mr';
+const pick = (v, g) => typeof v === 'string' ? v : v[g];
+const interpolate = (tpl, params) => tpl.replace(/\{(\w+)\}/g, (_m, k) => {
+    const val = params[k];
+    return val === undefined || val === null ? '' : String(val);
+});
+// Mood labels are sent as English keys (e.g. "Happy"). Translate them so the
+// server-rendered push body (iOS APNs + Android data) is fully localized, not
+// just the surrounding sentence. Mirrors SAWA/src/i18n/locales/*.ts `us.moods`.
+const MOODS = {
+    Excited: { en: 'Excited', hi: 'उत्साहित', kn: 'ಉತ್ಸಾಹಿತ', mr: 'उत्साहित' },
+    Happy: { en: 'Happy', hi: 'खुश', kn: 'ಸಂತೋಷ', mr: 'आनंदी' },
+    Calm: { en: 'Calm', hi: 'शांत', kn: 'ಶಾಂತ', mr: 'शांत' },
+    Loved: { en: 'Loved', hi: 'प्यार भरा', kn: 'ಪ್ರೀತಿಯ', mr: 'प्रेमळ' },
+    Neutral: { en: 'Neutral', hi: 'सामान्य', kn: 'ಸಾಮಾನ್ಯ', mr: 'सामान्य' },
+    Stressed: { en: 'Stressed', hi: 'तनाव में', kn: 'ಒತ್ತಡದಲ್ಲಿ', mr: 'तणावात' },
+    Tired: { en: 'Tired', hi: 'थका हुआ', kn: 'ದಣಿದ', mr: 'थकलेले' },
+    Sad: { en: 'Sad', hi: 'दुखी', kn: 'ದುಃಖಿತ', mr: 'दुःखी' },
+    'Missing You': { en: 'Missing You', hi: 'तुम्हारी कमी', kn: 'ನಿಮ್ಮ ಕೊರತೆ', mr: 'तुझी आठवण' },
+    Missing: { en: 'Missing', hi: 'कमी', kn: 'ಕೊರತೆ', mr: 'आठवण' },
+    Frustrated: { en: 'Frustrated', hi: 'निराश', kn: 'ಹತಾಶ', mr: 'निराश' },
+    Anxious: { en: 'Anxious', hi: 'चिंतित', kn: 'ಆತಂಕ', mr: 'चिंतित' },
+    Overwhelmed: { en: 'Overwhelmed', hi: 'अभिभूत', kn: 'ಭಾರವಾದ', mr: 'भारावलेले' },
+    Low: { en: 'Low', hi: 'उदास', kn: 'ಖಿನ್ನ', mr: 'उदास' },
+};
+const localizeMood = (feeling, loc) => {
+    if (!feeling)
+        return feeling;
+    return MOODS[feeling]?.[loc] ?? feeling;
+};
+// ─────────────────────────────────────────────────────────────────────────────
+// TEMPLATES
+// ─────────────────────────────────────────────────────────────────────────────
+const T = {
+    // ── Match / discovery ──────────────────────────────────────────────────────
+    'match.pending': {
+        title: { en: 'New Connection Request!', hi: 'नया कनेक्शन अनुरोध!', kn: 'ಹೊಸ ಸಂಪರ್ಕ ವಿನಂತಿ!', mr: 'नवीन कनेक्शन विनंती!' },
+        body: {
+            en: '{name} wants to connect with you!',
+            hi: '{name} आपसे जुड़ना चाहते हैं!',
+            kn: '{name} ನಿಮ್ಮೊಂದಿಗೆ ಸಂಪರ್ಕ ಸಾಧಿಸಲು ಬಯಸುತ್ತಾರೆ!',
+            mr: '{name} तुमच्याशी कनेक्ट होऊ इच्छितात!',
+        },
+    },
+    'match.connected': {
+        title: { en: "You've Connected!", hi: 'आप जुड़ गए!', kn: 'ನೀವು ಸಂಪರ್ಕ ಸಾಧಿಸಿದ್ದೀರಿ!', mr: 'तुम्ही कनेक्ट झालात!' },
+        body: {
+            en: 'You connected with {name}!',
+            hi: 'आप {name} से जुड़ गए!',
+            kn: 'ನೀವು {name} ಜೊತೆ ಸಂಪರ್ಕ ಸಾಧಿಸಿದ್ದೀರಿ!',
+            mr: 'तुम्ही {name} शी कनेक्ट झालात!',
+        },
+    },
+    'match.rejected': {
+        title: { en: 'Connection Update', hi: 'कनेक्शन अपडेट', kn: 'ಸಂಪರ್ಕ ನವೀಕರಣ', mr: 'कनेक्शन अपडेट' },
+        body: {
+            en: 'A couple decided not to connect at this time.',
+            hi: 'एक जोड़े ने इस समय न जुड़ने का फैसला किया।',
+            kn: 'ಒಂದು ಜೋಡಿ ಈ ಸಮಯದಲ್ಲಿ ಸಂಪರ್ಕ ಸಾಧಿಸದಿರಲು ನಿರ್ಧರಿಸಿದೆ.',
+            mr: 'एका जोडप्याने यावेळी कनेक्ट न होण्याचे ठरवले.',
+        },
+    },
+    'nearby.joined': {
+        title: { en: 'A new couple joined nearby', hi: 'पास में एक नया जोड़ा शामिल हुआ', kn: 'ಹತ್ತಿರದಲ್ಲಿ ಹೊಸ ಜೋಡಿ ಸೇರಿದೆ', mr: 'जवळपास एक नवीन जोडपे सामील झाले' },
+        body: {
+            en: '{name} just joined SAWA in {city}. Say hi!',
+            hi: '{name} अभी {city} में SAWA से जुड़े। नमस्ते कहें!',
+            kn: '{name} ಇದೀಗ {city} ನಲ್ಲಿ SAWA ಸೇರಿದ್ದಾರೆ. ಹಾಯ್ ಹೇಳಿ!',
+            mr: '{name} आत्ताच {city} मध्ये SAWA ला सामील झाले. हाय म्हणा!',
+        },
+    },
+    // ── Chat ───────────────────────────────────────────────────────────────────
+    'chat.private': {
+        title: { en: 'New message from {name}', hi: '{name} का नया संदेश', kn: '{name} ಇಂದ ಹೊಸ ಸಂದೇಶ', mr: '{name} कडून नवीन संदेश' },
+        body: {
+            en: 'You have new messages from {name}',
+            hi: 'आपके पास {name} के नए संदेश हैं',
+            kn: 'ನಿಮಗೆ {name} ಇಂದ ಹೊಸ ಸಂದೇಶಗಳಿವೆ',
+            mr: 'तुम्हाला {name} कडून नवीन संदेश आहेत',
+        },
+    },
+    'chat.group': {
+        title: { en: 'New in {community}', hi: '{community} में नया', kn: '{community} ನಲ್ಲಿ ಹೊಸದು', mr: '{community} मध्ये नवीन' },
+        body: {
+            en: 'New message in the group',
+            hi: 'ग्रुप में नया संदेश',
+            kn: 'ಗುಂಪಿನಲ್ಲಿ ಹೊಸ ಸಂದೇಶ',
+            mr: 'ग्रुपमध्ये नवीन संदेश',
+        },
+    },
+    // ── Community ────────────────────────────────────────────────────────────────
+    'community.invite': {
+        title: { en: 'Group Invitation', hi: 'ग्रुप निमंत्रण', kn: 'ಗುಂಪು ಆಹ್ವಾನ', mr: 'ग्रुप निमंत्रण' },
+        body: {
+            en: '{name} invited you to join {community}',
+            hi: '{name} ने आपको {community} में शामिल होने के लिए आमंत्रित किया',
+            kn: '{name} ನಿಮ್ಮನ್ನು {community} ಸೇರಲು ಆಹ್ವಾನಿಸಿದ್ದಾರೆ',
+            mr: '{name} ने तुम्हाला {community} मध्ये सामील होण्यासाठी आमंत्रित केले',
+        },
+    },
+    'community.joinRequest': {
+        title: { en: 'New Join Request', hi: 'नया शामिल होने का अनुरोध', kn: 'ಹೊಸ ಸೇರುವ ವಿನಂತಿ', mr: 'नवीन सामील होण्याची विनंती' },
+        body: {
+            en: '{name} wants to join.',
+            hi: '{name} शामिल होना चाहते हैं।',
+            kn: '{name} ಸೇರಲು ಬಯಸುತ್ತಾರೆ.',
+            mr: '{name} सामील होऊ इच्छितात.',
+        },
+    },
+    'community.requestAccepted': {
+        title: { en: 'Request Accepted!', hi: 'अनुरोध स्वीकृत!', kn: 'ವಿನಂತಿ ಸ್ವೀಕರಿಸಲಾಗಿದೆ!', mr: 'विनंती स्वीकारली!' },
+        body: {
+            en: 'You joined the group!',
+            hi: 'आप ग्रुप में शामिल हो गए!',
+            kn: 'ನೀವು ಗುಂಪಿಗೆ ಸೇರಿದ್ದೀರಿ!',
+            mr: 'तुम्ही ग्रुपमध्ये सामील झालात!',
+        },
+    },
+    // ── Us space: ask / fridge / cycle ──────────────────────────────────────────
+    'us.askFeeling': {
+        title: {
+            en: '{name} is asking how you feel',
+            hi: '{name} पूछ रहे हैं कि आप कैसा महसूस कर रहे हैं',
+            kn: 'ನೀವು ಹೇಗಿದ್ದೀರಿ ಎಂದು {name} ಕೇಳುತ್ತಿದ್ದಾರೆ',
+            mr: 'तुम्हाला कसे वाटते हे {name} विचारत आहेत',
+        },
+        body: {
+            en: 'Let {name} know how your day is going',
+            hi: '{name} को बताएं कि आपका दिन कैसा जा रहा है',
+            kn: 'ನಿಮ್ಮ ದಿನ ಹೇಗೆ ಸಾಗುತ್ತಿದೆ ಎಂದು {name} ಗೆ ತಿಳಿಸಿ',
+            mr: 'तुमचा दिवस कसा चालला आहे ते {name} ला कळवा',
+        },
+    },
+    'us.fridgeNote': {
+        title: {
+            en: '{name} left a note on the fridge',
+            hi: '{name} ने फ्रिज पर एक नोट छोड़ा',
+            kn: '{name} ಫ್ರಿಜ್‌ನಲ್ಲಿ ಒಂದು ಟಿಪ್ಪಣಿ ಬಿಟ್ಟಿದ್ದಾರೆ',
+            mr: '{name} ने फ्रिजवर एक नोट ठेवली',
+        },
+        body: { en: '{note}', hi: '{note}', kn: '{note}', mr: '{note}' },
+    },
+    'us.fridgeAck': {
+        title: {
+            en: '{name} acknowledged your note',
+            hi: '{name} ने आपका नोट देख लिया',
+            kn: '{name} ನಿಮ್ಮ ಟಿಪ್ಪಣಿಯನ್ನು ನೋಡಿದ್ದಾರೆ',
+            mr: '{name} ने तुमची नोट पाहिली',
+        },
+        body: { en: '{note}', hi: '{note}', kn: '{note}', mr: '{note}' },
+    },
+    'us.cycleShared': {
+        title: {
+            en: '{name} shared her cycle calendar',
+            hi: '{name} ने अपना साइकिल कैलेंडर साझा किया',
+            kn: '{name} ತಮ್ಮ ಸೈಕಲ್ ಕ್ಯಾಲೆಂಡರ್ ಹಂಚಿಕೊಂಡಿದ್ದಾರೆ',
+            mr: '{name} ने त्यांचे सायकल कॅलेंडर शेअर केले',
+        },
+        body: {
+            en: 'Tap to see it and be there for her',
+            hi: 'देखने के लिए टैप करें और उसका साथ दें',
+            kn: 'ನೋಡಲು ಟ್ಯಾಪ್ ಮಾಡಿ ಮತ್ತು ಅವಳ ಜೊತೆಗಿರಿ',
+            mr: 'पाहण्यासाठी टॅप करा आणि तिला साथ द्या',
+        },
+    },
+    // ── Us space: nudges ─────────────────────────────────────────────────────────
+    'us.nudge.love': {
+        title: {
+            en: '{name} sent you love ❤️',
+            hi: '{name} ने आपको प्यार भेजा ❤️',
+            kn: '{name} ನಿಮಗೆ ಪ್ರೀತಿ ಕಳುಹಿಸಿದ್ದಾರೆ ❤️',
+            mr: '{name} ने तुम्हाला प्रेम पाठवले ❤️',
+        },
+        body: {
+            en: 'Thinking of you 💛',
+            hi: 'आपको याद कर रहे हैं 💛',
+            kn: 'ನಿಮ್ಮನ್ನು ನೆನೆಯುತ್ತಿದ್ದಾರೆ 💛',
+            mr: 'तुमची आठवण येत आहे 💛',
+        },
+    },
+    'us.nudge.hug': {
+        title: {
+            en: '{name} sent you a hug 🤗',
+            hi: '{name} ने आपको गले लगाया 🤗',
+            kn: '{name} ನಿಮಗೆ ಅಪ್ಪುಗೆ ಕಳುಹಿಸಿದ್ದಾರೆ 🤗',
+            mr: '{name} ने तुम्हाला मिठी पाठवली 🤗',
+        },
+        body: {
+            en: 'Warm hug heading your way',
+            hi: 'एक गर्मजोशी भरा आलिंगन आपकी ओर',
+            kn: 'ಒಂದು ಬೆಚ್ಚಗಿನ ಅಪ್ಪುಗೆ ನಿಮ್ಮ ಕಡೆಗೆ',
+            mr: 'एक उबदार मिठी तुमच्याकडे',
+        },
+    },
+    'us.nudge.kiss': {
+        title: {
+            en: '{name} sent you a kiss 💋',
+            hi: '{name} ने आपको एक चुंबन भेजा 💋',
+            kn: '{name} ನಿಮಗೆ ಮುತ್ತು ಕಳುಹಿಸಿದ್ದಾರೆ 💋',
+            mr: '{name} ने तुम्हाला एक चुंबन पाठवले 💋',
+        },
+        body: {
+            en: 'A sweet kiss from your partner',
+            hi: 'आपके साथी की ओर से एक प्यारा चुंबन',
+            kn: 'ನಿಮ್ಮ ಸಂಗಾತಿಯಿಂದ ಒಂದು ಸಿಹಿ ಮುತ್ತು',
+            mr: 'तुमच्या जोडीदाराकडून एक गोड चुंबन',
+        },
+    },
+    'us.nudge.thinking': {
+        title: {
+            en: '{name} is thinking of you',
+            hi: '{name} आपको याद कर रहे हैं',
+            kn: '{name} ನಿಮ್ಮನ್ನು ನೆನೆಯುತ್ತಿದ್ದಾರೆ',
+            mr: '{name} तुमची आठवण काढत आहेत',
+        },
+        body: {
+            en: { m: 'You crossed his mind right now', f: 'You crossed her mind right now' },
+            hi: 'अभी उनके मन में आप ही हैं',
+            kn: 'ಈಗ ಅವರ ಮನಸ್ಸಿನಲ್ಲಿ ನೀವಿದ್ದೀರಿ',
+            mr: 'आत्ता त्यांच्या मनात तुम्हीच आहात',
+        },
+    },
+    'us.nudge.missyou': {
+        title: {
+            en: '{name} misses you',
+            hi: '{name} आपको मिस कर रहे हैं',
+            kn: '{name} ನಿಮ್ಮನ್ನು ಮಿಸ್ ಮಾಡುತ್ತಿದ್ದಾರೆ',
+            mr: '{name} तुम्हाला मिस करत आहेत',
+        },
+        body: {
+            en: { m: 'He wishes you were here', f: 'She wishes you were here' },
+            hi: 'काश आप यहाँ होते',
+            kn: 'ನೀವು ಇಲ್ಲಿ ಇರಬೇಕೆಂದು ಬಯಸುತ್ತಾರೆ',
+            mr: 'तुम्ही इथे असावे असे त्यांना वाटते',
+        },
+    },
+    'us.nudge.cheerup': {
+        title: {
+            en: '{name} is cheering you up',
+            hi: '{name} आपका हौसला बढ़ा रहे हैं',
+            kn: '{name} ನಿಮ್ಮನ್ನು ಹುರಿದುಂಬಿಸುತ್ತಿದ್ದಾರೆ',
+            mr: '{name} तुम्हाला प्रोत्साहन देत आहेत',
+        },
+        body: {
+            en: 'A little boost from your partner',
+            hi: 'आपके साथी की ओर से थोड़ा हौसला',
+            kn: 'ನಿಮ್ಮ ಸಂಗಾತಿಯಿಂದ ಸ್ವಲ್ಪ ಪ್ರೋತ್ಸಾಹ',
+            mr: 'तुमच्या जोडीदाराकडून थोडे प्रोत्साहन',
+        },
+    },
+    'us.nudge.here': {
+        title: {
+            en: '{name} is here for you',
+            hi: '{name} आपके साथ हैं',
+            kn: '{name} ನಿಮ್ಮ ಜೊತೆಗಿದ್ದಾರೆ',
+            mr: '{name} तुमच्यासोबत आहेत',
+        },
+        body: {
+            en: { m: 'You have his full support', f: 'You have her full support' },
+            hi: 'उनका पूरा साथ आपके साथ है',
+            kn: 'ಅವರ ಸಂಪೂರ್ಣ ಬೆಂಬಲ ನಿಮಗಿದೆ',
+            mr: 'त्यांचा पूर्ण पाठिंबा तुम्हाला आहे',
+        },
+    },
+    'us.nudge.appreciate': {
+        title: {
+            en: '{name} appreciates you',
+            hi: '{name} आपकी सराहना करते हैं',
+            kn: '{name} ನಿಮ್ಮನ್ನು ಮೆಚ್ಚುತ್ತಾರೆ',
+            mr: '{name} तुमचे कौतुक करतात',
+        },
+        body: {
+            en: { m: "He's grateful to have you", f: "She's grateful to have you" },
+            hi: 'आपको पाकर वे आभारी हैं',
+            kn: 'ನಿಮ್ಮನ್ನು ಪಡೆದಿದ್ದಕ್ಕೆ ಅವರು ಕೃತಜ್ಞರಾಗಿದ್ದಾರೆ',
+            mr: 'तुम्ही मिळाल्याबद्दल ते कृतज्ञ आहेत',
+        },
+    },
+    'us.nudge.generic': {
+        title: {
+            en: '{name} sent you a nudge 💛',
+            hi: '{name} ने आपको एक नज़ भेजा 💛',
+            kn: '{name} ನಿಮಗೆ ಒಂದು ನಡ್ಜ್ ಕಳುಹಿಸಿದ್ದಾರೆ 💛',
+            mr: '{name} ने तुम्हाला एक नज पाठवली 💛',
+        },
+        body: {
+            en: 'Tap to see it',
+            hi: 'देखने के लिए टैप करें',
+            kn: 'ನೋಡಲು ಟ್ಯಾಪ್ ಮಾಡಿ',
+            mr: 'पाहण्यासाठी टॅप करा',
+        },
+    },
+    // ── Us space: dates ──────────────────────────────────────────────────────────
+    'us.date.request': {
+        title: {
+            en: '{name} wants to plan {actLabel} 📅',
+            hi: '{name} {actLabel} की योजना बनाना चाहते हैं 📅',
+            kn: '{name} {actLabel} ಯೋಜಿಸಲು ಬಯಸುತ್ತಾರೆ 📅',
+            mr: '{name} {actLabel} ची योजना करू इच्छितात 📅',
+        },
+        body: {
+            en: 'Tap to see the date request',
+            hi: 'डेट अनुरोध देखने के लिए टैप करें',
+            kn: 'ಡೇಟ್ ವಿನಂತಿ ನೋಡಲು ಟ್ಯಾಪ್ ಮಾಡಿ',
+            mr: 'डेट विनंती पाहण्यासाठी टॅप करा',
+        },
+    },
+    'us.date.accept': {
+        title: {
+            en: '{name} confirmed the date! 🎉',
+            hi: '{name} ने डेट की पुष्टि की! 🎉',
+            kn: '{name} ಡೇಟ್ ದೃಢಪಡಿಸಿದ್ದಾರೆ! 🎉',
+            mr: '{name} ने डेट निश्चित केली! 🎉',
+        },
+        body: {
+            en: "It's on the calendar 🗓️",
+            hi: 'यह कैलेंडर पर है 🗓️',
+            kn: 'ಇದು ಕ್ಯಾಲೆಂಡರ್‌ನಲ್ಲಿದೆ 🗓️',
+            mr: 'ते कॅलेंडरवर आहे 🗓️',
+        },
+    },
+    'us.date.reject': {
+        title: {
+            en: "{name} couldn't make it this time",
+            hi: '{name} इस बार नहीं आ सके',
+            kn: '{name} ಈ ಬಾರಿ ಬರಲಾಗಲಿಲ್ಲ',
+            mr: '{name} यावेळी येऊ शकले नाहीत',
+        },
+        body: {
+            en: 'Maybe next time 🙏',
+            hi: 'शायद अगली बार 🙏',
+            kn: 'ಬಹುಶಃ ಮುಂದಿನ ಬಾರಿ 🙏',
+            mr: 'कदाचित पुढच्या वेळी 🙏',
+        },
+    },
+    // ── Us space: mood ───────────────────────────────────────────────────────────
+    'us.mood': {
+        title: {
+            en: { m: '{name} shared how he feels', f: '{name} shared how she feels' },
+            hi: '{name} ने बताया कि वे कैसा महसूस कर रहे हैं',
+            kn: '{name} ತಾವು ಹೇಗಿದ್ದೇವೆ ಎಂದು ಹಂಚಿಕೊಂಡಿದ್ದಾರೆ',
+            mr: '{name} ने त्यांना कसे वाटते ते शेअर केले',
+        },
+        body: {
+            en: 'Feeling {feeling}',
+            hi: '{feeling} महसूस कर रहे हैं',
+            kn: '{feeling} ಅನಿಸುತ್ತಿದೆ',
+            mr: '{feeling} वाटत आहे',
+        },
+    },
+    // ── Us space: game ───────────────────────────────────────────────────────────
+    'us.game.challenge': {
+        title: {
+            en: '{name} challenged you 🎮',
+            hi: '{name} ने आपको चुनौती दी 🎮',
+            kn: '{name} ನಿಮಗೆ ಸವಾಲು ಹಾಕಿದ್ದಾರೆ 🎮',
+            mr: '{name} ने तुम्हाला आव्हान दिले 🎮',
+        },
+        body: {
+            en: 'Tic-Tac-Toe! Tap to accept and play',
+            hi: 'टिक-टैक-टो! स्वीकार करने और खेलने के लिए टैप करें',
+            kn: 'ಟಿಕ್-ಟ್ಯಾಕ್-ಟೋ! ಸ್ವೀಕರಿಸಲು ಮತ್ತು ಆಡಲು ಟ್ಯಾಪ್ ಮಾಡಿ',
+            mr: 'टिक-टॅक-टो! स्वीकारण्यासाठी आणि खेळण्यासाठी टॅप करा',
+        },
+    },
+    // ── Cycle auto-nudges (cron) — recipient is the male partner ({boy}) ─────────
+    'cycle.pre_period': {
+        title: {
+            en: "🌸 {girl}'s period is coming soon",
+            hi: '🌸 {girl} का पीरियड जल्द आने वाला है',
+            kn: '🌸 {girl} ಅವರ ಮುಟ್ಟು ಶೀಘ್ರದಲ್ಲೇ ಬರಲಿದೆ',
+            mr: '🌸 {girl} ची मासिक पाळी लवकरच येणार आहे',
+        },
+        body: {
+            en: 'Hey {boy}, {girl} may get her period in a day or two — be extra gentle and stock up on her favourites 💗',
+            hi: 'हे {boy}, {girl} को एक-दो दिन में पीरियड आ सकता है — थोड़ा और कोमल रहें और उसकी पसंदीदा चीज़ें तैयार रखें 💗',
+            kn: 'ಹೇ {boy}, {girl} ಗೆ ಒಂದೆರಡು ದಿನಗಳಲ್ಲಿ ಮುಟ್ಟು ಬರಬಹುದು — ಹೆಚ್ಚು ಸೌಮ್ಯವಾಗಿರಿ ಮತ್ತು ಅವಳ ಇಷ್ಟದ ವಸ್ತುಗಳನ್ನು ಸಿದ್ಧವಾಗಿಡಿ 💗',
+            mr: 'हे {boy}, {girl} ला एक-दोन दिवसांत मासिक पाळी येऊ शकते — जरा जास्त हळुवार राहा आणि तिच्या आवडत्या गोष्टी तयार ठेवा 💗',
+        },
+    },
+    'cycle.period': {
+        title: {
+            en: "🌸 {girl}'s period may start today",
+            hi: '🌸 {girl} का पीरियड आज शुरू हो सकता है',
+            kn: '🌸 {girl} ಅವರ ಮುಟ್ಟು ಇಂದು ಪ್ರಾರಂಭವಾಗಬಹುದು',
+            mr: '🌸 {girl} ची मासिक पाळी आज सुरू होऊ शकते',
+        },
+        body: {
+            en: 'Hey {boy}, be extra gentle and caring with her today 💗',
+            hi: 'हे {boy}, आज उसके साथ थोड़ा और कोमल और ख्याल रखने वाले बनें 💗',
+            kn: 'ಹೇ {boy}, ಇಂದು ಅವಳೊಂದಿಗೆ ಹೆಚ್ಚು ಸೌಮ್ಯವಾಗಿ ಮತ್ತು ಕಾಳಜಿಯಿಂದಿರಿ 💗',
+            mr: 'हे {boy}, आज तिच्याशी जरा जास्त हळुवार आणि काळजीने वागा 💗',
+        },
+    },
+    'cycle.fertile': {
+        title: {
+            en: "💞 {girl}'s fertile window starts today",
+            hi: '💞 {girl} की फर्टाइल विंडो आज शुरू होती है',
+            kn: '💞 {girl} ಅವರ ಫಲವತ್ತಾದ ಅವಧಿ ಇಂದು ಪ್ರಾರಂಭವಾಗುತ್ತದೆ',
+            mr: '💞 {girl} ची फर्टाइल विंडो आज सुरू होते',
+        },
+        body: {
+            en: 'Hey {boy}, a little extra love goes a long way this week',
+            hi: 'हे {boy}, इस हफ्ते थोड़ा अतिरिक्त प्यार बहुत काम आता है',
+            kn: 'ಹೇ {boy}, ಈ ವಾರ ಸ್ವಲ್ಪ ಹೆಚ್ಚುವರಿ ಪ್ರೀತಿ ಬಹಳ ಸಹಾಯ ಮಾಡುತ್ತದೆ',
+            mr: 'हे {boy}, या आठवड्यात थोडे जास्त प्रेम खूप उपयोगी पडते',
+        },
+    },
+    'cycle.ovulation': {
+        title: {
+            en: '💝 {girl} is in her ovulation period',
+            hi: '💝 {girl} अपने ओव्यूलेशन काल में हैं',
+            kn: '💝 {girl} ಅವರ ಅಂಡೋತ್ಪತ್ತಿ ಅವಧಿಯಲ್ಲಿದ್ದಾರೆ',
+            mr: '💝 {girl} त्यांच्या ओव्ह्युलेशन काळात आहेत',
+        },
+        body: {
+            en: 'Hey {boy}, give her some treats and chocolates to make her feel special!',
+            hi: 'हे {boy}, उसे कुछ ट्रीट और चॉकलेट देकर खास महसूस कराएं!',
+            kn: 'ಹೇ {boy}, ಅವಳಿಗೆ ಕೆಲವು ಟ್ರೀಟ್‌ಗಳು ಮತ್ತು ಚಾಕೊಲೇಟ್‌ಗಳನ್ನು ನೀಡಿ ವಿಶೇಷವೆನಿಸುವಂತೆ ಮಾಡಿ!',
+            mr: 'हे {boy}, तिला काही ट्रीट्स आणि चॉकलेट देऊन खास वाटू द्या!',
+        },
+    },
+    'cycle.pms': {
+        title: {
+            en: '🫂 {girl} may have mood swings now',
+            hi: '🫂 {girl} को अभी मूड स्विंग्स हो सकते हैं',
+            kn: '🫂 {girl} ಗೆ ಈಗ ಮೂಡ್ ಸ್ವಿಂಗ್‌ಗಳಾಗಬಹುದು',
+            mr: '🫂 {girl} ला आता मूड स्विंग्स होऊ शकतात',
+        },
+        body: {
+            en: 'Hey {boy}, {girl} is in her PMS phase — she might feel moody or extra sensitive. Be patient, compliment her, and surprise her with something she loves 💗',
+            hi: 'हे {boy}, {girl} अपने PMS चरण में हैं — वह मूडी या ज़्यादा संवेदनशील महसूस कर सकती हैं। धैर्य रखें, उसकी तारीफ करें और उसकी पसंद की कोई चीज़ देकर सरप्राइज़ करें 💗',
+            kn: 'ಹೇ {boy}, {girl} ಅವರ PMS ಹಂತದಲ್ಲಿದ್ದಾರೆ — ಅವಳು ಮೂಡಿ ಅಥವಾ ಹೆಚ್ಚು ಸೂಕ್ಷ್ಮವಾಗಿರಬಹುದು. ತಾಳ್ಮೆಯಿಂದಿರಿ, ಅವಳನ್ನು ಹೊಗಳಿ, ಮತ್ತು ಅವಳ ಇಷ್ಟದ ವಸ್ತುವಿನಿಂದ ಅಚ್ಚರಿಗೊಳಿಸಿ 💗',
+            mr: 'हे {boy}, {girl} त्यांच्या PMS टप्प्यात आहेत — त्या चिडचिड्या किंवा जास्त संवेदनशील वाटू शकतात. धीर धरा, तिचे कौतुक करा आणि तिच्या आवडीच्या एखाद्या गोष्टीने सरप्राइज द्या 💗',
+        },
+    },
+};
+/**
+ * Render a localized notification. Falls back to English, then to the raw key.
+ */
+function renderNotif(locale, key, params = {}) {
+    const loc = isLocale(locale) ? locale : 'en';
+    const entry = T[key];
+    if (!entry)
+        return { title: '', body: '' };
+    const g = params.g === 'm' ? 'm' : 'f';
+    // Localize the mood word itself (e.g. "Happy" → "ಸಂತೋಷ") before interpolation.
+    const p = params.feeling
+        ? { ...params, feeling: localizeMood(params.feeling, loc) }
+        : params;
+    const title = interpolate(pick(entry.title[loc] ?? entry.title.en, g), p);
+    const body = interpolate(pick(entry.body[loc] ?? entry.body.en, g), p);
+    return { title, body };
+}
+/** Serialize params for the FCM `data` payload (all values must be strings). */
+function notifDataParams(params = {}) {
+    const out = {};
+    for (const [k, v] of Object.entries(params)) {
+        if (v !== undefined && v !== null)
+            out[k] = String(v);
+    }
+    return out;
+}
+/** True when we have a template for this key. */
+const hasNotifKey = (key) => !!T[key];
+exports.hasNotifKey = hasNotifKey;
+/**
+ * Build the `data` fields to attach to a notification so both the mobile client
+ * (in-app + Android notifee) and the push service can localize it. Spread the
+ * result into your notification `data` object.
+ */
+const i18nData = (key, params = {}) => ({ i18nKey: key, i18nParams: params });
+exports.i18nData = i18nData;
+//# sourceMappingURL=notif.js.map

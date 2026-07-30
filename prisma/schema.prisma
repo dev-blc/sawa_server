@@ -354,6 +354,38 @@ model CoupleUsState {
   @@map("couple_us_state")
 }
 
+// ─── Subscriptions (Sawa Prime / Sawa Prime Plus) ───────────────────────────
+// Per-couple entitlement (either partner's purchase unlocks the couple). The
+// physical table is created/ensured at boot in config/ensureSchema.ts because
+// production deploys never run prisma migrate. Keep the two in sync.
+model Subscription {
+  id                    String    @id @default(cuid())
+  coupleId              String    @unique
+  // 'PRIME' | 'PRIME_PLUS'
+  tier                  String    @default("PRIME")
+  // 'NONE' | 'TRIALING' | 'ACTIVE' | 'GRACE' | 'EXPIRED' | 'CANCELLED'
+  status                String    @default("NONE")
+  // 'ios' | 'android' | 'manual'
+  platform              String?
+  productId             String?
+  // Apple StoreKit: stable id across renewals for the same subscription.
+  originalTransactionId String?   @unique
+  // Google Play purchase token (Android — wired later).
+  purchaseToken         String?
+  trialUsed             Boolean   @default(false)
+  trialStartedAt        DateTime?
+  trialEndsAt           DateTime?
+  currentPeriodEnd      DateTime?
+  autoRenew             Boolean   @default(true)
+  // 'Sandbox' | 'Production' (Apple environment the transaction came from)
+  environment           String?
+  createdAt             DateTime  @default(now())
+  updatedAt             DateTime  @updatedAt
+
+  @@index([coupleId])
+  @@map("subscriptions")
+}
+
 enum UserRole {
   primary
   partner

@@ -4,14 +4,29 @@ exports.registerUsHandlers = void 0;
 const prisma_1 = require("../lib/prisma");
 const logger_1 = require("../utils/logger");
 const push_service_1 = require("../services/push.service");
+const notif_1 = require("../i18n/notif");
 const cache_1 = require("../lib/cache");
 /** Redis key for a user's last shared feeling. TTL 7 days. */
 const feelingKey = (coupleId, userId) => `us:feeling:${coupleId}:${userId}`;
-/** Redis key for the couple's game scoreboard: { [userId]: wins }. TTL 1 year. */
-const gamePointsKey = (coupleId) => `us:game_points:${coupleId}`;
-/** Redis key for the current win streak: { userId, count }. TTL 1 year. */
-const gameStreakKey = (coupleId) => `us:game_streak:${coupleId}`;
-const GAME_POINTS_TTL = 365 * 24 * 60 * 60;
+/** An empty Tic-Tac-Toe board, encoded as 9 chars ('_' = empty cell). */
+const TTT_EMPTY_BOARD = '_________';
+/**
+ * Clear the couple's persisted Tic-Tac-Toe session (challenge withdrawn, quit,
+ * or game finished). Leaves the win-streak fields untouched.
+ */
+async function clearGameSession(coupleId, gameId) {
+    await prisma_1.prisma.coupleUsState.updateMany({
+        where: gameId ? { coupleId, gameSessionId: gameId } : { coupleId },
+        data: {
+            gameSessionId: null,
+            gameSessionStatus: null,
+            gameChallengerId: null,
+            gameBoard: null,
+            gameTurn: null,
+            gameSessionAt: null,
+        },
+    });
+}
 /**
  * US Space Socket Handlers
  * ─────────────────────────────────────────────────────────────────────────
@@ -63,6 +78,12 @@ async function saveUsNotification(params) {
 function firstName(name) {
     return (name || '').split(/\s+/)[0] || name;
 }
+function pronounsFor(role) {
+    const female = role === 'partner';
+    return female
+        ? { subj: 'she', Subj: 'She', obj: 'her', poss: 'her', be: "she's", Be: "She's" }
+        : { subj: 'he', Subj: 'He', obj: 'him', poss: 'his', be: "he's", Be: "He's" };
+}
 /** Look up the partner's User.id AND the sender's profile photo. */
 async function findPartnerIdAndPhoto(senderUserId, coupleId) {
     try {
@@ -90,7 +111,12 @@ async function findPartnerIdAndPhoto(senderUserId, coupleId) {
     }
 }
 const registerUsHandlers = (io, socket) => {
-    const { userId, coupleId, userName } = socket;
+    const { userId, coupleId, userName, userRole } = socket;
+    // Pronouns for the SENDER (the socket user) — used in all "from partner" copy.
+    const p = pronounsFor(userRole);
+    // Gender token for the SENDER (notifications describe the sender's action):
+    // primary = male ('m'), partner = female ('f'). Used to localize gendered copy.
+    const g = userRole === 'partner' ? 'f' : 'm';
     // ── us:nudge ──────────────────────────────────────────────────────────
     socket.on('us:nudge', async (payload) => {
         if (!userId || !coupleId)
@@ -118,23 +144,32 @@ const registerUsHandlers = (io, socket) => {
         // 2. Save in-app notification & set push title based on kind.
         const { partnerId, senderPhoto } = await findPartnerIdAndPhoto(userId, coupleId);
         let pushTitle = `${senderName} sent you a nudge 💛`;
+        // i18n key/params used for BOTH the in-app row (client re-renders) and push.
+        let i18nKey = 'us.nudge.generic';
+        let i18nParams = { name: senderName };
         if (payload.kind === 'hug') {
+            i18nKey = 'us.nudge.hug';
+            i18nParams = { name: senderName };
             await saveUsNotification({
                 coupleId,
                 senderUserId: userId,
                 subtype: 'us_hug',
                 title: `${senderName} sent you a hug`,
                 message: 'Warm hug heading your way',
+                extraData: (0, notif_1.i18nData)(i18nKey, i18nParams),
             });
             pushTitle = `${senderName} sent you a hug 🤗`;
         }
         else if (payload.kind === 'kiss') {
+            i18nKey = 'us.nudge.kiss';
+            i18nParams = { name: senderName };
             await saveUsNotification({
                 coupleId,
                 senderUserId: userId,
                 subtype: 'us_kiss',
                 title: `${senderName} sent you a kiss`,
                 message: 'A sweet kiss from your partner',
+                extraData: (0, notif_1.i18nData)(i18nKey, i18nParams),
             });
             pushTitle = `${senderName} sent you a kiss 💋`;
         }
@@ -142,96 +177,119 @@ const registerUsHandlers = (io, socket) => {
             const actLabel = payload.activity ? payload.activity : 'a date';
             const timeLabel = payload.time ? ` at ${payload.time}` : '';
             const dateMsg = payload.date ? `Want to go out on ${payload.date}${timeLabel} ✨` : 'Want to plan something special ✨';
+            i18nKey = 'us.date.request';
+            i18nParams = { name: senderName, actLabel };
             await saveUsNotification({
                 coupleId,
                 senderUserId: userId,
                 subtype: 'us_date_plan',
                 title: `Date request · ${actLabel}`,
                 message: payload.note ? `${dateMsg.replace(' ✨', '')} — "${payload.note}"` : dateMsg.replace(' ✨', ''),
-                extraData: { id: payload.id, date: payload.date, rawDate: payload.rawDate, activity: payload.activity, time: payload.time, note: payload.note, kind: 'date_request', planBy: payload.planBy || senderName },
+                extraData: { id: payload.id, date: payload.date, rawDate: payload.rawDate, activity: payload.activity, time: payload.time, note: payload.note, kind: 'date_request', planBy: payload.planBy || senderName, ...(0, notif_1.i18nData)(i18nKey, i18nParams) },
             });
-            pushTitle = `${senderName} want to plan ${actLabel} 📅`;
+            pushTitle = `${senderName} wants to plan ${actLabel} 📅`;
         }
         else if (payload.kind === 'date_accept') {
+            i18nKey = 'us.date.accept';
+            i18nParams = { name: senderName };
             await saveUsNotification({
                 coupleId,
                 senderUserId: userId,
                 subtype: 'us_date_plan',
                 title: '🎉 Date confirmed!',
                 message: `It's on the calendar 🗓️`,
-                extraData: { id: payload.id, date: payload.date, rawDate: payload.rawDate, activity: payload.activity, kind: 'date_accept' },
+                extraData: { id: payload.id, date: payload.date, rawDate: payload.rawDate, activity: payload.activity, kind: 'date_accept', ...(0, notif_1.i18nData)(i18nKey, i18nParams) },
             });
             pushTitle = `${senderName} confirmed the date! 🎉`;
         }
         else if (payload.kind === 'date_reject') {
+            i18nKey = 'us.date.reject';
+            i18nParams = { name: senderName };
             await saveUsNotification({
                 coupleId,
                 senderUserId: userId,
                 subtype: 'us_date_plan',
                 title: '😔 Date declined',
                 message: 'Maybe next time 🙏',
-                extraData: { kind: 'date_reject' },
+                extraData: { kind: 'date_reject', ...(0, notif_1.i18nData)(i18nKey, i18nParams) },
             });
             pushTitle = `${senderName} couldn't make it this time`;
         }
         else if (payload.kind === 'date_plan') {
             // Legacy fallback
+            i18nKey = 'us.nudge.generic';
+            i18nParams = { name: senderName };
             await saveUsNotification({
                 coupleId,
                 senderUserId: userId,
                 subtype: 'us_date_plan',
                 title: `${senderName} planned a date`,
                 message: payload.message || 'A date has been planned for you two!',
-                extraData: { date: payload.date, rawDate: payload.rawDate, activity: payload.activity },
+                extraData: { date: payload.date, rawDate: payload.rawDate, activity: payload.activity, ...(0, notif_1.i18nData)(i18nKey, i18nParams) },
             });
         }
         else if (payload.kind === 'thinking') {
+            i18nKey = 'us.nudge.thinking';
+            i18nParams = { name: senderName, g };
             await saveUsNotification({
                 coupleId,
                 senderUserId: userId,
                 subtype: 'us_thinking',
                 title: `${senderName} is thinking of you`,
-                message: 'You crossed their mind right now',
+                message: `You crossed ${p.poss} mind right now`,
+                extraData: (0, notif_1.i18nData)(i18nKey, i18nParams),
             });
             pushTitle = `${senderName} is thinking of you`;
         }
         else if (payload.kind === 'missyou') {
+            i18nKey = 'us.nudge.missyou';
+            i18nParams = { name: senderName, g };
             await saveUsNotification({
                 coupleId,
                 senderUserId: userId,
                 subtype: 'us_missyou',
                 title: `${senderName} misses you`,
-                message: 'They wish you were here',
+                message: `${p.Subj} wishes you were here`,
+                extraData: (0, notif_1.i18nData)(i18nKey, i18nParams),
             });
             pushTitle = `${senderName} misses you`;
         }
         else if (payload.kind === 'cheerup') {
+            i18nKey = 'us.nudge.cheerup';
+            i18nParams = { name: senderName };
             await saveUsNotification({
                 coupleId,
                 senderUserId: userId,
                 subtype: 'us_cheerup',
                 title: `${senderName} is cheering you up`,
                 message: 'A little boost from your partner',
+                extraData: (0, notif_1.i18nData)(i18nKey, i18nParams),
             });
             pushTitle = `${senderName} is cheering you up`;
         }
         else if (payload.kind === 'here') {
+            i18nKey = 'us.nudge.here';
+            i18nParams = { name: senderName, g };
             await saveUsNotification({
                 coupleId,
                 senderUserId: userId,
                 subtype: 'us_here',
                 title: `${senderName} is here for you`,
-                message: 'You have their full support',
+                message: `You have ${p.poss} full support`,
+                extraData: (0, notif_1.i18nData)(i18nKey, i18nParams),
             });
             pushTitle = `${senderName} is here for you`;
         }
         else if (payload.kind === 'appreciate') {
+            i18nKey = 'us.nudge.appreciate';
+            i18nParams = { name: senderName, g };
             await saveUsNotification({
                 coupleId,
                 senderUserId: userId,
                 subtype: 'us_appreciate',
                 title: `${senderName} appreciates you`,
-                message: 'They are grateful to have you',
+                message: `${p.Subj} is grateful to have you`,
+                extraData: (0, notif_1.i18nData)(i18nKey, i18nParams),
             });
             pushTitle = `${senderName} appreciates you`;
         }
@@ -253,6 +311,7 @@ const registerUsHandlers = (io, socket) => {
                     kind: payload.kind,
                     navigate: 'Notifications',
                     ...(senderPhoto ? { senderPhoto } : {}), // couple profile photo for largeIcon
+                    ...(0, notif_1.i18nData)(i18nKey, i18nParams),
                 },
                 collapseKey: 'us_nudge',
             }).catch(() => null);
@@ -275,6 +334,7 @@ const registerUsHandlers = (io, socket) => {
             subtype: 'us_love',
             title: `${senderName} sent you love ❤️`,
             message: 'Thinking of you 💛',
+            extraData: (0, notif_1.i18nData)('us.nudge.love', { name: senderName }),
         });
         // Tell the partner's Notifications screen to refresh right away.
         io.to(`couple:${coupleId}`).except(socket.id).emit('notification:new', {
@@ -285,7 +345,7 @@ const registerUsHandlers = (io, socket) => {
             (0, push_service_1.pushToUser)(lovePartnerId, {
                 title: `${senderName} sent you love ❤️`,
                 body: 'Tap to see it',
-                data: { type: 'us_love', navigate: 'Notifications', ...(loveSenderPhoto ? { senderPhoto: loveSenderPhoto } : {}) },
+                data: { type: 'us_love', navigate: 'Notifications', ...(loveSenderPhoto ? { senderPhoto: loveSenderPhoto } : {}), ...(0, notif_1.i18nData)('us.nudge.love', { name: senderName }) },
                 collapseKey: 'us_love',
             }).catch(() => null);
         }
@@ -312,11 +372,11 @@ const registerUsHandlers = (io, socket) => {
             coupleId,
             senderUserId: userId,
             subtype: 'us_mood',
-            title: `${senderFirstName} updated their mood`,
+            title: `${senderFirstName} updated ${p.poss} mood`,
             message: payload.note?.trim()
                 ? `Feeling ${feelingLabel} — "${payload.note.trim()}"`
-                : `They're feeling ${feelingLabel} right now`,
-            extraData: { feeling: payload.feeling },
+                : `${p.Be} feeling ${feelingLabel} right now`,
+            extraData: { feeling: payload.feeling, ...(0, notif_1.i18nData)('us.mood', { name: senderFirstName, feeling: feelingLabel, g }) },
         });
         // Tell the partner's Notifications screen to refresh right away.
         io.to(`couple:${coupleId}`).except(socket.id).emit('notification:new', {
@@ -326,15 +386,16 @@ const registerUsHandlers = (io, socket) => {
         const { partnerId: feelPartnerId, senderPhoto: feelSenderPhoto } = await findPartnerIdAndPhoto(userId, coupleId);
         if (feelPartnerId) {
             (0, push_service_1.pushToUser)(feelPartnerId, {
-                title: `${senderFirstName} shared how they feel`,
+                title: `${senderFirstName} shared how ${p.subj} feels`,
                 body: payload.note?.trim()
                     ? `"${payload.note.trim()}"`
-                    : `They're feeling ${feelingLabel} right now`,
+                    : `${p.Be} feeling ${feelingLabel} right now`,
                 data: {
                     type: 'us_feeling',
                     feeling: payload.feeling,
                     navigate: 'Notifications',
                     ...(feelSenderPhoto ? { senderPhoto: feelSenderPhoto } : {}),
+                    ...(0, notif_1.i18nData)('us.mood', { name: senderFirstName, feeling: feelingLabel, g }),
                 },
                 collapseKey: 'us_feeling',
             }).catch(() => null);
@@ -351,6 +412,34 @@ const registerUsHandlers = (io, socket) => {
             return;
         const senderName = firstName(userName || 'Your partner');
         logger_1.logger.info(`[UsSocket] game challenge ${payload.gameId} from ${userId} in couple ${coupleId}`);
+        // 0. Persist a shared PENDING session so both partners can (re)join the same
+        //    challenge even after leaving the screen — this is what prevents the
+        //    "stale challenge" where the requester left and the partner got stuck.
+        try {
+            await prisma_1.prisma.coupleUsState.upsert({
+                where: { coupleId },
+                create: {
+                    coupleId,
+                    gameSessionId: payload.gameId,
+                    gameSessionStatus: 'pending',
+                    gameChallengerId: userId,
+                    gameBoard: TTT_EMPTY_BOARD,
+                    gameTurn: 'X',
+                    gameSessionAt: new Date(),
+                },
+                update: {
+                    gameSessionId: payload.gameId,
+                    gameSessionStatus: 'pending',
+                    gameChallengerId: userId,
+                    gameBoard: TTT_EMPTY_BOARD,
+                    gameTurn: 'X',
+                    gameSessionAt: new Date(),
+                },
+            });
+        }
+        catch (err) {
+            logger_1.logger.warn(`[UsSocket] persist challenge failed: ${err.message}`);
+        }
         // 1. Instant relay so an online partner sees the invite immediately.
         io.to(`couple:${coupleId}`).except(socket.id).emit('us:game:challenge', {
             gameId: payload.gameId,
@@ -365,7 +454,7 @@ const registerUsHandlers = (io, socket) => {
             subtype: 'us_game_challenge',
             title: `${senderName} challenged you to Tic-Tac-Toe 🎮`,
             message: 'Tap to accept and play!',
-            extraData: { gameId: payload.gameId },
+            extraData: { gameId: payload.gameId, ...(0, notif_1.i18nData)('us.game.challenge', { name: senderName }) },
         });
         io.to(`couple:${coupleId}`).except(socket.id).emit('notification:new', { type: 'us_game_challenge' });
         // 3. Push — only to the partner's device.
@@ -379,15 +468,26 @@ const registerUsHandlers = (io, socket) => {
                     gameId: payload.gameId,
                     navigate: 'Notifications',
                     ...(senderPhoto ? { senderPhoto } : {}),
+                    ...(0, notif_1.i18nData)('us.game.challenge', { name: senderName }),
                 },
                 collapseKey: 'us_game',
             }).catch(() => null);
         }
     });
     // ── us:game:accept — partner accepts; the whole room gets the start signal
-    socket.on('us:game:accept', (payload) => {
+    socket.on('us:game:accept', async (payload) => {
         if (!userId || !coupleId || !payload?.gameId)
             return;
+        // Flip the shared session to ACTIVE so a rejoining partner resumes the match.
+        try {
+            await prisma_1.prisma.coupleUsState.updateMany({
+                where: { coupleId, gameSessionId: payload.gameId },
+                data: { gameSessionStatus: 'active', gameSessionAt: new Date() },
+            });
+        }
+        catch (err) {
+            logger_1.logger.warn(`[UsSocket] persist accept failed: ${err.message}`);
+        }
         io.to(`couple:${coupleId}`).emit('us:game:start', {
             gameId: payload.gameId,
             accepterUserId: userId,
@@ -396,18 +496,40 @@ const registerUsHandlers = (io, socket) => {
         });
     });
     // ── us:game:move — relay a board move to the partner (fast path) ───────
-    socket.on('us:game:move', (payload) => {
+    socket.on('us:game:move', async (payload) => {
         if (!userId || !coupleId || !payload?.gameId)
             return;
+        // Relay first (fast path), then persist the board so both can resume.
         io.to(`couple:${coupleId}`).except(socket.id).emit('us:game:move', {
             gameId: payload.gameId,
             cell: payload.cell,
             symbol: payload.symbol,
             byUserId: userId,
         });
+        try {
+            const st = await prisma_1.prisma.coupleUsState.findUnique({ where: { coupleId } });
+            if (st?.gameSessionId === payload.gameId &&
+                typeof payload.cell === 'number' &&
+                payload.cell >= 0 &&
+                payload.cell < 9) {
+                const arr = (st.gameBoard || TTT_EMPTY_BOARD).split('');
+                arr[payload.cell] = payload.symbol === 'O' ? 'O' : 'X';
+                await prisma_1.prisma.coupleUsState.update({
+                    where: { coupleId },
+                    data: {
+                        gameBoard: arr.join(''),
+                        gameTurn: payload.symbol === 'X' ? 'O' : 'X',
+                        gameSessionAt: new Date(),
+                    },
+                });
+            }
+        }
+        catch (err) {
+            logger_1.logger.warn(`[UsSocket] persist move failed: ${err.message}`);
+        }
     });
     // ── us:game:quit — one player leaves mid-game ──────────────────────────
-    socket.on('us:game:quit', (payload) => {
+    socket.on('us:game:quit', async (payload) => {
         if (!userId || !coupleId || !payload?.gameId)
             return;
         io.to(`couple:${coupleId}`).except(socket.id).emit('us:game:quit', {
@@ -415,12 +537,21 @@ const registerUsHandlers = (io, socket) => {
             byUserId: userId,
             byName: firstName(userName || ''),
         });
+        try {
+            await clearGameSession(coupleId, payload.gameId);
+        }
+        catch (err) {
+            logger_1.logger.warn(`[UsSocket] clear session on quit failed: ${err.message}`);
+        }
     });
     // ── us:game:result — winner's client reports; server scores it once ────
     socket.on('us:game:result', async (payload) => {
         if (!userId || !coupleId || !payload?.gameId)
             return;
         try {
+            // The round is over — always clear the shared session (win, loss, or draw)
+            // so the button returns to "Challenge" for both partners.
+            await clearGameSession(coupleId, payload.gameId).catch(() => null);
             // Idempotency guard: score each gameId exactly once even if both
             // clients happen to report the same result.
             const scoredKey = `us:game_scored:${coupleId}:${payload.gameId}`;
@@ -429,25 +560,28 @@ const registerUsHandlers = (io, socket) => {
                 return;
             await (0, cache_1.cacheSet)(scoredKey, '1', 24 * 60 * 60);
             if (!payload.draw && payload.winnerUserId) {
-                const raw = await (0, cache_1.cacheGet)(gamePointsKey(coupleId));
-                const pts = raw ? JSON.parse(raw) : {};
-                pts[payload.winnerUserId] = (pts[payload.winnerUserId] ?? 0) + 1;
-                await (0, cache_1.cacheSet)(gamePointsKey(coupleId), JSON.stringify(pts), GAME_POINTS_TTL);
+                const winnerId = payload.winnerUserId;
+                // Durable win increment (source of truth: Postgres).
+                await prisma_1.prisma.usGameScore.upsert({
+                    where: { coupleId_userId: { coupleId, userId: winnerId } },
+                    create: { coupleId, userId: winnerId, wins: 1 },
+                    update: { wins: { increment: 1 } },
+                });
                 // Win streak — consecutive wins by the same partner. A win by the
                 // other partner resets the streak to 1 for them.
-                let streak = { userId: payload.winnerUserId, count: 1 };
-                try {
-                    const rawStreak = await (0, cache_1.cacheGet)(gameStreakKey(coupleId));
-                    if (rawStreak) {
-                        const prev = JSON.parse(rawStreak);
-                        if (prev?.userId === payload.winnerUserId) {
-                            streak = { userId: prev.userId, count: (prev.count ?? 0) + 1 };
-                        }
-                    }
-                }
-                catch { /* start a fresh streak */ }
-                await (0, cache_1.cacheSet)(gameStreakKey(coupleId), JSON.stringify(streak), GAME_POINTS_TTL);
-                // Broadcast the fresh scoreboard + streak to BOTH partners.
+                const state = await prisma_1.prisma.coupleUsState.findUnique({ where: { coupleId } });
+                const nextCount = state?.gameStreakUserId === winnerId ? (state.gameStreakCount ?? 0) + 1 : 1;
+                await prisma_1.prisma.coupleUsState.upsert({
+                    where: { coupleId },
+                    create: { coupleId, gameStreakUserId: winnerId, gameStreakCount: nextCount },
+                    update: { gameStreakUserId: winnerId, gameStreakCount: nextCount },
+                });
+                // Read back the full scoreboard and broadcast to BOTH partners.
+                const scores = await prisma_1.prisma.usGameScore.findMany({ where: { coupleId } });
+                const pts = {};
+                for (const s of scores)
+                    pts[s.userId] = s.wins;
+                const streak = { userId: winnerId, count: nextCount };
                 io.to(`couple:${coupleId}`).emit('us:game:points', { points: pts, streak });
             }
         }

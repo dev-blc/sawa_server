@@ -6,6 +6,7 @@ const cache_1 = require("../lib/cache");
 const prisma_1 = require("../lib/prisma");
 const logger_1 = require("../utils/logger");
 const push_service_1 = require("../services/push.service");
+const notif_1 = require("../i18n/notif");
 const router = (0, express_1.Router)();
 /** Resolve partner's userId and sender's first name for couple-internal pushes. */
 async function getPartnerAndSender(myUserId, coupleId) {
@@ -122,7 +123,16 @@ router.get('/partner-feeling', authenticate_1.authenticate, async (req, res) => 
         res.json({ success: true, data: null });
     }
 });
-const PLANNED_DATES_TTL = 365 * 24 * 60 * 60; // 1 year
+/** Map a Postgres PlannedDate row to the client shape the app expects. */
+const serializePlan = (p) => ({
+    id: p.id,
+    activity: p.activity,
+    date: p.dateLabel ?? p.rawDate,
+    rawDate: p.rawDate,
+    from: p.fromName ?? 'Your partner',
+    ...(p.time ? { time: p.time } : {}),
+    ...(p.note ? { note: p.note } : {}),
+});
 /**
  * POST /api/v1/us/planned-dates
  * Add or update a planned date entry for the couple.
@@ -130,6 +140,7 @@ const PLANNED_DATES_TTL = 365 * 24 * 60 * 60; // 1 year
  */
 router.post('/planned-dates', authenticate_1.authenticate, async (req, res) => {
     const coupleId = req.user?.coupleId;
+    const myUserId = req.user?.userId;
     if (!coupleId) {
         res.status(400).json({ success: false, error: 'Missing couple context' });
         return;
@@ -140,15 +151,23 @@ router.post('/planned-dates', authenticate_1.authenticate, async (req, res) => {
         return;
     }
     try {
-        const key = `us:planned_dates:${coupleId}`;
-        const raw = await (0, cache_1.cacheGet)(key);
-        const prev = raw ? JSON.parse(raw) : [];
-        // Unique id lets multiple plans live on the same day; upsert by id.
+        // Stable id lets multiple plans live on the same day; upsert by id.
         const entryId = id || `${rawDate}__${activity}__${time ?? ''}`;
-        const entry = { id: entryId, activity, date: date ?? rawDate, rawDate, from: from || 'Your partner', time, note };
-        const idOf = (p) => p.id ?? `${p.rawDate}__${p.activity}__${p.time ?? ''}`;
-        const updated = [...prev.filter((p) => idOf(p) !== entryId), entry];
-        await (0, cache_1.cacheSet)(key, JSON.stringify(updated), PLANNED_DATES_TTL);
+        const data = {
+            coupleId,
+            activity,
+            dateLabel: date ?? rawDate,
+            rawDate,
+            fromName: from || 'Your partner',
+            time: time || null,
+            note: note || null,
+            byUserId: myUserId || null,
+        };
+        await prisma_1.prisma.plannedDate.upsert({
+            where: { id: entryId },
+            create: { id: entryId, ...data },
+            update: data,
+        });
         res.json({ success: true });
     }
     catch (err) {
@@ -167,10 +186,11 @@ router.get('/planned-dates', authenticate_1.authenticate, async (req, res) => {
         return;
     }
     try {
-        const key = `us:planned_dates:${coupleId}`;
-        const raw = await (0, cache_1.cacheGet)(key);
-        const dates = raw ? JSON.parse(raw) : [];
-        res.json({ success: true, data: dates });
+        const rows = await prisma_1.prisma.plannedDate.findMany({
+            where: { coupleId },
+            orderBy: { rawDate: 'asc' },
+        });
+        res.json({ success: true, data: rows.map(serializePlan) });
     }
     catch (err) {
         logger_1.logger.warn(`[UsRoutes] planned-dates GET error: ${err.message}`);
@@ -190,12 +210,9 @@ router.delete('/planned-dates/:id', authenticate_1.authenticate, async (req, res
         return;
     }
     try {
-        const key = `us:planned_dates:${coupleId}`;
-        const raw = await (0, cache_1.cacheGet)(key);
-        const prev = raw ? JSON.parse(raw) : [];
-        const idOf = (p) => p.id ?? `${p.rawDate}__${p.activity}__${p.time ?? ''}`;
-        const updated = prev.filter((p) => idOf(p) !== id && p.rawDate !== id);
-        await (0, cache_1.cacheSet)(key, JSON.stringify(updated), PLANNED_DATES_TTL);
+        await prisma_1.prisma.plannedDate.deleteMany({
+            where: { coupleId, OR: [{ id }, { rawDate: id }] },
+        });
         res.json({ success: true });
     }
     catch (err) {
@@ -252,8 +269,8 @@ router.post('/ask-feeling', authenticate_1.authenticate, async (req, res) => {
                 senderId: coupleId,
                 type: 'system',
                 title: `${senderName} is asking how you feel`,
-                message: 'Share your mood with them 💭',
-                data: { subtype: 'us_ask_feeling', senderUserId: myUserId, navigate: 'UsSpace' },
+                message: `Share your mood with ${senderName} 💭`,
+                data: { subtype: 'us_ask_feeling', senderUserId: myUserId, navigate: 'UsSpace', ...(0, notif_1.i18nData)('us.askFeeling', { name: senderName }) },
                 read: false,
             },
         });
@@ -269,7 +286,7 @@ router.post('/ask-feeling', authenticate_1.authenticate, async (req, res) => {
             (0, push_service_1.pushToUser)(partnerId, {
                 title: `${senderName} is asking how you feel 💭`,
                 body: `Let ${senderName} know how your day is going`,
-                data: { type: 'us_ask_feeling', navigate: 'UsSpace' },
+                data: { type: 'us_ask_feeling', navigate: 'UsSpace', ...(0, notif_1.i18nData)('us.askFeeling', { name: senderName }) },
                 collapseKey: 'us_ask_feeling',
             }).catch(() => null);
         }
@@ -281,9 +298,18 @@ router.post('/ask-feeling', authenticate_1.authenticate, async (req, res) => {
     }
 });
 // ─── Fridge Notes (sticky notes between partners) ────────────────────────────
-const FRIDGE_NOTES_TTL = 365 * 24 * 60 * 60; // 1 year
-const fridgeKey = (coupleId) => `us:fridge_notes:${coupleId}`;
 const MAX_FRIDGE_NOTES = 30;
+/** Map a Postgres FridgeNote row to the client DTO the app already expects. */
+const serializeNote = (n) => ({
+    id: n.id,
+    text: n.text,
+    color: n.color,
+    by: n.byName,
+    byUserId: n.byUserId,
+    at: n.createdAt.toISOString(),
+    ...(n.ackBy ? { ackBy: n.ackBy } : {}),
+    ...(n.ackAt ? { ackAt: n.ackAt.toISOString() } : {}),
+});
 /**
  * GET /api/v1/us/fridge-notes
  * All sticky notes for the couple (newest first).
@@ -295,8 +321,12 @@ router.get('/fridge-notes', authenticate_1.authenticate, async (req, res) => {
         return;
     }
     try {
-        const raw = await (0, cache_1.cacheGet)(fridgeKey(coupleId));
-        res.json({ success: true, data: raw ? JSON.parse(raw) : [] });
+        const notes = await prisma_1.prisma.fridgeNote.findMany({
+            where: { coupleId },
+            orderBy: { createdAt: 'desc' },
+            take: MAX_FRIDGE_NOTES,
+        });
+        res.json({ success: true, data: notes.map(serializeNote) });
     }
     catch (err) {
         logger_1.logger.warn(`[UsRoutes] fridge-notes GET error: ${err.message}`);
@@ -327,18 +357,26 @@ router.post('/fridge-notes', authenticate_1.authenticate, async (req, res) => {
     }
     try {
         const { partnerId, senderName } = await getPartnerAndSender(myUserId, coupleId);
-        const note = {
-            id: `fn_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`,
-            text: trimmed,
-            color: color || 'yellow',
-            by: senderName,
-            byUserId: myUserId,
-            at: new Date().toISOString(),
-        };
-        const raw = await (0, cache_1.cacheGet)(fridgeKey(coupleId));
-        const prev = raw ? JSON.parse(raw) : [];
-        const updated = [note, ...prev].slice(0, MAX_FRIDGE_NOTES);
-        await (0, cache_1.cacheSet)(fridgeKey(coupleId), JSON.stringify(updated), FRIDGE_NOTES_TTL);
+        const row = await prisma_1.prisma.fridgeNote.create({
+            data: {
+                coupleId,
+                text: trimmed,
+                color: color || 'yellow',
+                byName: senderName,
+                byUserId: myUserId,
+            },
+        });
+        const note = serializeNote(row);
+        // Trim to the newest MAX_FRIDGE_NOTES — delete the overflow tail.
+        const overflow = await prisma_1.prisma.fridgeNote.findMany({
+            where: { coupleId },
+            orderBy: { createdAt: 'desc' },
+            skip: MAX_FRIDGE_NOTES,
+            select: { id: true },
+        });
+        if (overflow.length) {
+            await prisma_1.prisma.fridgeNote.deleteMany({ where: { id: { in: overflow.map(o => o.id) } } });
+        }
         // In-app notification
         await prisma_1.prisma.notification.create({
             data: {
@@ -347,7 +385,7 @@ router.post('/fridge-notes', authenticate_1.authenticate, async (req, res) => {
                 type: 'system',
                 title: `${senderName} left a note on the fridge`,
                 message: trimmed.length > 60 ? `"${trimmed.slice(0, 57)}…"` : `"${trimmed}"`,
-                data: { subtype: 'us_fridge_note', senderUserId: myUserId, navigate: 'UsSpace', noteId: note.id },
+                data: { subtype: 'us_fridge_note', senderUserId: myUserId, navigate: 'UsSpace', noteId: note.id, ...(0, notif_1.i18nData)('us.fridgeNote', { name: senderName, note: trimmed.length > 80 ? `${trimmed.slice(0, 77)}…` : trimmed }) },
                 read: false,
             },
         });
@@ -361,7 +399,7 @@ router.post('/fridge-notes', authenticate_1.authenticate, async (req, res) => {
             (0, push_service_1.pushToUser)(partnerId, {
                 title: `${senderName} left a note on the fridge 📌`,
                 body: trimmed.length > 80 ? `${trimmed.slice(0, 77)}…` : trimmed,
-                data: { type: 'us_fridge_note', navigate: 'UsSpace' },
+                data: { type: 'us_fridge_note', navigate: 'UsSpace', ...(0, notif_1.i18nData)('us.fridgeNote', { name: senderName, note: trimmed.length > 80 ? `${trimmed.slice(0, 77)}…` : trimmed }) },
                 collapseKey: 'us_fridge_note',
             }).catch(() => null);
         }
@@ -385,50 +423,51 @@ router.patch('/fridge-notes/:id/ack', authenticate_1.authenticate, async (req, r
         return;
     }
     try {
-        const raw = await (0, cache_1.cacheGet)(fridgeKey(coupleId));
-        const notes = raw ? JSON.parse(raw) : [];
-        const idx = notes.findIndex(n => n.id === id);
-        if (idx === -1) {
+        const existing = await prisma_1.prisma.fridgeNote.findFirst({ where: { id, coupleId } });
+        if (!existing) {
             res.status(404).json({ success: false, error: 'Note not found' });
             return;
         }
-        if (notes[idx].byUserId === myUserId) {
+        if (existing.byUserId === myUserId) {
             res.status(400).json({ success: false, error: 'Cannot acknowledge your own note' });
             return;
         }
-        if (notes[idx].ackAt) {
-            res.json({ success: true, data: notes[idx] });
+        if (existing.ackAt) {
+            res.json({ success: true, data: serializeNote(existing) });
             return;
         }
         const { senderName } = await getPartnerAndSender(myUserId, coupleId);
-        notes[idx] = { ...notes[idx], ackBy: senderName, ackAt: new Date().toISOString() };
-        await (0, cache_1.cacheSet)(fridgeKey(coupleId), JSON.stringify(notes), FRIDGE_NOTES_TTL);
+        const updatedRow = await prisma_1.prisma.fridgeNote.update({
+            where: { id },
+            data: { ackBy: senderName, ackAt: new Date() },
+        });
+        const note = serializeNote(updatedRow);
         // Notify the note's AUTHOR that it was acknowledged
-        const authorId = notes[idx].byUserId;
+        const authorId = updatedRow.byUserId;
         await prisma_1.prisma.notification.create({
             data: {
                 recipientId: coupleId,
                 senderId: coupleId,
                 type: 'system',
                 title: `${senderName} acknowledged your note ✓`,
-                message: notes[idx].text.length > 60 ? `"${notes[idx].text.slice(0, 57)}…"` : `"${notes[idx].text}"`,
-                data: { subtype: 'us_fridge_ack', senderUserId: myUserId, navigate: 'UsSpace', noteId: id },
+                message: note.text.length > 60 ? `"${note.text.slice(0, 57)}…"` : `"${note.text}"`,
+                data: { subtype: 'us_fridge_ack', senderUserId: myUserId, navigate: 'UsSpace', noteId: id, ...(0, notif_1.i18nData)('us.fridgeAck', { name: senderName, note: note.text.length > 80 ? `${note.text.slice(0, 77)}…` : note.text }) },
                 read: false,
             },
         });
         await (0, cache_1.invalidateNotifUnreadCount)(coupleId);
         const io = global.io;
         if (io) {
-            io.to(`couple:${coupleId}`).emit('us:fridge-note', { action: 'acked', note: notes[idx] });
+            io.to(`couple:${coupleId}`).emit('us:fridge-note', { action: 'acked', note });
             io.to(`couple:${coupleId}`).emit('notification:new', { type: 'us_fridge_ack' });
         }
         (0, push_service_1.pushToUser)(authorId, {
             title: `${senderName} acknowledged your note ✓`,
-            body: notes[idx].text.length > 80 ? `${notes[idx].text.slice(0, 77)}…` : notes[idx].text,
-            data: { type: 'us_fridge_ack', navigate: 'UsSpace' },
+            body: note.text.length > 80 ? `${note.text.slice(0, 77)}…` : note.text,
+            data: { type: 'us_fridge_ack', navigate: 'UsSpace', ...(0, notif_1.i18nData)('us.fridgeAck', { name: senderName, note: note.text.length > 80 ? `${note.text.slice(0, 77)}…` : note.text }) },
             collapseKey: 'us_fridge_ack',
         }).catch(() => null);
-        res.json({ success: true, data: notes[idx] });
+        res.json({ success: true, data: note });
     }
     catch (err) {
         logger_1.logger.warn(`[UsRoutes] fridge-notes ACK error: ${err.message}`);
@@ -447,10 +486,7 @@ router.delete('/fridge-notes/:id', authenticate_1.authenticate, async (req, res)
         return;
     }
     try {
-        const raw = await (0, cache_1.cacheGet)(fridgeKey(coupleId));
-        const notes = raw ? JSON.parse(raw) : [];
-        const updated = notes.filter(n => n.id !== id);
-        await (0, cache_1.cacheSet)(fridgeKey(coupleId), JSON.stringify(updated), FRIDGE_NOTES_TTL);
+        await prisma_1.prisma.fridgeNote.deleteMany({ where: { id, coupleId } });
         const io = global.io;
         if (io) {
             io.to(`couple:${coupleId}`).emit('us:fridge-note', { action: 'deleted', noteId: id });
@@ -460,6 +496,120 @@ router.delete('/fridge-notes/:id', authenticate_1.authenticate, async (req, res)
     catch (err) {
         logger_1.logger.warn(`[UsRoutes] fridge-notes DELETE error: ${err.message}`);
         res.status(500).json({ success: false });
+    }
+});
+// ═══ Menstrual cycle (Flo-style) ════════════════════════════════════════════
+// The partner-role account (the girlfriend) sets: last period start date,
+// period length and cycle length. Both partners can view; predictions are
+// computed client-side with the same math the notifier job uses.
+/**
+ * GET /api/v1/us/cycle
+ * Returns the couple's cycle settings, or null when not set up yet.
+ */
+router.get('/cycle', authenticate_1.authenticate, async (req, res) => {
+    const coupleId = req.user?.coupleId;
+    if (!coupleId) {
+        res.json({ success: true, data: null });
+        return;
+    }
+    try {
+        const state = await prisma_1.prisma.coupleUsState.findUnique({ where: { coupleId } });
+        const data = state?.cycleLastPeriodStart
+            ? {
+                lastPeriodStart: state.cycleLastPeriodStart,
+                periodLength: state.cyclePeriodLength ?? 5,
+                cycleLength: state.cycleCycleLength ?? 28,
+                updatedBy: state.cycleUpdatedBy ?? undefined,
+                updatedByName: state.cycleUpdatedByName ?? undefined,
+                updatedAt: state.cycleUpdatedAt?.toISOString(),
+            }
+            : null;
+        res.json({ success: true, data });
+    }
+    catch (err) {
+        logger_1.logger.warn(`[UsRoutes] cycle GET error: ${err.message}`);
+        res.json({ success: true, data: null });
+    }
+});
+/**
+ * POST /api/v1/us/cycle
+ * Saves cycle settings. Only the partner-role account may set them.
+ * Notifies the primary partner that the cycle calendar was shared.
+ */
+router.post('/cycle', authenticate_1.authenticate, async (req, res) => {
+    const coupleId = req.user?.coupleId;
+    const myUserId = req.user?.userId;
+    if (!coupleId || !myUserId) {
+        res.status(400).json({ success: false, error: 'Missing couple context' });
+        return;
+    }
+    const { lastPeriodStart, periodLength, cycleLength } = req.body;
+    if (!lastPeriodStart || !/^\d{4}-\d{2}-\d{2}$/.test(lastPeriodStart)) {
+        res.status(400).json({ success: false, error: 'lastPeriodStart (YYYY-MM-DD) is required' });
+        return;
+    }
+    const pLen = Math.min(10, Math.max(2, Number(periodLength) || 5));
+    const cLen = Math.min(45, Math.max(21, Number(cycleLength) || 28));
+    try {
+        const me = await prisma_1.prisma.user.findUnique({ where: { id: myUserId }, select: { name: true, role: true } });
+        if (me?.role !== 'partner') {
+            res.status(403).json({ success: false, error: 'Only your partner can set the cycle' });
+            return;
+        }
+        const { partnerId, senderName } = await getPartnerAndSender(myUserId, coupleId);
+        const now = new Date();
+        const settings = {
+            lastPeriodStart,
+            periodLength: pLen,
+            cycleLength: cLen,
+            updatedBy: myUserId,
+            updatedByName: senderName,
+            updatedAt: now.toISOString(),
+        };
+        const cycleFields = {
+            cycleLastPeriodStart: lastPeriodStart,
+            cyclePeriodLength: pLen,
+            cycleCycleLength: cLen,
+            cycleUpdatedBy: myUserId,
+            cycleUpdatedByName: senderName,
+            cycleUpdatedAt: now,
+        };
+        await prisma_1.prisma.coupleUsState.upsert({
+            where: { coupleId },
+            create: { coupleId, ...cycleFields },
+            update: cycleFields,
+        });
+        // Tell the primary partner the calendar is ready.
+        await prisma_1.prisma.notification.create({
+            data: {
+                recipientId: coupleId,
+                senderId: coupleId,
+                type: 'system',
+                title: `🌸 ${senderName} shared her cycle calendar`,
+                message: 'Tap the calendar on your Us page to see it',
+                data: { subtype: 'us_cycle', senderUserId: myUserId, navigate: 'UsSpace', ...(0, notif_1.i18nData)('us.cycleShared', { name: senderName }) },
+                read: false,
+            },
+        });
+        await (0, cache_1.invalidateNotifUnreadCount)(coupleId);
+        const io = global.io;
+        if (io) {
+            io.to(`couple:${coupleId}`).emit('us:cycle:updated', settings);
+            io.to(`couple:${coupleId}`).emit('notification:new', { type: 'us_cycle' });
+        }
+        if (partnerId) {
+            (0, push_service_1.pushToUser)(partnerId, {
+                title: `🌸 ${senderName} shared her cycle calendar`,
+                body: 'Tap to see it and be there for her',
+                data: { type: 'us_cycle', navigate: 'Notifications', ...(0, notif_1.i18nData)('us.cycleShared', { name: senderName }) },
+                collapseKey: 'us_cycle',
+            }).catch(() => null);
+        }
+        res.json({ success: true, data: settings });
+    }
+    catch (err) {
+        logger_1.logger.warn(`[UsRoutes] cycle POST error: ${err.message}`);
+        res.status(500).json({ success: false, error: 'Failed to save cycle' });
     }
 });
 /**
@@ -474,19 +624,75 @@ router.get('/game/points', authenticate_1.authenticate, async (req, res) => {
         return;
     }
     try {
-        const raw = await (0, cache_1.cacheGet)(`us:game_points:${coupleId}`);
-        const rawStreak = await (0, cache_1.cacheGet)(`us:game_streak:${coupleId}`);
-        res.json({
-            success: true,
-            data: {
-                points: raw ? JSON.parse(raw) : {},
-                streak: rawStreak ? JSON.parse(rawStreak) : null,
-            },
-        });
+        const [scores, state] = await Promise.all([
+            prisma_1.prisma.usGameScore.findMany({ where: { coupleId } }),
+            prisma_1.prisma.coupleUsState.findUnique({ where: { coupleId } }),
+        ]);
+        const points = {};
+        for (const s of scores)
+            points[s.userId] = s.wins;
+        const streak = state?.gameStreakUserId
+            ? { userId: state.gameStreakUserId, count: state.gameStreakCount }
+            : null;
+        res.json({ success: true, data: { points, streak } });
     }
     catch (err) {
         logger_1.logger.warn(`[UsRoutes] game points GET error: ${err.message}`);
         res.json({ success: true, data: { points: {}, streak: null } });
+    }
+});
+/**
+ * GET /api/v1/us/game/active
+ * The couple's current shared Tic-Tac-Toe session so a partner who left the
+ * screen (or received a challenge push) can (re)join the same match:
+ *   { session: null | { gameId, status: 'pending'|'active', challengerId,
+ *                       board: (('X'|'O'|null)[]), turn: 'X'|'O' } }
+ * Auto-expires sessions with no activity for >3h so a forgotten challenge can
+ * never block new games forever.
+ */
+router.get('/game/active', authenticate_1.authenticate, async (req, res) => {
+    const coupleId = req.user?.coupleId;
+    if (!coupleId) {
+        res.json({ success: true, data: { session: null } });
+        return;
+    }
+    try {
+        const st = await prisma_1.prisma.coupleUsState.findUnique({ where: { coupleId } });
+        if (!st?.gameSessionId || !st.gameSessionStatus) {
+            res.json({ success: true, data: { session: null } });
+            return;
+        }
+        const ageMs = st.gameSessionAt ? Date.now() - new Date(st.gameSessionAt).getTime() : Number.MAX_SAFE_INTEGER;
+        if (ageMs > 3 * 60 * 60 * 1000) {
+            await prisma_1.prisma.coupleUsState.update({
+                where: { coupleId },
+                data: {
+                    gameSessionId: null, gameSessionStatus: null, gameChallengerId: null,
+                    gameBoard: null, gameTurn: null, gameSessionAt: null,
+                },
+            });
+            res.json({ success: true, data: { session: null } });
+            return;
+        }
+        const board = (st.gameBoard || '_________')
+            .split('')
+            .map((c) => (c === 'X' ? 'X' : c === 'O' ? 'O' : null));
+        res.json({
+            success: true,
+            data: {
+                session: {
+                    gameId: st.gameSessionId,
+                    status: st.gameSessionStatus,
+                    challengerId: st.gameChallengerId,
+                    board,
+                    turn: st.gameTurn || 'X',
+                },
+            },
+        });
+    }
+    catch (err) {
+        logger_1.logger.warn(`[UsRoutes] game active GET error: ${err.message}`);
+        res.json({ success: true, data: { session: null } });
     }
 });
 /**

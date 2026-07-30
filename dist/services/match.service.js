@@ -5,6 +5,7 @@ const prisma_1 = require("../lib/prisma");
 const AppError_1 = require("../utils/AppError");
 const logger_1 = require("../utils/logger");
 const realtime_1 = require("../utils/realtime");
+const notif_1 = require("../i18n/notif");
 const notification_service_1 = require("./notification.service");
 const geo_1 = require("../utils/geo");
 const COUPLE_GEO_SELECT = {
@@ -591,6 +592,7 @@ class MatchService {
                 type: 'system',
                 title: "Connection Update",
                 message: "A couple decided not to connect at this time.",
+                data: { ...(0, notif_1.i18nData)('match.rejected') },
             }
         });
         (0, realtime_1.emitRealtimeNotification)(target.coupleId, {

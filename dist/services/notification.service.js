@@ -8,6 +8,7 @@ exports.upsertMatchConnectedNotification = upsertMatchConnectedNotification;
 const prisma_1 = require("../lib/prisma");
 const realtime_1 = require("../utils/realtime");
 const cache_1 = require("../lib/cache");
+const notif_1 = require("../i18n/notif");
 const groupKeyFromData = (n) => {
     const d = (n.data || {});
     if (d._groupKey && typeof d._groupKey === 'string') {
@@ -175,7 +176,7 @@ async function upsertMatchPendingNotification(params) {
         senderId: params.senderId,
         type: 'match',
         title: 'New Connection Request!',
-        message: `${params.profileName} want to connect with you!`,
+        message: `${params.profileName} wants to connect with you!`,
         groupKey: `match:pending:${params.matchId}`,
         data: {
             matchId: params.matchId,
@@ -188,6 +189,7 @@ async function upsertMatchPendingNotification(params) {
             vibes: params.vibes,
             matchCriteria: params.matchCriteria,
             isPending: true,
+            ...(0, notif_1.i18nData)('match.pending', { name: params.profileName }),
         },
     });
 }
@@ -226,6 +228,7 @@ async function upsertMatchConnectedNotification(params) {
             vibes: params.vibes,
             matchCriteria: params.matchCriteria,
             isPending: false,
+            ...(0, notif_1.i18nData)('match.connected', { name: params.profileName }),
         },
     });
 }

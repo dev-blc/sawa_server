@@ -66,9 +66,13 @@ class AuthService {
             user_repository_1.userRepository.upsertByPhone(yourPhone, coupleId, 'primary'),
             user_repository_1.userRepository.upsertByPhone(partnerPhone, coupleId, 'partner'),
         ]);
+        // keepValidPrevious=true — mirror the login flow. If "Send Code" fires more
+        // than once (double-tap, screen re-mount, slow-network retry) the earlier
+        // still-valid code from the FIRST SMS keeps working, so the user never sees a
+        // spurious "Invalid or expired OTP" for a code they only generated once.
         await Promise.all([
-            otp_service_1.otpService.generateAndStore(yourPhone, coupleId),
-            otp_service_1.otpService.generateAndStore(partnerPhone, coupleId, partnerCodeMsg),
+            otp_service_1.otpService.generateAndStore(yourPhone, coupleId, undefined, true),
+            otp_service_1.otpService.generateAndStore(partnerPhone, coupleId, partnerCodeMsg, true),
         ]);
         logger_1.logger.info(`[AuthService] OTPs issued for entity: ${coupleId}`);
         return { coupleId };
@@ -236,7 +240,9 @@ class AuthService {
                 await prisma_1.prisma.user.update({ where: { id: user.id }, data: { coupleId: resolvedCoupleId } });
             }
         }
-        await otp_service_1.otpService.generateAndStore(phone, resolvedCoupleId || '');
+        // keepValidPrevious=true — don't wipe a still-valid code the user may already
+        // have received; avoids "Invalid or expired OTP" when an earlier code is used.
+        await otp_service_1.otpService.generateAndStore(phone, resolvedCoupleId || '', undefined, true);
         return { coupleId: resolvedCoupleId || '' };
     }
     /**
@@ -331,8 +337,10 @@ class AuthService {
         if (!coupleId) {
             throw new AppError_1.AppError('No active signup session found for this number. Please start registration again.', 400, 'NO_SESSION');
         }
-        // Regenerate OTP for this phone only — partner's OTP is untouched
-        await otp_service_1.otpService.generateAndStore(phone, coupleId);
+        // Regenerate OTP for this phone only — partner's OTP is untouched.
+        // keepValidPrevious=true so the previously-sent code still works if the user
+        // enters it (common: they resend, then auto-fill grabs the first SMS).
+        await otp_service_1.otpService.generateAndStore(phone, coupleId, undefined, true);
         logger_1.logger.info(`[AuthService] OTP resent for ${phone} (coupleId: ${coupleId})`);
     }
     async sendPartnerInvite(partnerPhone) {

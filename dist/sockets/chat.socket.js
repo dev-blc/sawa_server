@@ -37,6 +37,7 @@ exports.registerChatHandlers = void 0;
 const socketEvents_1 = require("../constants/socketEvents");
 const logger_1 = require("../utils/logger");
 const prisma_1 = require("../lib/prisma");
+const notif_1 = require("../i18n/notif");
 const communityColors_1 = require("../utils/communityColors");
 // NOTE: chat push/realtime is handled via upsertGroupedNotification() in
 // notification.service (which internally calls emitRealtimeNotification →
@@ -153,7 +154,7 @@ const registerChatHandlers = (io, socket) => {
                                 title: `New Message from ${me?.profileName || 'Couple'}`,
                                 message: `You have new messages from ${me?.profileName || 'Couple'}`,
                                 groupKey: `message:match:${chatId}:${socket.coupleId}`,
-                                data: { matchId: chatId, coupleName: me?.profileName, navigate: 'PrivateChatThread', ...(me?.primaryPhoto ? { senderPhoto: me.primaryPhoto } : {}) },
+                                data: { matchId: chatId, coupleName: me?.profileName, navigate: 'PrivateChatThread', ...(me?.primaryPhoto ? { senderPhoto: me.primaryPhoto } : {}), ...(0, notif_1.i18nData)('chat.private', { name: me?.profileName || 'Couple' }) },
                             });
                         }
                     }
@@ -182,6 +183,7 @@ const registerChatHandlers = (io, socket) => {
                                     communityName: community.name,
                                     chatOnly: true,
                                     navigate: 'GroupChat',
+                                    ...(0, notif_1.i18nData)('chat.group', { community: community.name }),
                                 },
                             })));
                         }

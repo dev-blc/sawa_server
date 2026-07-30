@@ -4,6 +4,7 @@ exports.AdminService = void 0;
 const prisma_1 = require("../lib/prisma");
 const authenticate_1 = require("../middleware/authenticate");
 const realtime_1 = require("../utils/realtime");
+const notif_1 = require("../i18n/notif");
 const logger_1 = require("../utils/logger");
 const storage_1 = require("../lib/storage");
 /**
@@ -585,7 +586,7 @@ class AdminService {
                     type: 'community',
                     title: 'Request Accepted!',
                     message: `You joined ${community?.name || 'the community'}!`,
-                    data: { communityId },
+                    data: { communityId, ...(0, notif_1.i18nData)('community.requestAccepted') },
                 },
             });
             (0, realtime_1.emitRealtimeNotification)(request.coupleId, {

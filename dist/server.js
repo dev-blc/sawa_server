@@ -39,8 +39,11 @@ Object.defineProperty(exports, "__esModule", { value: true });
 const http_1 = __importDefault(require("http"));
 const app_1 = require("./app");
 const db_1 = require("./config/db");
+const ensureSchema_1 = require("./config/ensureSchema");
 const bootstrapAdmin_1 = require("./config/bootstrapAdmin");
 const index_1 = require("./sockets/index");
+const cycleNotifier_1 = require("./jobs/cycleNotifier");
+const migrateUsToPg_1 = require("./jobs/migrateUsToPg");
 const env_1 = require("./config/env");
 const logger_1 = require("./utils/logger");
 const start = async () => {
@@ -49,6 +52,7 @@ const start = async () => {
     // 1b. Ensure an admin account exists so the dashboard login works after
     //     every deploy. Only the primary worker runs it (idempotent regardless).
     if (!process.env.pm_id || process.env.pm_id === '0') {
+        await (0, ensureSchema_1.ensureSchema)();
         await (0, bootstrapAdmin_1.bootstrapAdmin)();
     }
     // 2. Create Express app
@@ -58,6 +62,12 @@ const start = async () => {
     // 4. Attach Socket.io
     const io = (0, index_1.createSocketServer)(httpServer);
     global.io = io;
+    // 4b. Cycle nudges for the primary partner — one worker only.
+    if (!process.env.pm_id || process.env.pm_id === '0') {
+        (0, cycleNotifier_1.startCycleNotifier)();
+        // One-time backfill of Us-space data from Redis into Postgres.
+        (0, migrateUsToPg_1.migrateUsRedisToPostgres)().catch(() => null);
+    }
     // 5. Start listening
     httpServer.listen(env_1.env.PORT, () => {
         logger_1.logger.info(`🚀  SAWA Server running on port ${env_1.env.PORT} [${env_1.env.NODE_ENV}]`);

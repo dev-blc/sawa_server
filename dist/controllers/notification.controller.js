@@ -49,7 +49,7 @@ const getNotifications = async (req, res) => {
             ...n,
             title: "You've Connected!",
             message: `You connected with ${profileName}!`,
-            data: { ...d, isPending: false },
+            data: { ...d, isPending: false, i18nKey: 'match.connected', i18nParams: { name: profileName } },
         };
     });
     (0, response_1.sendSuccess)({ res, statusCode: 200, data: { notifications: enriched } });

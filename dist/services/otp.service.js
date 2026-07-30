@@ -9,6 +9,17 @@ const prisma_1 = require("../lib/prisma");
 const index_1 = require("../constants/index");
 const logger_1 = require("../utils/logger");
 const AppError_1 = require("../utils/AppError");
+const cache_1 = require("../lib/cache");
+/**
+ * How long (seconds) a just-verified code stays "replayable". A second verify
+ * with the SAME phone+code inside this window succeeds again instead of failing
+ * with "Invalid or expired OTP". Covers the real edge cases where the token was
+ * already consumed by the first request: a double auto-submit, the user tapping
+ * Confirm while auto-fill also submits, or a lost/timed-out response that the
+ * app (or user) retries.
+ */
+const OTP_REPLAY_TTL_SECONDS = 600;
+const otpOkKey = (phone, code) => `otp_ok:${phone}:${code}`;
 // ─── CONFIGURATION ──────────────────────────────────────────────────────────
 const TWILIO_SID = process.env.TWILIO_ACCOUNT_SID;
 const TWILIO_AUTH = process.env.TWILIO_AUTH_TOKEN;
@@ -46,13 +57,25 @@ class OtpService {
      * Generate a real OTP and send via Twilio SMS.
      * Throws if Twilio is not configured.
      */
-    async generateAndStore(phone, coupleId, customMessage) {
+    async generateAndStore(phone, coupleId, customMessage, keepValidPrevious = false) {
         if (!TWILIO_READY || !twilioClient || !TWILIO_PHONE) {
             logger_1.logger.error('[OtpService] Twilio is not configured. Set TWILIO_ACCOUNT_SID, TWILIO_AUTH_TOKEN and TWILIO_PHONE_NUMBER.');
             throw new AppError_1.AppError('SMS service is not configured. Please contact support.', 503, 'SMS_NOT_CONFIGURED');
         }
-        // Remove any existing OTP for this phone
-        await prisma_1.prisma.otpToken.deleteMany({ where: { phone } });
+        // Clean up OTPs for this phone before issuing a new one.
+        //   - keepValidPrevious=true  → only purge already-EXPIRED codes, so any
+        //     still-valid code the user already received keeps working. This makes
+        //     login/resend forgiving: if the user taps "Resend" (or an older SMS is
+        //     the one that got auto-filled), the earlier code is still accepted as
+        //     long as it hasn't expired. Prevents spurious "Invalid or expired OTP".
+        //   - keepValidPrevious=false → wipe all previous codes (signup default,
+        //     protects couple pairing so an old code can't resolve a stale coupleId).
+        if (keepValidPrevious) {
+            await prisma_1.prisma.otpToken.deleteMany({ where: { phone, expiresAt: { lt: new Date() } } });
+        }
+        else {
+            await prisma_1.prisma.otpToken.deleteMany({ where: { phone } });
+        }
         const code = Math.floor(1000 + Math.random() * 9000).toString();
         const expiresAt = new Date(Date.now() + index_1.OTP_EXPIRES_IN_MINUTES * 60 * 1000);
         await prisma_1.prisma.otpToken.create({
@@ -82,23 +105,38 @@ class OtpService {
      */
     async verify(phone, enteredCode) {
         logger_1.logger.debug(`[OtpService] Verifying OTP for ${phone}`);
+        const code = (enteredCode ?? '').trim();
+        // Accept ANY still-valid code issued for this phone (not just the latest).
+        // A user may receive more than one code (resend, re-navigation, an older SMS
+        // still on screen); as long as the code they entered hasn't expired, let them
+        // in. This is the main fix for intermittent "Invalid or expired OTP" reports.
         const token = await prisma_1.prisma.otpToken.findFirst({
-            where: { phone },
+            where: { phone, otpCode: code, expiresAt: { gt: new Date() } },
             orderBy: { createdAt: 'desc' },
         });
-        if (!token) {
-            return { valid: false, coupleId: null };
+        if (token) {
+            const coupleId = token.coupleId;
+            // Consume the matched code + purge any other now-stale codes for this phone.
+            await prisma_1.prisma.otpToken.deleteMany({ where: { phone } });
+            // Remember this success briefly so a duplicate verify with the same code
+            // (double-submit / retry / lost response) still succeeds.
+            try {
+                await (0, cache_1.cacheSet)(otpOkKey(phone, code), coupleId ?? '', OTP_REPLAY_TTL_SECONDS);
+            }
+            catch { /* best-effort */ }
+            return { valid: true, coupleId };
         }
-        if (token.expiresAt < new Date()) {
-            await prisma_1.prisma.otpToken.delete({ where: { id: token.id } });
-            return { valid: false, coupleId: null };
+        // No live token — it may have just been consumed by a duplicate request for
+        // the exact same code. Fall back to the short-lived success marker so the
+        // user isn't wrongly shown "Invalid or expired OTP".
+        try {
+            const cached = await (0, cache_1.cacheGet)(otpOkKey(phone, code));
+            if (cached !== null) {
+                return { valid: true, coupleId: cached || null };
+            }
         }
-        if (enteredCode !== token.otpCode) {
-            return { valid: false, coupleId: null };
-        }
-        const coupleId = token.coupleId;
-        await prisma_1.prisma.otpToken.delete({ where: { id: token.id } });
-        return { valid: true, coupleId };
+        catch { /* best-effort */ }
+        return { valid: false, coupleId: null };
     }
     /**
      * Get coupleId for a phone

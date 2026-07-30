@@ -5,6 +5,7 @@ const prisma_1 = require("../lib/prisma");
 const AppError_1 = require("../utils/AppError");
 const logger_1 = require("../utils/logger");
 const realtime_1 = require("../utils/realtime");
+const notif_1 = require("../i18n/notif");
 const storage_1 = require("../lib/storage");
 class CoupleService {
     /**
@@ -539,6 +540,7 @@ class CoupleService {
             return;
         const title = 'A new couple joined nearby';
         const message = `${newCoupleName} just joined SAWA in ${city}. Say hi!`;
+        const notifData = { coupleId: newCoupleId, city, ...(0, notif_1.i18nData)('nearby.joined', { name: newCoupleName, city }) };
         // Persist + emit each notification.
         await Promise.all(nearby.map(async (c) => {
             const notif = await prisma_1.prisma.notification.create({
@@ -548,7 +550,7 @@ class CoupleService {
                     type: 'nearby',
                     title,
                     message,
-                    data: { coupleId: newCoupleId, city },
+                    data: notifData,
                 },
             });
             (0, realtime_1.emitRealtimeNotification)(c.coupleId, {
@@ -556,7 +558,7 @@ class CoupleService {
                 type: 'nearby',
                 title,
                 message,
-                data: { coupleId: newCoupleId, city },
+                data: notifData,
             });
         }));
         logger_1.logger.info(`[CoupleService] Notified ${nearby.length} nearby couple(s) in ${city} about ${newCoupleId}`);

@@ -7,6 +7,45 @@ exports.isPushEnabled = exports.pushToCouples = exports.pushToUser = exports.pus
 const firebase_admin_1 = __importDefault(require("firebase-admin"));
 const prisma_1 = require("../lib/prisma");
 const logger_1 = require("../utils/logger");
+const notif_1 = require("../i18n/notif");
+/**
+ * Build a per-recipient localized copy of a push payload.
+ *
+ * When the caller attached `data.i18nKey` (+ optional `data.i18nParams`), we
+ * re-render the title/body in the recipient's chosen language. Android renders
+ * from the `data` fields (client-side), and iOS shows the APNs `title`/`body`,
+ * so we localize BOTH. If no i18nKey is present we fall back to the caller's
+ * English strings unchanged.
+ */
+const localizeFor = (payload, locale) => {
+    let title = payload.title;
+    let body = payload.body;
+    const rawData = payload.data ?? {};
+    const i18nKey = typeof rawData.i18nKey === 'string' ? rawData.i18nKey : undefined;
+    if (i18nKey && (0, notif_1.hasNotifKey)(i18nKey)) {
+        let params = {};
+        const rp = rawData.i18nParams;
+        if (typeof rp === 'string') {
+            try {
+                params = JSON.parse(rp);
+            }
+            catch { /* keep {} */ }
+        }
+        else if (rp && typeof rp === 'object') {
+            params = rp;
+        }
+        const rendered = (0, notif_1.renderNotif)(locale, i18nKey, params);
+        title = rendered.title || title;
+        body = rendered.body || body;
+    }
+    const stringData = {};
+    for (const [k, v] of Object.entries(rawData)) {
+        if (v === null || v === undefined)
+            continue;
+        stringData[k] = typeof v === 'string' ? v : JSON.stringify(v);
+    }
+    return { title, body, data: { title, body, ...stringData } };
+};
 /**
  * Push Notification Service
  *
@@ -95,87 +134,53 @@ const pushToCouple = async (coupleId, payload) => {
         return { sent: 0, failed: 0 };
     const users = await prisma_1.prisma.user.findMany({
         where: { coupleId, pushToken: { not: null } },
-        select: { id: true, pushToken: true, pushPlatform: true },
+        select: { id: true, pushToken: true, pushPlatform: true, preferredLocale: true },
     });
-    const tokens = users
-        .map((u) => u.pushToken)
-        .filter((t) => !!t && t.length > 0);
-    if (tokens.length === 0) {
+    const targets = users.filter((u) => !!u.pushToken && u.pushToken.length > 0);
+    if (targets.length === 0) {
         logger_1.logger.warn(`[Push] pushToCouple(${coupleId}): no tokens found — users have not registered push yet.`);
         return { sent: 0, failed: 0 };
     }
-    logger_1.logger.info(`[Push] pushToCouple(${coupleId}): sending "${payload.title}" to ${tokens.length} token(s).`);
-    const stringData = {};
-    if (payload.data) {
-        for (const [k, v] of Object.entries(payload.data)) {
-            if (v === null || v === undefined)
-                continue;
-            stringData[k] = typeof v === 'string' ? v : JSON.stringify(v);
-        }
-    }
-    // Android: data-only message — the app's background handler (notifee) renders
-    // the notification so we can show the full-color SAWA logo as the large icon.
-    // iOS: standard APNs alert so the OS auto-displays it (no background handler needed).
-    const dataWithText = {
-        title: payload.title,
-        body: payload.body,
-        ...stringData,
-    };
-    try {
-        const response = await firebase_admin_1.default.messaging().sendEachForMulticast({
-            tokens,
-            // NO top-level notification field → prevents FCM auto-display on Android
-            // (would otherwise duplicate the notifee-rendered notification).
-            data: dataWithText,
-            android: {
-                priority: 'high',
-                collapseKey: payload.collapseKey,
-                // No android.notification → pure data message on Android
-            },
-            apns: {
-                payload: {
-                    aps: {
-                        alert: { title: payload.title, body: payload.body },
-                        sound: 'default',
-                        badge: 1,
-                    },
-                },
-            },
-        });
-        // Prune dead tokens so this couple doesn't keep failing forever.
-        if (response.failureCount > 0) {
-            const deadTokens = [];
-            response.responses.forEach((r, idx) => {
-                if (!r.success) {
-                    const code = r.error?.code;
-                    if (code === 'messaging/registration-token-not-registered' ||
-                        code === 'messaging/invalid-registration-token' ||
-                        code === 'messaging/invalid-argument') {
-                        deadTokens.push(tokens[idx]);
-                    }
-                }
+    logger_1.logger.info(`[Push] pushToCouple(${coupleId}): sending "${payload.title}" to ${targets.length} device(s).`);
+    // Send per-recipient so each partner receives the notification in THEIR own
+    // selected language (Android renders from data; iOS shows the APNs alert).
+    const deadTokens = [];
+    let sent = 0;
+    let failed = 0;
+    await Promise.all(targets.map(async (u) => {
+        const { title, body, data } = localizeFor(payload, u.preferredLocale);
+        try {
+            await firebase_admin_1.default.messaging().send({
+                token: u.pushToken,
+                // NO notification field → pure data message on Android (notifee renders).
+                data,
+                android: { priority: 'high', collapseKey: payload.collapseKey },
+                apns: { payload: { aps: { alert: { title, body }, sound: 'default', badge: 1 } } },
             });
-            if (deadTokens.length > 0) {
-                await prisma_1.prisma.user.updateMany({
-                    where: { pushToken: { in: deadTokens } },
-                    data: { pushToken: null, pushPlatform: null },
-                });
-                logger_1.logger.info(`[Push] Pruned ${deadTokens.length} stale FCM token(s).`);
+            sent += 1;
+        }
+        catch (err) {
+            failed += 1;
+            const code = (err?.errorInfo?.code ?? err?.code);
+            if (code === 'messaging/registration-token-not-registered' ||
+                code === 'messaging/invalid-registration-token' ||
+                code === 'messaging/invalid-argument') {
+                deadTokens.push(u.pushToken);
+            }
+            else {
+                logger_1.logger.warn(`[Push] pushToCouple token failed: ${code} — ${err?.message}`);
             }
         }
-        logger_1.logger.info(`[Push] pushToCouple(${coupleId}): sent=${response.successCount} failed=${response.failureCount}`);
-        if (response.failureCount > 0) {
-            response.responses.forEach((r, idx) => {
-                if (!r.success)
-                    logger_1.logger.warn(`[Push] Token[${idx}] failed: ${r.error?.code} — ${r.error?.message}`);
-            });
-        }
-        return { sent: response.successCount, failed: response.failureCount };
+    }));
+    if (deadTokens.length > 0) {
+        await prisma_1.prisma.user.updateMany({
+            where: { pushToken: { in: deadTokens } },
+            data: { pushToken: null, pushPlatform: null },
+        });
+        logger_1.logger.info(`[Push] Pruned ${deadTokens.length} stale FCM token(s).`);
     }
-    catch (err) {
-        logger_1.logger.error(`[Push] Send failed for couple ${coupleId}: ${err.message}`);
-        return { sent: 0, failed: tokens.length };
-    }
+    logger_1.logger.info(`[Push] pushToCouple(${coupleId}): sent=${sent} failed=${failed}`);
+    return { sent, failed };
 };
 exports.pushToCouple = pushToCouple;
 /**
@@ -190,27 +195,16 @@ const pushToUser = async (userId, payload) => {
     // pushToken: { not: null } are not valid there. Check null after fetch.
     const user = await prisma_1.prisma.user.findUnique({
         where: { id: userId },
-        select: { id: true, pushToken: true },
+        select: { id: true, pushToken: true, preferredLocale: true },
     });
     const token = user?.pushToken ?? null;
     if (!token) {
         logger_1.logger.warn(`[Push] pushToUser(${userId}): no token found — user has not registered push yet.`);
         return { sent: 0, failed: 0 };
     }
-    logger_1.logger.info(`[Push] pushToUser(${userId}): sending "${payload.title}".`);
-    const stringData = {};
-    if (payload.data) {
-        for (const [k, v] of Object.entries(payload.data)) {
-            if (v === null || v === undefined)
-                continue;
-            stringData[k] = typeof v === 'string' ? v : JSON.stringify(v);
-        }
-    }
-    const dataWithText = {
-        title: payload.title,
-        body: payload.body,
-        ...stringData,
-    };
+    // Localize to the recipient's chosen language.
+    const { title, body, data: dataWithText } = localizeFor(payload, user?.preferredLocale);
+    logger_1.logger.info(`[Push] pushToUser(${userId}): sending "${title}".`);
     try {
         const response = await firebase_admin_1.default.messaging().send({
             token,
@@ -222,7 +216,7 @@ const pushToUser = async (userId, payload) => {
                 collapseKey: payload.collapseKey,
             },
             apns: {
-                payload: { aps: { alert: { title: payload.title, body: payload.body }, sound: 'default', badge: 1 } },
+                payload: { aps: { alert: { title, body }, sound: 'default', badge: 1 } },
             },
         });
         logger_1.logger.info(`[Push] Sent to user ${userId}: ${response}`);

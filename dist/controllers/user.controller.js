@@ -46,13 +46,17 @@ exports.updateMe = updateMe;
 const registerPushToken = async (req, res) => {
     if (!req.user)
         throw new AppError_1.AppError('Unauthorized', 401);
-    const { token, platform } = req.body || {};
+    const { token, platform, locale } = req.body || {};
     if (token !== null && token !== undefined && typeof token !== 'string') {
         throw new AppError_1.AppError('token must be a string or null', 400, 'INVALID_TOKEN');
     }
     if (platform && platform !== 'ios' && platform !== 'android') {
         throw new AppError_1.AppError('platform must be "ios" or "android"', 400, 'INVALID_PLATFORM');
     }
+    // Persist the app language so server-sent push/APNs text is localized to the
+    // recipient. Only accept the languages the app actually ships.
+    const allowedLocales = ['en', 'hi', 'kn', 'mr'];
+    const preferredLocale = typeof locale === 'string' && allowedLocales.includes(locale) ? locale : undefined;
     // If the same token is already registered to a different user (e.g. shared
     // device, account switch), clear it from the old user so we don't push to
     // them by mistake.
@@ -67,6 +71,7 @@ const registerPushToken = async (req, res) => {
         data: {
             pushToken: token || null,
             pushPlatform: token ? platform || null : null,
+            ...(preferredLocale ? { preferredLocale } : {}),
         },
     });
     logger_1.logger.info(`[Push] Token ${token ? 'saved' : 'cleared'} for user ${req.user.userId} (${platform || 'unknown platform'})`);

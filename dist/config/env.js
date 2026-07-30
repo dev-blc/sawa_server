@@ -51,6 +51,27 @@ const envSchema = zod_1.z.object({
     // Override in Railway env vars for production security.
     ADMIN_EMAIL: zod_1.z.string().default('admin@gmail.com'),
     ADMIN_PASSWORD: zod_1.z.string().default('adminsawa'),
+    // ─── Subscriptions ──────────────────────────────────────────────────────────
+    // Master switch for entitlement ENFORCEMENT. Keep 'false' until the paywall +
+    // store products are live, otherwise every existing user (who has no
+    // subscription) would be locked out. When 'false' the whole app behaves exactly
+    // as today; entitlement is still tracked so we can flip this on cleanly later.
+    SUBSCRIPTIONS_ENFORCED: zod_1.z.string().default('false').transform((v) => v === 'true'),
+    // Apple App Store server-to-server config (App Store Connect → Users & Access
+    // → Integrations → In-App Purchase key). Optional so the server still boots
+    // before the client sets these up; Apple verification no-ops until present.
+    APPLE_BUNDLE_ID: zod_1.z.string().default('com.sawa.application'),
+    APPLE_ISSUER_ID: zod_1.z.string().optional(),
+    APPLE_KEY_ID: zod_1.z.string().optional(),
+    // The .p8 private key contents (with real newlines or \n-escaped — both handled).
+    APPLE_PRIVATE_KEY: zod_1.z.string().optional(),
+    // Numeric App Store app id (apps.apple.com/app/id...). Improves verifier checks.
+    APPLE_APP_APPLE_ID: zod_1.z.string().optional().transform((v) => (v ? Number(v) : undefined)),
+    // 'Sandbox' | 'Production'. Sandbox for TestFlight/dev, Production for live.
+    APPLE_ENVIRONMENT: zod_1.z.enum(['Sandbox', 'Production']).default('Sandbox'),
+    // Store product identifiers. Must match what you create in App Store Connect.
+    APPLE_PRODUCT_PRIME: zod_1.z.string().default('sawa_prime_monthly'),
+    APPLE_PRODUCT_PRIME_PLUS: zod_1.z.string().default('sawa_prime_plus_monthly'),
 });
 const _parsed = envSchema.safeParse(process.env);
 if (!_parsed.success) {
