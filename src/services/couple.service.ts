@@ -2,6 +2,7 @@ import { prisma } from '../lib/prisma';
 import { AppError } from '../utils/AppError';
 import { logger } from '../utils/logger';
 import { emitRealtimeNotification } from '../utils/realtime';
+import { i18nData } from '../i18n/notif';
 import { materializeImage, materializeImages } from '../lib/storage';
 
 export class CoupleService {
@@ -618,6 +619,7 @@ export class CoupleService {
 
     const title = 'A new couple joined nearby';
     const message = `${newCoupleName} just joined SAWA in ${city}. Say hi!`;
+    const notifData = { coupleId: newCoupleId, city, ...i18nData('nearby.joined', { name: newCoupleName, city }) };
 
     // Persist + emit each notification.
     await Promise.all(
@@ -629,7 +631,7 @@ export class CoupleService {
             type: 'nearby',
             title,
             message,
-            data: { coupleId: newCoupleId, city },
+            data: notifData,
           },
         });
         emitRealtimeNotification(c.coupleId, {
@@ -637,7 +639,7 @@ export class CoupleService {
           type: 'nearby',
           title,
           message,
-          data: { coupleId: newCoupleId, city },
+          data: notifData,
         });
       }),
     );

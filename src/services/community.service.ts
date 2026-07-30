@@ -3,6 +3,7 @@ import { AppError } from '../utils/AppError';
 import { logger } from '../utils/logger';
 import { emitRealtimeNotification } from '../utils/realtime';
 import { upsertGroupedNotification } from './notification.service';
+import { i18nData } from '../i18n/notif';
 import { cacheGet, cacheSet, cacheInvalidatePattern } from '../lib/cache';
 import { materializeImageLoose } from '../lib/storage';
 
@@ -235,6 +236,7 @@ export class CommunityService {
                     isInvited: true,
                     invited: true,
                     status: 'invited',
+                    ...i18nData('community.invite', { name: me.profileName ?? '', community: community.name }),
                   },
                 },
               });
@@ -310,6 +312,7 @@ export class CommunityService {
       requesterName: me.profileName,
       communityName: community?.name || 'Community',
       primaryPhoto: me.primaryPhoto || null,
+      ...i18nData('community.joinRequest', { name: me.profileName ?? '' }),
     };
 
     // Notify all admins in parallel instead of sequentially.
@@ -320,7 +323,7 @@ export class CommunityService {
           senderId: me.coupleId,
           type: 'community',
           title: 'New Join Request',
-          message: `${me.profileName} want to join.`,
+          message: `${me.profileName} wants to join.`,
           groupKey: `community:join:${communityId}:${me.coupleId}`,
           data: notificationData,
         }),
@@ -422,7 +425,7 @@ export class CommunityService {
              type: 'community',
              title: 'Request Accepted!',
              message: `You joined the group!`,
-             data: { communityId, requestType: 'accepted' },
+             data: { communityId, requestType: 'accepted', ...i18nData('community.requestAccepted') },
           },
        });
 
@@ -733,6 +736,7 @@ export class CommunityService {
                 isInvited: true,
                 invited: true,
                 status: 'invited',
+                ...i18nData('community.invite', { name: me.profileName ?? '', community: community.name }),
               },
             },
           });

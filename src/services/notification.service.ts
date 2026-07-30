@@ -2,6 +2,7 @@ import { prisma } from '../lib/prisma';
 import type { NotificationType } from '@prisma/client';
 import { emitRealtimeNotification } from '../utils/realtime';
 import { invalidateNotifUnreadCount } from '../lib/cache';
+import { i18nData } from '../i18n/notif';
 
 type NotificationData = Record<string, unknown>;
 
@@ -237,7 +238,7 @@ export async function upsertMatchPendingNotification(params: {
     senderId: params.senderId,
     type: 'match',
     title: 'New Connection Request!',
-    message: `${params.profileName} want to connect with you!`,
+    message: `${params.profileName} wants to connect with you!`,
     groupKey: `match:pending:${params.matchId}`,
     data: {
       matchId: params.matchId,
@@ -250,6 +251,7 @@ export async function upsertMatchPendingNotification(params: {
       vibes: params.vibes,
       matchCriteria: params.matchCriteria,
       isPending: true,
+      ...i18nData('match.pending', { name: params.profileName }),
     },
   });
 }
@@ -302,6 +304,7 @@ export async function upsertMatchConnectedNotification(params: {
       vibes: params.vibes,
       matchCriteria: params.matchCriteria,
       isPending: false,
+      ...i18nData('match.connected', { name: params.profileName }),
     },
   });
 }

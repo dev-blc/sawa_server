@@ -1,6 +1,7 @@
 import { prisma } from '../lib/prisma';
 import { cacheGet, cacheSet, invalidateNotifUnreadCount } from '../lib/cache';
 import { pushToUser } from '../services/push.service';
+import { i18nData } from '../i18n/notif';
 import { logger } from '../utils/logger';
 
 /**
@@ -169,6 +170,7 @@ export async function runCheck(): Promise<void> {
               senderUserId: partner.id, // she never sees her own cycle nudges
               navigate: 'UsSpace',
               milestone,
+              ...i18nData(`cycle.${milestone}`, { girl, boy }),
             },
             read: false,
           },
@@ -181,7 +183,7 @@ export async function runCheck(): Promise<void> {
         pushToUser(primary.id, {
           title,
           body,
-          data: { type: 'us_cycle', navigate: 'Notifications', milestone },
+          data: { type: 'us_cycle', navigate: 'Notifications', milestone, ...i18nData(`cycle.${milestone}`, { girl, boy }) },
           collapseKey: 'us_cycle',
         }).catch(() => null);
 

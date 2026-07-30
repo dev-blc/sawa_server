@@ -59,7 +59,7 @@ export const getNotifications = async (req: Request, res: Response): Promise<voi
       ...n,
       title: "You've Connected!",
       message: `You connected with ${profileName}!`,
-      data: { ...d, isPending: false },
+      data: { ...d, isPending: false, i18nKey: 'match.connected', i18nParams: { name: profileName } },
     };
   });
 

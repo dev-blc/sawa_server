@@ -2,6 +2,7 @@ import { prisma } from '../lib/prisma';
 import { AppError } from '../utils/AppError';
 import { logger } from '../utils/logger';
 import { emitRealtimeNotification } from '../utils/realtime';
+import { i18nData } from '../i18n/notif';
 import {
   upsertMatchConnectedNotification,
   upsertMatchPendingNotification,
@@ -643,6 +644,7 @@ export class MatchService {
           type: 'system',
           title: "Connection Update",
           message: "A couple decided not to connect at this time.",
+          data: { ...i18nData('match.rejected') },
         }
     });
 

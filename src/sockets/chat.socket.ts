@@ -2,6 +2,7 @@ import { Server as SocketIOServer, Socket } from 'socket.io';
 import { SOCKET_EVENTS } from '../constants/socketEvents';
 import { logger } from '../utils/logger';
 import { prisma } from '../lib/prisma';
+import { i18nData } from '../i18n/notif';
 import { getCoupleCommunityColor } from '../utils/communityColors';
 // NOTE: chat push/realtime is handled via upsertGroupedNotification() in
 // notification.service (which internally calls emitRealtimeNotification →
@@ -144,7 +145,7 @@ export const registerChatHandlers = (io: SocketIOServer, socket: Socket): void =
                    title: `New Message from ${me?.profileName || 'Couple'}`,
                    message: `You have new messages from ${me?.profileName || 'Couple'}`,
                    groupKey: `message:match:${chatId}:${socket.coupleId}`,
-                   data: { matchId: chatId, coupleName: me?.profileName, navigate: 'PrivateChatThread', ...(me?.primaryPhoto ? { senderPhoto: me.primaryPhoto } : {}) },
+                   data: { matchId: chatId, coupleName: me?.profileName, navigate: 'PrivateChatThread', ...(me?.primaryPhoto ? { senderPhoto: me.primaryPhoto } : {}), ...i18nData('chat.private', { name: me?.profileName || 'Couple' }) },
                  });
               }
             } else if (chatType === 'group') {
@@ -174,6 +175,7 @@ export const registerChatHandlers = (io: SocketIOServer, socket: Socket): void =
                          communityName: community.name,
                          chatOnly: true,
                          navigate: 'GroupChat',
+                         ...i18nData('chat.group', { community: community.name }),
                        },
                      }),
                    ),

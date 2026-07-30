@@ -2,6 +2,7 @@ import { Server as SocketIOServer, Socket } from 'socket.io';
 import { prisma } from '../lib/prisma';
 import { logger } from '../utils/logger';
 import { pushToUser } from '../services/push.service';
+import { i18nData, NotifParams } from '../i18n/notif';
 import { invalidateNotifUnreadCount, cacheSet, cacheGet } from '../lib/cache';
 
 /** Redis key for a user's last shared feeling. TTL 7 days. */
@@ -151,6 +152,9 @@ export const registerUsHandlers = (io: SocketIOServer, socket: Socket): void => 
   const { userId, coupleId, userName, userRole } = socket;
   // Pronouns for the SENDER (the socket user) — used in all "from partner" copy.
   const p = pronounsFor(userRole);
+  // Gender token for the SENDER (notifications describe the sender's action):
+  // primary = male ('m'), partner = female ('f'). Used to localize gendered copy.
+  const g: 'm' | 'f' = userRole === 'partner' ? 'f' : 'm';
 
   // ── us:nudge ──────────────────────────────────────────────────────────
   socket.on(
@@ -184,24 +188,31 @@ export const registerUsHandlers = (io: SocketIOServer, socket: Socket): void => 
       // 2. Save in-app notification & set push title based on kind.
       const { partnerId, senderPhoto } = await findPartnerIdAndPhoto(userId, coupleId);
       let pushTitle = `${senderName} sent you a nudge 💛`;
+      // i18n key/params used for BOTH the in-app row (client re-renders) and push.
+      let i18nKey = 'us.nudge.generic';
+      let i18nParams: NotifParams = { name: senderName };
 
       if (payload.kind === 'hug') {
+        i18nKey = 'us.nudge.hug'; i18nParams = { name: senderName };
         await saveUsNotification({
           coupleId,
           senderUserId: userId,
           subtype: 'us_hug',
           title: `${senderName} sent you a hug`,
           message: 'Warm hug heading your way',
+          extraData: i18nData(i18nKey, i18nParams),
         });
         pushTitle = `${senderName} sent you a hug 🤗`;
 
       } else if (payload.kind === 'kiss') {
+        i18nKey = 'us.nudge.kiss'; i18nParams = { name: senderName };
         await saveUsNotification({
           coupleId,
           senderUserId: userId,
           subtype: 'us_kiss',
           title: `${senderName} sent you a kiss`,
           message: 'A sweet kiss from your partner',
+          extraData: i18nData(i18nKey, i18nParams),
         });
         pushTitle = `${senderName} sent you a kiss 💋`;
 
@@ -209,96 +220,110 @@ export const registerUsHandlers = (io: SocketIOServer, socket: Socket): void => 
         const actLabel = payload.activity ? payload.activity : 'a date';
         const timeLabel = payload.time ? ` at ${payload.time}` : '';
         const dateMsg = payload.date ? `Want to go out on ${payload.date}${timeLabel} ✨` : 'Want to plan something special ✨';
+        i18nKey = 'us.date.request'; i18nParams = { name: senderName, actLabel };
         await saveUsNotification({
           coupleId,
           senderUserId: userId,
           subtype: 'us_date_plan',
           title: `Date request · ${actLabel}`,
           message: payload.note ? `${dateMsg.replace(' ✨', '')} — "${payload.note}"` : dateMsg.replace(' ✨', ''),
-          extraData: { id: payload.id, date: payload.date, rawDate: payload.rawDate, activity: payload.activity, time: payload.time, note: payload.note, kind: 'date_request', planBy: payload.planBy || senderName },
+          extraData: { id: payload.id, date: payload.date, rawDate: payload.rawDate, activity: payload.activity, time: payload.time, note: payload.note, kind: 'date_request', planBy: payload.planBy || senderName, ...i18nData(i18nKey, i18nParams) },
         });
         pushTitle = `${senderName} want to plan ${actLabel} 📅`;
 
       } else if (payload.kind === 'date_accept') {
+        i18nKey = 'us.date.accept'; i18nParams = { name: senderName };
         await saveUsNotification({
           coupleId,
           senderUserId: userId,
           subtype: 'us_date_plan',
           title: '🎉 Date confirmed!',
           message: `It's on the calendar 🗓️`,
-          extraData: { id: payload.id, date: payload.date, rawDate: payload.rawDate, activity: payload.activity, kind: 'date_accept' },
+          extraData: { id: payload.id, date: payload.date, rawDate: payload.rawDate, activity: payload.activity, kind: 'date_accept', ...i18nData(i18nKey, i18nParams) },
         });
         pushTitle = `${senderName} confirmed the date! 🎉`;
 
       } else if (payload.kind === 'date_reject') {
+        i18nKey = 'us.date.reject'; i18nParams = { name: senderName };
         await saveUsNotification({
           coupleId,
           senderUserId: userId,
           subtype: 'us_date_plan',
           title: '😔 Date declined',
           message: 'Maybe next time 🙏',
-          extraData: { kind: 'date_reject' },
+          extraData: { kind: 'date_reject', ...i18nData(i18nKey, i18nParams) },
         });
         pushTitle = `${senderName} couldn't make it this time`;
 
       } else if (payload.kind === 'date_plan') {
         // Legacy fallback
+        i18nKey = 'us.nudge.generic'; i18nParams = { name: senderName };
         await saveUsNotification({
           coupleId,
           senderUserId: userId,
           subtype: 'us_date_plan',
           title: `${senderName} planned a date`,
           message: payload.message || 'A date has been planned for you two!',
-          extraData: { date: payload.date, rawDate: payload.rawDate, activity: payload.activity },
+          extraData: { date: payload.date, rawDate: payload.rawDate, activity: payload.activity, ...i18nData(i18nKey, i18nParams) },
         });
 
       } else if (payload.kind === 'thinking') {
+        i18nKey = 'us.nudge.thinking'; i18nParams = { name: senderName, g };
         await saveUsNotification({
           coupleId,
           senderUserId: userId,
           subtype: 'us_thinking',
           title: `${senderName} is thinking of you`,
           message: `You crossed ${p.poss} mind right now`,
+          extraData: i18nData(i18nKey, i18nParams),
         });
         pushTitle = `${senderName} is thinking of you`;
 
       } else if (payload.kind === 'missyou') {
+        i18nKey = 'us.nudge.missyou'; i18nParams = { name: senderName, g };
         await saveUsNotification({
           coupleId,
           senderUserId: userId,
           subtype: 'us_missyou',
           title: `${senderName} misses you`,
           message: `${p.Subj} wishes you were here`,
+          extraData: i18nData(i18nKey, i18nParams),
         });
         pushTitle = `${senderName} misses you`;
 
       } else if (payload.kind === 'cheerup') {
+        i18nKey = 'us.nudge.cheerup'; i18nParams = { name: senderName };
         await saveUsNotification({
           coupleId,
           senderUserId: userId,
           subtype: 'us_cheerup',
           title: `${senderName} is cheering you up`,
           message: 'A little boost from your partner',
+          extraData: i18nData(i18nKey, i18nParams),
         });
         pushTitle = `${senderName} is cheering you up`;
 
       } else if (payload.kind === 'here') {
+        i18nKey = 'us.nudge.here'; i18nParams = { name: senderName, g };
         await saveUsNotification({
           coupleId,
           senderUserId: userId,
           subtype: 'us_here',
           title: `${senderName} is here for you`,
           message: `You have ${p.poss} full support`,
+          extraData: i18nData(i18nKey, i18nParams),
         });
         pushTitle = `${senderName} is here for you`;
 
       } else if (payload.kind === 'appreciate') {
+        i18nKey = 'us.nudge.appreciate'; i18nParams = { name: senderName, g };
         await saveUsNotification({
           coupleId,
           senderUserId: userId,
           subtype: 'us_appreciate',
           title: `${senderName} appreciates you`,
           message: `${p.Subj} is grateful to have you`,
+          extraData: i18nData(i18nKey, i18nParams),
         });
         pushTitle = `${senderName} appreciates you`;
       }
@@ -322,6 +347,7 @@ export const registerUsHandlers = (io: SocketIOServer, socket: Socket): void => 
             kind: payload.kind,
             navigate: 'Notifications',
             ...(senderPhoto ? { senderPhoto } : {}),  // couple profile photo for largeIcon
+            ...i18nData(i18nKey, i18nParams),
           },
           collapseKey: 'us_nudge',
         }).catch(() => null);
@@ -349,6 +375,7 @@ export const registerUsHandlers = (io: SocketIOServer, socket: Socket): void => 
       subtype: 'us_love',
       title: `${senderName} sent you love ❤️`,
       message: 'Thinking of you 💛',
+      extraData: i18nData('us.nudge.love', { name: senderName }),
     });
 
     // Tell the partner's Notifications screen to refresh right away.
@@ -361,7 +388,7 @@ export const registerUsHandlers = (io: SocketIOServer, socket: Socket): void => 
       pushToUser(lovePartnerId, {
         title: `${senderName} sent you love ❤️`,
         body: 'Tap to see it',
-        data: { type: 'us_love', navigate: 'Notifications', ...(loveSenderPhoto ? { senderPhoto: loveSenderPhoto } : {}) },
+        data: { type: 'us_love', navigate: 'Notifications', ...(loveSenderPhoto ? { senderPhoto: loveSenderPhoto } : {}), ...i18nData('us.nudge.love', { name: senderName }) },
         collapseKey: 'us_love',
       }).catch(() => null);
     }
@@ -405,7 +432,7 @@ export const registerUsHandlers = (io: SocketIOServer, socket: Socket): void => 
         message: payload.note?.trim()
           ? `Feeling ${feelingLabel} — "${payload.note.trim()}"`
           : `${p.Be} feeling ${feelingLabel} right now`,
-        extraData: { feeling: payload.feeling },
+        extraData: { feeling: payload.feeling, ...i18nData('us.mood', { name: senderFirstName, feeling: feelingLabel, g }) },
       });
 
       // Tell the partner's Notifications screen to refresh right away.
@@ -426,6 +453,7 @@ export const registerUsHandlers = (io: SocketIOServer, socket: Socket): void => 
             feeling: payload.feeling,
             navigate: 'Notifications',
             ...(feelSenderPhoto ? { senderPhoto: feelSenderPhoto } : {}),
+            ...i18nData('us.mood', { name: senderFirstName, feeling: feelingLabel, g }),
           },
           collapseKey: 'us_feeling',
         }).catch(() => null);
@@ -488,7 +516,7 @@ export const registerUsHandlers = (io: SocketIOServer, socket: Socket): void => 
       subtype: 'us_game_challenge',
       title: `${senderName} challenged you to Tic-Tac-Toe 🎮`,
       message: 'Tap to accept and play!',
-      extraData: { gameId: payload.gameId },
+      extraData: { gameId: payload.gameId, ...i18nData('us.game.challenge', { name: senderName }) },
     });
     io.to(`couple:${coupleId}`).except(socket.id).emit('notification:new', { type: 'us_game_challenge' });
 
@@ -503,6 +531,7 @@ export const registerUsHandlers = (io: SocketIOServer, socket: Socket): void => 
           gameId: payload.gameId,
           navigate: 'Notifications',
           ...(senderPhoto ? { senderPhoto } : {}),
+          ...i18nData('us.game.challenge', { name: senderName }),
         },
         collapseKey: 'us_game',
       }).catch(() => null);

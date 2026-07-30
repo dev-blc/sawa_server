@@ -1,6 +1,7 @@
 import { prisma } from '../lib/prisma';
 import { invalidateBanCache } from '../middleware/authenticate';
 import { emitRealtimeNotification } from '../utils/realtime';
+import { i18nData } from '../i18n/notif';
 import { logger } from '../utils/logger';
 import { materializeImageLoose } from '../lib/storage';
 
@@ -666,7 +667,7 @@ export class AdminService {
           type: 'community',
           title: 'Request Accepted!',
           message: `You joined ${community?.name || 'the community'}!`,
-          data: { communityId },
+          data: { communityId, ...i18nData('community.requestAccepted') },
         },
       });
 

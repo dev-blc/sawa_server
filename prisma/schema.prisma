@@ -24,6 +24,9 @@ model User {
   // Push notification credentials. Captured by mobile app at login/permission grant.
   pushToken        String?
   pushPlatform     String?
+  // The app language the user selected (en/hi/kn/mr). Sent by the mobile app on
+  // login and whenever the language is changed. Used to localize push/APNs text.
+  preferredLocale  String?   @default("en")
   createdAt        DateTime  @default(now())
   updatedAt        DateTime  @updatedAt
   partnerOf1       Couple[]  @relation("Partner1")

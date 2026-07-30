@@ -4,6 +4,7 @@ import { cacheGet, cacheSet, cacheInvalidate, invalidateNotifUnreadCount } from 
 import { prisma } from '../lib/prisma';
 import { logger } from '../utils/logger';
 import { pushToUser } from '../services/push.service';
+import { i18nData } from '../i18n/notif';
 import { type CycleSettings } from '../jobs/cycleNotifier';
 
 const router = Router();
@@ -288,7 +289,7 @@ router.post('/ask-feeling', authenticate, async (req: Request, res: Response): P
         type: 'system',
         title: `${senderName} is asking how you feel`,
         message: `Share your mood with ${senderName} 💭`,
-        data: { subtype: 'us_ask_feeling', senderUserId: myUserId, navigate: 'UsSpace' },
+        data: { subtype: 'us_ask_feeling', senderUserId: myUserId, navigate: 'UsSpace', ...i18nData('us.askFeeling', { name: senderName }) },
         read: false,
       },
     });
@@ -306,7 +307,7 @@ router.post('/ask-feeling', authenticate, async (req: Request, res: Response): P
       pushToUser(partnerId, {
         title: `${senderName} is asking how you feel 💭`,
         body: `Let ${senderName} know how your day is going`,
-        data: { type: 'us_ask_feeling', navigate: 'UsSpace' },
+        data: { type: 'us_ask_feeling', navigate: 'UsSpace', ...i18nData('us.askFeeling', { name: senderName }) },
         collapseKey: 'us_ask_feeling',
       }).catch(() => null);
     }
@@ -417,7 +418,7 @@ router.post('/fridge-notes', authenticate, async (req: Request, res: Response): 
         type: 'system',
         title: `${senderName} left a note on the fridge`,
         message: trimmed.length > 60 ? `"${trimmed.slice(0, 57)}…"` : `"${trimmed}"`,
-        data: { subtype: 'us_fridge_note', senderUserId: myUserId, navigate: 'UsSpace', noteId: note.id },
+        data: { subtype: 'us_fridge_note', senderUserId: myUserId, navigate: 'UsSpace', noteId: note.id, ...i18nData('us.fridgeNote', { name: senderName, note: trimmed.length > 80 ? `${trimmed.slice(0, 77)}…` : trimmed }) },
         read: false,
       },
     });
@@ -433,7 +434,7 @@ router.post('/fridge-notes', authenticate, async (req: Request, res: Response): 
       pushToUser(partnerId, {
         title: `${senderName} left a note on the fridge 📌`,
         body: trimmed.length > 80 ? `${trimmed.slice(0, 77)}…` : trimmed,
-        data: { type: 'us_fridge_note', navigate: 'UsSpace' },
+        data: { type: 'us_fridge_note', navigate: 'UsSpace', ...i18nData('us.fridgeNote', { name: senderName, note: trimmed.length > 80 ? `${trimmed.slice(0, 77)}…` : trimmed }) },
         collapseKey: 'us_fridge_note',
       }).catch(() => null);
     }
@@ -480,7 +481,7 @@ router.patch('/fridge-notes/:id/ack', authenticate, async (req: Request, res: Re
         type: 'system',
         title: `${senderName} acknowledged your note ✓`,
         message: note.text.length > 60 ? `"${note.text.slice(0, 57)}…"` : `"${note.text}"`,
-        data: { subtype: 'us_fridge_ack', senderUserId: myUserId, navigate: 'UsSpace', noteId: id },
+        data: { subtype: 'us_fridge_ack', senderUserId: myUserId, navigate: 'UsSpace', noteId: id, ...i18nData('us.fridgeAck', { name: senderName, note: note.text.length > 80 ? `${note.text.slice(0, 77)}…` : note.text }) },
         read: false,
       },
     });
@@ -495,7 +496,7 @@ router.patch('/fridge-notes/:id/ack', authenticate, async (req: Request, res: Re
     pushToUser(authorId, {
       title: `${senderName} acknowledged your note ✓`,
       body: note.text.length > 80 ? `${note.text.slice(0, 77)}…` : note.text,
-      data: { type: 'us_fridge_ack', navigate: 'UsSpace' },
+      data: { type: 'us_fridge_ack', navigate: 'UsSpace', ...i18nData('us.fridgeAck', { name: senderName, note: note.text.length > 80 ? `${note.text.slice(0, 77)}…` : note.text }) },
       collapseKey: 'us_fridge_ack',
     }).catch(() => null);
 
@@ -621,7 +622,7 @@ router.post('/cycle', authenticate, async (req: Request, res: Response): Promise
         type: 'system',
         title: `🌸 ${senderName} shared her cycle calendar`,
         message: 'Tap the calendar on your Us page to see it',
-        data: { subtype: 'us_cycle', senderUserId: myUserId, navigate: 'UsSpace' },
+        data: { subtype: 'us_cycle', senderUserId: myUserId, navigate: 'UsSpace', ...i18nData('us.cycleShared', { name: senderName }) },
         read: false,
       },
     });
@@ -637,7 +638,7 @@ router.post('/cycle', authenticate, async (req: Request, res: Response): Promise
       pushToUser(partnerId, {
         title: `🌸 ${senderName} shared her cycle calendar`,
         body: 'Tap to see it and be there for her',
-        data: { type: 'us_cycle', navigate: 'Notifications' },
+        data: { type: 'us_cycle', navigate: 'Notifications', ...i18nData('us.cycleShared', { name: senderName }) },
         collapseKey: 'us_cycle',
       }).catch(() => null);
     }
