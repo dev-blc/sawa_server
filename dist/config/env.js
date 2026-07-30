@@ -72,6 +72,20 @@ const envSchema = zod_1.z.object({
     // Store product identifiers. Must match what you create in App Store Connect.
     APPLE_PRODUCT_PRIME: zod_1.z.string().default('sawa_prime_monthly'),
     APPLE_PRODUCT_PRIME_PLUS: zod_1.z.string().default('sawa_prime_plus_monthly'),
+    // ─── Google Play Billing ─────────────────────────────────────────────────────
+    // Android applicationId (Play Console package name).
+    GOOGLE_PLAY_PACKAGE_NAME: zod_1.z.string().default('com.sawa.couplesapp'),
+    // Service-account JSON with the Google Play Android Developer API enabled and
+    // access granted in Play Console. Optional so the server boots before setup;
+    // Google verification no-ops until present. (Real newlines or \n both handled.)
+    GOOGLE_PLAY_SERVICE_ACCOUNT_JSON: zod_1.z.string().optional(),
+    // Play subscription (base plan / product) ids. Must match Play Console.
+    GOOGLE_PRODUCT_PRIME: zod_1.z.string().default('sawa_prime_monthly'),
+    GOOGLE_PRODUCT_PRIME_PLUS: zod_1.z.string().default('sawa_prime_plus_monthly'),
+    // Optional shared secret appended as ?secret=... to the RTDN Pub/Sub push URL,
+    // so only Google's configured push can reach the webhook. (Defense in depth —
+    // authenticity is already guaranteed by re-fetching the purchase from Google.)
+    GOOGLE_RTDN_SECRET: zod_1.z.string().optional(),
 });
 const _parsed = envSchema.safeParse(process.env);
 if (!_parsed.success) {

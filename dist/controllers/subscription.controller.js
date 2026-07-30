@@ -1,10 +1,12 @@
 "use strict";
 Object.defineProperty(exports, "__esModule", { value: true });
-exports.appleNotifications = exports.verifyApple = exports.startTrialHandler = exports.getMySubscription = void 0;
+exports.googleNotifications = exports.verifyGoogle = exports.appleNotifications = exports.verifyApple = exports.startTrialHandler = exports.getMySubscription = void 0;
 const app_store_server_library_1 = require("@apple/app-store-server-library");
 const logger_1 = require("../utils/logger");
 const subscription_service_1 = require("../services/subscription.service");
 const appstore_service_1 = require("../services/appstore.service");
+const googleplay_service_1 = require("../services/googleplay.service");
+const env_1 = require("../config/env");
 /** GET /api/v1/subscriptions/me — current entitlement + usage counts. */
 const getMySubscription = async (req, res) => {
     const coupleId = req.user?.coupleId;
@@ -116,4 +118,93 @@ const appleNotifications = async (req, res) => {
     }
 };
 exports.appleNotifications = appleNotifications;
+/**
+ * POST /api/v1/subscriptions/google/verify
+ * Body: { productId, purchaseToken }
+ * The app calls this after a successful Play purchase/restore. We fetch the
+ * authoritative state from Google, acknowledge it (so Google doesn't auto-refund)
+ * and set entitlement. Pending purchases (payment not yet debited) are NOT
+ * granted — they resolve later via the RTDN webhook / restore.
+ */
+const verifyGoogle = async (req, res) => {
+    const coupleId = req.user?.coupleId;
+    if (!coupleId) {
+        res.status(400).json({ success: false, error: 'Missing couple context' });
+        return;
+    }
+    if (!(0, googleplay_service_1.isGoogleConfigured)()) {
+        res.status(503).json({ success: false, error: 'GOOGLE_NOT_CONFIGURED' });
+        return;
+    }
+    const { productId, purchaseToken } = (req.body ?? {});
+    if (!purchaseToken) {
+        res.status(400).json({ success: false, error: 'purchaseToken is required' });
+        return;
+    }
+    const info = await (0, googleplay_service_1.getSubscriptionV2)(purchaseToken);
+    if (!info) {
+        res.status(400).json({ success: false, error: 'VERIFICATION_FAILED' });
+        return;
+    }
+    // Payment not yet completed (deferred / UPI mandate / slow bank). Don't grant.
+    if ((0, subscription_service_1.isGooglePendingOrUnknown)(info)) {
+        const entitlement = await (0, subscription_service_1.getEntitlement)(coupleId);
+        res.status(202).json({ success: true, pending: true, data: entitlement });
+        return;
+    }
+    // Acknowledge within Google's 3-day window (idempotent).
+    const ackProduct = info.productId ?? productId;
+    if (!info.acknowledged && ackProduct) {
+        await (0, googleplay_service_1.acknowledgeSubscription)(ackProduct, purchaseToken);
+    }
+    const entitlement = await (0, subscription_service_1.applyGooglePurchase)(coupleId, purchaseToken, info);
+    res.json({ success: true, data: entitlement });
+};
+exports.verifyGoogle = verifyGoogle;
+/**
+ * POST /api/v1/subscriptions/google/notifications
+ * Google Play Real-time Developer Notifications (Pub/Sub push). Unauthenticated;
+ * authenticity comes from re-fetching the purchase from Google. Always 200 fast.
+ */
+const googleNotifications = async (req, res) => {
+    // Optional shared-secret gate (?secret=...) on the Pub/Sub push URL.
+    if (env_1.env.GOOGLE_RTDN_SECRET && req.query.secret !== env_1.env.GOOGLE_RTDN_SECRET) {
+        res.status(200).json({ success: true }); // ack silently, ignore
+        return;
+    }
+    res.status(200).json({ success: true }); // ack immediately
+    try {
+        const message = (req.body ?? {}).message;
+        if (!message?.data)
+            return;
+        const decoded = JSON.parse(Buffer.from(message.data, 'base64').toString('utf8'));
+        if (decoded.testNotification) {
+            logger_1.logger.info('[Sub][play-webhook] test notification received');
+            return;
+        }
+        // Refund / chargeback / revoke.
+        if (decoded.voidedPurchaseNotification?.purchaseToken) {
+            const purchaseToken = decoded.voidedPurchaseNotification.purchaseToken;
+            const info = await (0, googleplay_service_1.getSubscriptionV2)(purchaseToken);
+            if (info)
+                await (0, subscription_service_1.applyGooglePurchaseByToken)(purchaseToken, info);
+            else
+                await (0, subscription_service_1.expireGoogleToken)(purchaseToken);
+            logger_1.logger.info('[Sub][play-webhook] processed voidedPurchase');
+            return;
+        }
+        // Subscription lifecycle (renew / cancel / grace / hold / expire / etc.).
+        const sub = decoded.subscriptionNotification;
+        if (sub?.purchaseToken) {
+            const info = await (0, googleplay_service_1.getSubscriptionV2)(sub.purchaseToken);
+            if (info)
+                await (0, subscription_service_1.applyGooglePurchaseByToken)(sub.purchaseToken, info);
+            logger_1.logger.info(`[Sub][play-webhook] processed subscriptionNotification type ${sub.notificationType}`);
+        }
+    }
+    catch (err) {
+        logger_1.logger.error(`[Sub][play-webhook] processing failed: ${err?.message}`);
+    }
+};
+exports.googleNotifications = googleNotifications;
 //# sourceMappingURL=subscription.controller.js.map

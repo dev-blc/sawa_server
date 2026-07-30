@@ -27,7 +27,7 @@ export declare const TRIAL_DAYS = 7;
 export declare const ACTIVE_STATUSES: SubStatus[];
 /** Is entitlement enforcement turned on? (see env.SUBSCRIPTIONS_ENFORCED) */
 export declare const isEnforced: () => boolean;
-/** Map an Apple product id → our tier. Returns null for unknown products. */
+/** Map an Apple/Google product id → our tier. Returns null for unknown products. */
 export declare const tierForProduct: (productId: string | null | undefined) => Tier | null;
 export declare const limitsForTier: (tier: Tier) => TierLimits;
 //# sourceMappingURL=subscription.d.ts.map

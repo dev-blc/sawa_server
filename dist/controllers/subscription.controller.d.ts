@@ -17,4 +17,19 @@ export declare const verifyApple: (req: Request, res: Response) => Promise<void>
  * trusting anything. Always 200 quickly so Apple doesn't retry-storm.
  */
 export declare const appleNotifications: (req: Request, res: Response) => Promise<void>;
+/**
+ * POST /api/v1/subscriptions/google/verify
+ * Body: { productId, purchaseToken }
+ * The app calls this after a successful Play purchase/restore. We fetch the
+ * authoritative state from Google, acknowledge it (so Google doesn't auto-refund)
+ * and set entitlement. Pending purchases (payment not yet debited) are NOT
+ * granted — they resolve later via the RTDN webhook / restore.
+ */
+export declare const verifyGoogle: (req: Request, res: Response) => Promise<void>;
+/**
+ * POST /api/v1/subscriptions/google/notifications
+ * Google Play Real-time Developer Notifications (Pub/Sub push). Unauthenticated;
+ * authenticity comes from re-fetching the purchase from Google. Always 200 fast.
+ */
+export declare const googleNotifications: (req: Request, res: Response) => Promise<void>;
 //# sourceMappingURL=subscription.controller.d.ts.map

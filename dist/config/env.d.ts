@@ -18,6 +18,9 @@ export declare const env: {
     APPLE_ENVIRONMENT: "Sandbox" | "Production";
     APPLE_PRODUCT_PRIME: string;
     APPLE_PRODUCT_PRIME_PLUS: string;
+    GOOGLE_PLAY_PACKAGE_NAME: string;
+    GOOGLE_PRODUCT_PRIME: string;
+    GOOGLE_PRODUCT_PRIME_PLUS: string;
     REDIS_URL?: string | undefined;
     CLOUDINARY_CLOUD_NAME?: string | undefined;
     CLOUDINARY_API_KEY?: string | undefined;
@@ -40,5 +43,7 @@ export declare const env: {
     APPLE_KEY_ID?: string | undefined;
     APPLE_PRIVATE_KEY?: string | undefined;
     APPLE_APP_APPLE_ID?: number | undefined;
+    GOOGLE_PLAY_SERVICE_ACCOUNT_JSON?: string | undefined;
+    GOOGLE_RTDN_SECRET?: string | undefined;
 };
 //# sourceMappingURL=env.d.ts.map

@@ -1,6 +1,6 @@
 "use strict";
 Object.defineProperty(exports, "__esModule", { value: true });
-exports.TIER_LIMITS = exports.applyAppleTransactionByOriginalId = exports.applyAppleTransaction = exports.startTrial = exports.groupsJoined = exports.connectionsUsed = exports.getEntitlement = void 0;
+exports.TIER_LIMITS = exports.expireGoogleToken = exports.applyGooglePurchaseByToken = exports.applyGooglePurchase = exports.isGooglePendingOrUnknown = exports.applyAppleTransactionByOriginalId = exports.applyAppleTransaction = exports.startTrial = exports.groupsJoined = exports.connectionsUsed = exports.getEntitlement = void 0;
 const prisma_1 = require("../lib/prisma");
 const logger_1 = require("../utils/logger");
 const subscription_1 = require("../config/subscription");
@@ -165,4 +165,106 @@ const applyAppleTransactionByOriginalId = async (tx, opts) => {
     logger_1.logger.info(`[Sub] Webhook applied — couple ${existing.coupleId}, tier ${tier}, status ${status}`);
 };
 exports.applyAppleTransactionByOriginalId = applyAppleTransactionByOriginalId;
+// ─── Google Play ─────────────────────────────────────────────────────────────
+/** Map a Google subscription state + expiry → our internal status. */
+const googleStatus = (info) => {
+    const alive = info.expiryMs > Date.now();
+    switch (info.state) {
+        case 'ACTIVE':
+            return 'ACTIVE';
+        case 'GRACE':
+            return 'GRACE';
+        case 'CANCELED':
+            // Auto-renew turned off but access continues until the period ends.
+            return alive ? 'ACTIVE' : 'EXPIRED';
+        case 'ON_HOLD':
+        case 'PAUSED':
+        case 'EXPIRED':
+            return 'EXPIRED';
+        case 'PENDING':
+        case 'UNKNOWN':
+        default:
+            // Never grant on a pending/unknown state.
+            return 'EXPIRED';
+    }
+};
+/** Whether a Google state should be persisted as an entitlement change at all. */
+const isGooglePendingOrUnknown = (info) => info.state === 'PENDING' || info.state === 'UNKNOWN';
+exports.isGooglePendingOrUnknown = isGooglePendingOrUnknown;
+/** Apply a verified Google purchase to a couple's entitlement (client verify path). */
+const applyGooglePurchase = async (coupleId, purchaseToken, info) => {
+    const tier = (0, subscription_1.tierForProduct)(info.productId) ?? 'PRIME';
+    const status = googleStatus(info);
+    const currentPeriodEnd = info.expiryMs ? new Date(info.expiryMs) : null;
+    await prisma_1.prisma.subscription.upsert({
+        where: { coupleId },
+        create: {
+            coupleId,
+            tier,
+            status,
+            platform: 'android',
+            productId: info.productId ?? null,
+            purchaseToken,
+            currentPeriodEnd,
+            autoRenew: info.autoRenew,
+            environment: 'Production',
+            trialUsed: true,
+        },
+        update: {
+            tier,
+            status,
+            platform: 'android',
+            productId: info.productId ?? null,
+            purchaseToken,
+            currentPeriodEnd,
+            autoRenew: info.autoRenew,
+            trialUsed: true,
+        },
+    });
+    logger_1.logger.info(`[Sub] Google purchase applied — couple ${coupleId}, tier ${tier}, status ${status}, ends ${currentPeriodEnd?.toISOString() ?? 'n/a'}`);
+    return (0, exports.getEntitlement)(coupleId);
+};
+exports.applyGooglePurchase = applyGooglePurchase;
+/**
+ * Apply a Google purchase update from the RTDN webhook. We locate the couple by
+ * the current purchaseToken or its linkedPurchaseToken (set on upgrade/resub).
+ */
+const applyGooglePurchaseByToken = async (purchaseToken, info) => {
+    const orTokens = [{ purchaseToken }];
+    if (info.linkedPurchaseToken)
+        orTokens.push({ purchaseToken: info.linkedPurchaseToken });
+    const existing = await prisma_1.prisma.subscription.findFirst({ where: { OR: orTokens } });
+    if (!existing) {
+        logger_1.logger.warn(`[Sub] Google webhook for unknown purchaseToken — ignoring.`);
+        return;
+    }
+    const tier = (0, subscription_1.tierForProduct)(info.productId) ?? existing.tier;
+    const status = googleStatus(info);
+    await prisma_1.prisma.subscription.update({
+        where: { id: existing.id },
+        data: {
+            tier,
+            status,
+            platform: 'android',
+            productId: info.productId ?? existing.productId,
+            purchaseToken, // migrate to the latest token on upgrade/resub
+            currentPeriodEnd: info.expiryMs ? new Date(info.expiryMs) : existing.currentPeriodEnd,
+            autoRenew: info.autoRenew,
+        },
+    });
+    logger_1.logger.info(`[Sub] Google webhook applied — couple ${existing.coupleId}, tier ${tier}, status ${status}`);
+};
+exports.applyGooglePurchaseByToken = applyGooglePurchaseByToken;
+/** Force-expire a subscription by purchase token (refund / chargeback fallback). */
+const expireGoogleToken = async (purchaseToken) => {
+    const existing = await prisma_1.prisma.subscription.findFirst({ where: { purchaseToken } });
+    if (!existing)
+        return;
+    await prisma_1.prisma.subscription.update({
+        where: { id: existing.id },
+        data: { status: 'CANCELLED', autoRenew: false },
+    });
+    logger_1.logger.info(`[Sub] Google purchase voided — couple ${existing.coupleId} set CANCELLED`);
+};
+exports.expireGoogleToken = expireGoogleToken;
 //# sourceMappingURL=subscription.service.js.map

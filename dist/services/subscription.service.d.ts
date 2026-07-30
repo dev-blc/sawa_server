@@ -1,5 +1,6 @@
 import { TIER_LIMITS, type Tier, type SubStatus, type TierLimits } from '../config/subscription';
 import type { JWSTransactionDecodedPayload } from '@apple/app-store-server-library';
+import type { GoogleSubInfo } from './googleplay.service';
 export interface Entitlement {
     state: SubStatus;
     tier: Tier | null;
@@ -47,5 +48,16 @@ export declare const applyAppleTransactionByOriginalId: (tx: JWSTransactionDecod
     autoRenew?: boolean;
     forceStatus?: SubStatus;
 }) => Promise<void>;
+/** Whether a Google state should be persisted as an entitlement change at all. */
+export declare const isGooglePendingOrUnknown: (info: GoogleSubInfo) => boolean;
+/** Apply a verified Google purchase to a couple's entitlement (client verify path). */
+export declare const applyGooglePurchase: (coupleId: string, purchaseToken: string, info: GoogleSubInfo) => Promise<Entitlement>;
+/**
+ * Apply a Google purchase update from the RTDN webhook. We locate the couple by
+ * the current purchaseToken or its linkedPurchaseToken (set on upgrade/resub).
+ */
+export declare const applyGooglePurchaseByToken: (purchaseToken: string, info: GoogleSubInfo) => Promise<void>;
+/** Force-expire a subscription by purchase token (refund / chargeback fallback). */
+export declare const expireGoogleToken: (purchaseToken: string) => Promise<void>;
 export { TIER_LIMITS };
 //# sourceMappingURL=subscription.service.d.ts.map

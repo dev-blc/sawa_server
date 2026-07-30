@@ -13,6 +13,7 @@ import {
   type TierLimits,
 } from '../config/subscription';
 import type { JWSTransactionDecodedPayload } from '@apple/app-store-server-library';
+import type { GoogleSubInfo } from './googleplay.service';
 
 export interface Entitlement {
   state: SubStatus;
@@ -210,6 +211,121 @@ export const applyAppleTransactionByOriginalId = async (
     },
   });
   logger.info(`[Sub] Webhook applied — couple ${existing.coupleId}, tier ${tier}, status ${status}`);
+};
+
+// ─── Google Play ─────────────────────────────────────────────────────────────
+
+/** Map a Google subscription state + expiry → our internal status. */
+const googleStatus = (info: GoogleSubInfo): SubStatus => {
+  const alive = info.expiryMs > Date.now();
+  switch (info.state) {
+    case 'ACTIVE':
+      return 'ACTIVE';
+    case 'GRACE':
+      return 'GRACE';
+    case 'CANCELED':
+      // Auto-renew turned off but access continues until the period ends.
+      return alive ? 'ACTIVE' : 'EXPIRED';
+    case 'ON_HOLD':
+    case 'PAUSED':
+    case 'EXPIRED':
+      return 'EXPIRED';
+    case 'PENDING':
+    case 'UNKNOWN':
+    default:
+      // Never grant on a pending/unknown state.
+      return 'EXPIRED';
+  }
+};
+
+/** Whether a Google state should be persisted as an entitlement change at all. */
+export const isGooglePendingOrUnknown = (info: GoogleSubInfo): boolean =>
+  info.state === 'PENDING' || info.state === 'UNKNOWN';
+
+/** Apply a verified Google purchase to a couple's entitlement (client verify path). */
+export const applyGooglePurchase = async (
+  coupleId: string,
+  purchaseToken: string,
+  info: GoogleSubInfo,
+): Promise<Entitlement> => {
+  const tier = tierForProduct(info.productId) ?? 'PRIME';
+  const status = googleStatus(info);
+  const currentPeriodEnd = info.expiryMs ? new Date(info.expiryMs) : null;
+
+  await prisma.subscription.upsert({
+    where: { coupleId },
+    create: {
+      coupleId,
+      tier,
+      status,
+      platform: 'android',
+      productId: info.productId ?? null,
+      purchaseToken,
+      currentPeriodEnd,
+      autoRenew: info.autoRenew,
+      environment: 'Production',
+      trialUsed: true,
+    },
+    update: {
+      tier,
+      status,
+      platform: 'android',
+      productId: info.productId ?? null,
+      purchaseToken,
+      currentPeriodEnd,
+      autoRenew: info.autoRenew,
+      trialUsed: true,
+    },
+  });
+
+  logger.info(`[Sub] Google purchase applied — couple ${coupleId}, tier ${tier}, status ${status}, ends ${currentPeriodEnd?.toISOString() ?? 'n/a'}`);
+  return getEntitlement(coupleId);
+};
+
+/**
+ * Apply a Google purchase update from the RTDN webhook. We locate the couple by
+ * the current purchaseToken or its linkedPurchaseToken (set on upgrade/resub).
+ */
+export const applyGooglePurchaseByToken = async (
+  purchaseToken: string,
+  info: GoogleSubInfo,
+): Promise<void> => {
+  const orTokens: Array<{ purchaseToken: string }> = [{ purchaseToken }];
+  if (info.linkedPurchaseToken) orTokens.push({ purchaseToken: info.linkedPurchaseToken });
+
+  const existing = await prisma.subscription.findFirst({ where: { OR: orTokens } });
+  if (!existing) {
+    logger.warn(`[Sub] Google webhook for unknown purchaseToken — ignoring.`);
+    return;
+  }
+
+  const tier = tierForProduct(info.productId) ?? (existing.tier as Tier);
+  const status = googleStatus(info);
+
+  await prisma.subscription.update({
+    where: { id: existing.id },
+    data: {
+      tier,
+      status,
+      platform: 'android',
+      productId: info.productId ?? existing.productId,
+      purchaseToken, // migrate to the latest token on upgrade/resub
+      currentPeriodEnd: info.expiryMs ? new Date(info.expiryMs) : existing.currentPeriodEnd,
+      autoRenew: info.autoRenew,
+    },
+  });
+  logger.info(`[Sub] Google webhook applied — couple ${existing.coupleId}, tier ${tier}, status ${status}`);
+};
+
+/** Force-expire a subscription by purchase token (refund / chargeback fallback). */
+export const expireGoogleToken = async (purchaseToken: string): Promise<void> => {
+  const existing = await prisma.subscription.findFirst({ where: { purchaseToken } });
+  if (!existing) return;
+  await prisma.subscription.update({
+    where: { id: existing.id },
+    data: { status: 'CANCELLED', autoRenew: false },
+  });
+  logger.info(`[Sub] Google purchase voided — couple ${existing.coupleId} set CANCELLED`);
 };
 
 export { TIER_LIMITS };

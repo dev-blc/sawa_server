@@ -24,14 +24,15 @@ exports.ACTIVE_STATUSES = ['TRIALING', 'ACTIVE', 'GRACE'];
 /** Is entitlement enforcement turned on? (see env.SUBSCRIPTIONS_ENFORCED) */
 const isEnforced = () => env_1.env.SUBSCRIPTIONS_ENFORCED;
 exports.isEnforced = isEnforced;
-/** Map an Apple product id → our tier. Returns null for unknown products. */
+/** Map an Apple/Google product id → our tier. Returns null for unknown products. */
 const tierForProduct = (productId) => {
     if (!productId)
         return null;
-    if (productId === env_1.env.APPLE_PRODUCT_PRIME)
+    if (productId === env_1.env.APPLE_PRODUCT_PRIME || productId === env_1.env.GOOGLE_PRODUCT_PRIME)
         return 'PRIME';
-    if (productId === env_1.env.APPLE_PRODUCT_PRIME_PLUS)
+    if (productId === env_1.env.APPLE_PRODUCT_PRIME_PLUS || productId === env_1.env.GOOGLE_PRODUCT_PRIME_PLUS) {
         return 'PRIME_PLUS';
+    }
     return null;
 };
 exports.tierForProduct = tierForProduct;

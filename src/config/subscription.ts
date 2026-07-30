@@ -55,11 +55,13 @@ export const ACTIVE_STATUSES: SubStatus[] = ['TRIALING', 'ACTIVE', 'GRACE'];
 /** Is entitlement enforcement turned on? (see env.SUBSCRIPTIONS_ENFORCED) */
 export const isEnforced = (): boolean => env.SUBSCRIPTIONS_ENFORCED;
 
-/** Map an Apple product id → our tier. Returns null for unknown products. */
+/** Map an Apple/Google product id → our tier. Returns null for unknown products. */
 export const tierForProduct = (productId: string | null | undefined): Tier | null => {
   if (!productId) return null;
-  if (productId === env.APPLE_PRODUCT_PRIME) return 'PRIME';
-  if (productId === env.APPLE_PRODUCT_PRIME_PLUS) return 'PRIME_PLUS';
+  if (productId === env.APPLE_PRODUCT_PRIME || productId === env.GOOGLE_PRODUCT_PRIME) return 'PRIME';
+  if (productId === env.APPLE_PRODUCT_PRIME_PLUS || productId === env.GOOGLE_PRODUCT_PRIME_PLUS) {
+    return 'PRIME_PLUS';
+  }
   return null;
 };
 
