@@ -6,8 +6,8 @@ import { env } from './env';
  * Confirmed product rules (client, 2026-07):
  *  - Sawa Prime      ₹499/mo — up to 5 connections, up to 5 group joins,
  *                    CANNOT create groups. A "skip" counts toward the 5 too.
- *  - Sawa Prime Plus ₹799/mo — unlimited group joins, CAN create groups,
- *                    a (higher) capped number of connections.
+ *  - Sawa Prime Plus ₹799/mo — unlimited group joins, unlimited connections,
+ *                    CAN create groups.
  *  - 7-day free trial applies to PRIME only, once per couple. No trial for Plus.
  *  - Entitlement is per COUPLE: either partner's purchase unlocks both.
  */
@@ -37,9 +37,8 @@ export const TIER_LIMITS: Record<Tier, TierLimits> = {
     canCreateGroup: false,
   },
   PRIME_PLUS: {
-    // ⚠️ Prime Plus connection cap — client said "limited" but gave no number.
-    // Placeholder; change here (single source of truth) once confirmed.
-    connections: 25,
+    // Client confirmed (2026-07): Prime Plus = unlimited connections + groups.
+    connections: Number.POSITIVE_INFINITY,
     groups: Number.POSITIVE_INFINITY,
     canCreateGroup: true,
   },

@@ -9,9 +9,8 @@ exports.TIER_LIMITS = {
         canCreateGroup: false,
     },
     PRIME_PLUS: {
-        // ⚠️ Prime Plus connection cap — client said "limited" but gave no number.
-        // Placeholder; change here (single source of truth) once confirmed.
-        connections: 25,
+        // Client confirmed (2026-07): Prime Plus = unlimited connections + groups.
+        connections: Number.POSITIVE_INFINITY,
         groups: Number.POSITIVE_INFINITY,
         canCreateGroup: true,
     },

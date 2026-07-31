@@ -4,8 +4,8 @@
  * Confirmed product rules (client, 2026-07):
  *  - Sawa Prime      ₹499/mo — up to 5 connections, up to 5 group joins,
  *                    CANNOT create groups. A "skip" counts toward the 5 too.
- *  - Sawa Prime Plus ₹799/mo — unlimited group joins, CAN create groups,
- *                    a (higher) capped number of connections.
+ *  - Sawa Prime Plus ₹799/mo — unlimited group joins, unlimited connections,
+ *                    CAN create groups.
  *  - 7-day free trial applies to PRIME only, once per couple. No trial for Plus.
  *  - Entitlement is per COUPLE: either partner's purchase unlocks both.
  */
