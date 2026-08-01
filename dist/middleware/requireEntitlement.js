@@ -3,7 +3,6 @@ Object.defineProperty(exports, "__esModule", { value: true });
 exports.requireEntitlement = void 0;
 const subscription_service_1 = require("../services/subscription.service");
 const subscription_1 = require("../config/subscription");
-const TIER_RANK = { PRIME: 1, PRIME_PLUS: 2 };
 /**
  * Express middleware that enforces subscription entitlement on a gated route.
  *
@@ -33,22 +32,13 @@ const requireEntitlement = (opts = {}) => {
             });
             return;
         }
-        if (opts.minTier && TIER_RANK[ent.tier] < TIER_RANK[opts.minTier]) {
-            res.status(402).json({
-                success: false,
-                error: 'SUBSCRIPTION_REQUIRED',
-                reason: 'TIER_TOO_LOW',
-                tierNeeded: opts.minTier,
-            });
-            return;
-        }
         // Per-action limit checks.
+        // Creating a group needs a PAID plan — the trial can't create groups.
         if (opts.gate === 'createGroup' && !ent.limits.canCreateGroup) {
             res.status(402).json({
                 success: false,
                 error: 'SUBSCRIPTION_REQUIRED',
-                reason: 'TIER_TOO_LOW',
-                tierNeeded: 'PRIME_PLUS',
+                reason: 'PAID_REQUIRED',
             });
             return;
         }

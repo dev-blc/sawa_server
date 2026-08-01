@@ -1,14 +1,14 @@
 import { prisma } from '../lib/prisma';
 import { logger } from '../utils/logger';
 import {
-  TIER_LIMITS,
-  TRIAL_TIER,
   TRIAL_DAYS,
   ACTIVE_STATUSES,
   isEnforced,
   tierForProduct,
-  limitsForTier,
+  planForProduct,
+  limitsForState,
   type Tier,
+  type Plan,
   type SubStatus,
   type TierLimits,
 } from '../config/subscription';
@@ -18,6 +18,8 @@ import type { GoogleSubInfo } from './googleplay.service';
 export interface Entitlement {
   state: SubStatus;
   tier: Tier | null;
+  /** Billing period the couple is on (null during trial / when inactive). */
+  plan: Plan | null;
   active: boolean;
   limits: TierLimits | null;
   trialUsed: boolean;
@@ -48,6 +50,7 @@ export const getEntitlement = async (coupleId: string): Promise<Entitlement> => 
     return {
       state: 'NONE',
       tier: null,
+      plan: null,
       active: false,
       limits: null,
       trialUsed: false,
@@ -68,13 +71,18 @@ export const getEntitlement = async (coupleId: string): Promise<Entitlement> => 
   }
 
   const active = ACTIVE_STATUSES.includes(state);
-  const tier = active ? (sub.tier as Tier) : null;
+  const tier: Tier | null = active ? 'PRIME' : null;
+  // Trial has reduced limits (5/5/no-create); paid Prime is unlimited + create.
+  const limits = limitsForState(state);
+  // Plan only applies to a paid subscription (null during the trial).
+  const plan = state === 'ACTIVE' || state === 'GRACE' ? planForProduct(sub.productId) : null;
 
   return {
     state,
     tier,
+    plan,
     active,
-    limits: tier ? jsonLimits(limitsForTier(tier)) : null,
+    limits: limits ? jsonLimits(limits) : null,
     trialUsed: sub.trialUsed,
     trialEndsAt: sub.trialEndsAt?.toISOString() ?? null,
     currentPeriodEnd: sub.currentPeriodEnd?.toISOString() ?? null,
@@ -112,14 +120,14 @@ export const startTrial = async (
     where: { coupleId },
     create: {
       coupleId,
-      tier: TRIAL_TIER,
+      tier: 'PRIME',
       status: 'TRIALING',
       trialUsed: true,
       trialStartedAt: now,
       trialEndsAt,
     },
     update: {
-      tier: TRIAL_TIER,
+      tier: 'PRIME',
       status: 'TRIALING',
       trialUsed: true,
       trialStartedAt: now,
@@ -327,5 +335,3 @@ export const expireGoogleToken = async (purchaseToken: string): Promise<void> =>
   });
   logger.info(`[Sub] Google purchase voided — couple ${existing.coupleId} set CANCELLED`);
 };
-
-export { TIER_LIMITS };

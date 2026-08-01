@@ -16,11 +16,11 @@ export declare const env: {
     SUBSCRIPTIONS_ENFORCED: boolean;
     APPLE_BUNDLE_ID: string;
     APPLE_ENVIRONMENT: "Sandbox" | "Production";
-    APPLE_PRODUCT_PRIME: string;
-    APPLE_PRODUCT_PRIME_PLUS: string;
+    APPLE_PRODUCT_PRIME_MONTHLY: string;
+    APPLE_PRODUCT_PRIME_YEARLY: string;
     GOOGLE_PLAY_PACKAGE_NAME: string;
-    GOOGLE_PRODUCT_PRIME: string;
-    GOOGLE_PRODUCT_PRIME_PLUS: string;
+    GOOGLE_PRODUCT_PRIME_MONTHLY: string;
+    GOOGLE_PRODUCT_PRIME_YEARLY: string;
     REDIS_URL?: string | undefined;
     CLOUDINARY_CLOUD_NAME?: string | undefined;
     CLOUDINARY_API_KEY?: string | undefined;

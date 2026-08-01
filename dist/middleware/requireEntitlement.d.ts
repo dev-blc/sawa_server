@@ -1,11 +1,8 @@
 import { Request, Response, NextFunction } from 'express';
-import { type Tier } from '../config/subscription';
 type Gate = 'connection' | 'joinGroup' | 'createGroup' | 'chat' | 'discovery';
 interface Options {
     /** The action being gated — drives limit checks. */
     gate?: Gate;
-    /** Minimum tier required (e.g. 'PRIME_PLUS' for creating a group). */
-    minTier?: Tier;
 }
 /**
  * Express middleware that enforces subscription entitlement on a gated route.

@@ -1,15 +1,19 @@
 /**
- * Subscription tiers, limits and store-product mapping.
+ * Subscription tier, billing plans, limits and store-product mapping.
  *
- * Confirmed product rules (client, 2026-07):
- *  - Sawa Prime      ₹499/mo — up to 5 connections, up to 5 group joins,
- *                    CANNOT create groups. A "skip" counts toward the 5 too.
- *  - Sawa Prime Plus ₹799/mo — unlimited group joins, unlimited connections,
- *                    CAN create groups.
- *  - 7-day free trial applies to PRIME only, once per couple. No trial for Plus.
+ * Confirmed product rules (client, 2026-08):
+ *  - ONE tier: **Sawa Prime**. Billed either **monthly ₹699** or **yearly ₹7999**
+ *    (same access, only the billing period differs).
+ *  - 7-day free trial, once per couple, no card required (server-granted). During
+ *    the trial the couple gets a TASTE: 5 swipes + 5 groups, no group creation.
+ *  - After paying (monthly or yearly), Sawa Prime is FULL access: unlimited
+ *    swipes, unlimited group joins, and can create their own groups.
  *  - Entitlement is per COUPLE: either partner's purchase unlocks both.
  */
-export type Tier = 'PRIME' | 'PRIME_PLUS';
+/** The app has a single paid tier. */
+export type Tier = 'PRIME';
+/** Billing period the couple chose. */
+export type Plan = 'monthly' | 'yearly';
 export type SubStatus = 'NONE' | 'TRIALING' | 'ACTIVE' | 'GRACE' | 'EXPIRED' | 'CANCELLED';
 export interface TierLimits {
     /** Max profiles a couple may act on in Discovery (skip OR connect both count). */
@@ -19,15 +23,19 @@ export interface TierLimits {
     /** May the couple create their own group? */
     canCreateGroup: boolean;
 }
-export declare const TIER_LIMITS: Record<Tier, TierLimits>;
-/** During the free trial the couple gets PRIME-level access. */
-export declare const TRIAL_TIER: Tier;
+/** Paid Sawa Prime (monthly or yearly) — full access. */
+export declare const PAID_LIMITS: TierLimits;
+/** The 7-day free trial — a taste: 5 swipes, 5 group joins, no group creation. */
+export declare const TRIAL_LIMITS: TierLimits;
 export declare const TRIAL_DAYS = 7;
 /** Statuses that grant access to gated features. */
 export declare const ACTIVE_STATUSES: SubStatus[];
 /** Is entitlement enforcement turned on? (see env.SUBSCRIPTIONS_ENFORCED) */
 export declare const isEnforced: () => boolean;
-/** Map an Apple/Google product id → our tier. Returns null for unknown products. */
+/** Map an Apple/Google product id → our tier. Monthly & yearly both = PRIME. */
 export declare const tierForProduct: (productId: string | null | undefined) => Tier | null;
-export declare const limitsForTier: (tier: Tier) => TierLimits;
+/** Map a product id → its billing plan (monthly/yearly). */
+export declare const planForProduct: (productId: string | null | undefined) => Plan | null;
+/** Limits for a given live state — the trial gets a reduced set. */
+export declare const limitsForState: (state: SubStatus) => TierLimits | null;
 //# sourceMappingURL=subscription.d.ts.map

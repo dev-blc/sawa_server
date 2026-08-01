@@ -70,8 +70,9 @@ const envSchema = zod_1.z.object({
     // 'Sandbox' | 'Production'. Sandbox for TestFlight/dev, Production for live.
     APPLE_ENVIRONMENT: zod_1.z.enum(['Sandbox', 'Production']).default('Sandbox'),
     // Store product identifiers. Must match what you create in App Store Connect.
-    APPLE_PRODUCT_PRIME: zod_1.z.string().default('sawa_prime_monthly'),
-    APPLE_PRODUCT_PRIME_PLUS: zod_1.z.string().default('sawa_prime_plus_monthly'),
+    // One tier (Sawa Prime), two billing periods.
+    APPLE_PRODUCT_PRIME_MONTHLY: zod_1.z.string().default('sawa_prime_monthly'),
+    APPLE_PRODUCT_PRIME_YEARLY: zod_1.z.string().default('sawa_prime_yearly'),
     // ─── Google Play Billing ─────────────────────────────────────────────────────
     // Android applicationId (Play Console package name).
     GOOGLE_PLAY_PACKAGE_NAME: zod_1.z.string().default('com.sawa.couplesapp'),
@@ -80,8 +81,9 @@ const envSchema = zod_1.z.object({
     // Google verification no-ops until present. (Real newlines or \n both handled.)
     GOOGLE_PLAY_SERVICE_ACCOUNT_JSON: zod_1.z.string().optional(),
     // Play subscription (base plan / product) ids. Must match Play Console.
-    GOOGLE_PRODUCT_PRIME: zod_1.z.string().default('sawa_prime_monthly'),
-    GOOGLE_PRODUCT_PRIME_PLUS: zod_1.z.string().default('sawa_prime_plus_monthly'),
+    // One tier (Sawa Prime), two billing periods.
+    GOOGLE_PRODUCT_PRIME_MONTHLY: zod_1.z.string().default('sawa_prime_monthly'),
+    GOOGLE_PRODUCT_PRIME_YEARLY: zod_1.z.string().default('sawa_prime_yearly'),
     // Optional shared secret appended as ?secret=... to the RTDN Pub/Sub push URL,
     // so only Google's configured push can reach the webhook. (Defense in depth —
     // authenticity is already guaranteed by re-fetching the purchase from Google.)

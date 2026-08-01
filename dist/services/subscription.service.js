@@ -1,10 +1,9 @@
 "use strict";
 Object.defineProperty(exports, "__esModule", { value: true });
-exports.TIER_LIMITS = exports.expireGoogleToken = exports.applyGooglePurchaseByToken = exports.applyGooglePurchase = exports.isGooglePendingOrUnknown = exports.applyAppleTransactionByOriginalId = exports.applyAppleTransaction = exports.startTrial = exports.groupsJoined = exports.connectionsUsed = exports.getEntitlement = void 0;
+exports.expireGoogleToken = exports.applyGooglePurchaseByToken = exports.applyGooglePurchase = exports.isGooglePendingOrUnknown = exports.applyAppleTransactionByOriginalId = exports.applyAppleTransaction = exports.startTrial = exports.groupsJoined = exports.connectionsUsed = exports.getEntitlement = void 0;
 const prisma_1 = require("../lib/prisma");
 const logger_1 = require("../utils/logger");
 const subscription_1 = require("../config/subscription");
-Object.defineProperty(exports, "TIER_LIMITS", { enumerable: true, get: function () { return subscription_1.TIER_LIMITS; } });
 const INFINITY_SENTINEL = 1000000; // JSON-safe stand-in for "unlimited"
 const jsonLimits = (l) => ({
     ...l,
@@ -23,6 +22,7 @@ const getEntitlement = async (coupleId) => {
         return {
             state: 'NONE',
             tier: null,
+            plan: null,
             active: false,
             limits: null,
             trialUsed: false,
@@ -40,12 +40,17 @@ const getEntitlement = async (coupleId) => {
         state = 'EXPIRED';
     }
     const active = subscription_1.ACTIVE_STATUSES.includes(state);
-    const tier = active ? sub.tier : null;
+    const tier = active ? 'PRIME' : null;
+    // Trial has reduced limits (5/5/no-create); paid Prime is unlimited + create.
+    const limits = (0, subscription_1.limitsForState)(state);
+    // Plan only applies to a paid subscription (null during the trial).
+    const plan = state === 'ACTIVE' || state === 'GRACE' ? (0, subscription_1.planForProduct)(sub.productId) : null;
     return {
         state,
         tier,
+        plan,
         active,
-        limits: tier ? jsonLimits((0, subscription_1.limitsForTier)(tier)) : null,
+        limits: limits ? jsonLimits(limits) : null,
         trialUsed: sub.trialUsed,
         trialEndsAt: sub.trialEndsAt?.toISOString() ?? null,
         currentPeriodEnd: sub.currentPeriodEnd?.toISOString() ?? null,
@@ -77,14 +82,14 @@ const startTrial = async (coupleId) => {
         where: { coupleId },
         create: {
             coupleId,
-            tier: subscription_1.TRIAL_TIER,
+            tier: 'PRIME',
             status: 'TRIALING',
             trialUsed: true,
             trialStartedAt: now,
             trialEndsAt,
         },
         update: {
-            tier: subscription_1.TRIAL_TIER,
+            tier: 'PRIME',
             status: 'TRIALING',
             trialUsed: true,
             trialStartedAt: now,

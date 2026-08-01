@@ -11,8 +11,8 @@ router.use(authenticate_1.authenticate);
 router.get('/', (0, asyncHandler_1.asyncHandler)(community_controller_1.getAllCommunities));
 // GET /api/v1/communities/mine
 router.get('/mine', (0, asyncHandler_1.asyncHandler)(community_controller_1.getMyCommunities));
-// POST /api/v1/communities — creating a group requires Prime Plus
-router.post('/', community_controller_1.validateCreateCommunity, (0, requireEntitlement_1.requireEntitlement)({ gate: 'createGroup', minTier: 'PRIME_PLUS' }), (0, asyncHandler_1.asyncHandler)(community_controller_1.createCommunity));
+// POST /api/v1/communities — creating a group requires a PAID plan (not trial)
+router.post('/', community_controller_1.validateCreateCommunity, (0, requireEntitlement_1.requireEntitlement)({ gate: 'createGroup' }), (0, asyncHandler_1.asyncHandler)(community_controller_1.createCommunity));
 // GET /api/v1/communities/:id
 router.get('/:id', (0, asyncHandler_1.asyncHandler)(community_controller_1.getCommunityDetail));
 // POST /api/v1/communities/:id/join — counts toward the group-join quota

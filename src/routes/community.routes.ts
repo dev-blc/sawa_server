@@ -28,11 +28,11 @@ router.get('/', asyncHandler(getAllCommunities));
 // GET /api/v1/communities/mine
 router.get('/mine', asyncHandler(getMyCommunities));
 
-// POST /api/v1/communities — creating a group requires Prime Plus
+// POST /api/v1/communities — creating a group requires a PAID plan (not trial)
 router.post(
   '/',
   validateCreateCommunity,
-  requireEntitlement({ gate: 'createGroup', minTier: 'PRIME_PLUS' }),
+  requireEntitlement({ gate: 'createGroup' }),
   asyncHandler(createCommunity),
 );
 

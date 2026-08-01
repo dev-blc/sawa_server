@@ -1,9 +1,11 @@
-import { TIER_LIMITS, type Tier, type SubStatus, type TierLimits } from '../config/subscription';
+import { type Tier, type Plan, type SubStatus, type TierLimits } from '../config/subscription';
 import type { JWSTransactionDecodedPayload } from '@apple/app-store-server-library';
 import type { GoogleSubInfo } from './googleplay.service';
 export interface Entitlement {
     state: SubStatus;
     tier: Tier | null;
+    /** Billing period the couple is on (null during trial / when inactive). */
+    plan: Plan | null;
     active: boolean;
     limits: TierLimits | null;
     trialUsed: boolean;
@@ -59,5 +61,4 @@ export declare const applyGooglePurchase: (coupleId: string, purchaseToken: stri
 export declare const applyGooglePurchaseByToken: (purchaseToken: string, info: GoogleSubInfo) => Promise<void>;
 /** Force-expire a subscription by purchase token (refund / chargeback fallback). */
 export declare const expireGoogleToken: (purchaseToken: string) => Promise<void>;
-export { TIER_LIMITS };
 //# sourceMappingURL=subscription.service.d.ts.map

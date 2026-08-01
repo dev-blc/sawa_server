@@ -4,18 +4,14 @@ import {
   connectionsUsed,
   groupsJoined,
 } from '../services/subscription.service';
-import { isEnforced, type Tier } from '../config/subscription';
+import { isEnforced } from '../config/subscription';
 
 type Gate = 'connection' | 'joinGroup' | 'createGroup' | 'chat' | 'discovery';
 
 interface Options {
   /** The action being gated — drives limit checks. */
   gate?: Gate;
-  /** Minimum tier required (e.g. 'PRIME_PLUS' for creating a group). */
-  minTier?: Tier;
 }
-
-const TIER_RANK: Record<Tier, number> = { PRIME: 1, PRIME_PLUS: 2 };
 
 /**
  * Express middleware that enforces subscription entitlement on a gated route.
@@ -49,23 +45,13 @@ export const requireEntitlement = (opts: Options = {}) => {
       return;
     }
 
-    if (opts.minTier && TIER_RANK[ent.tier] < TIER_RANK[opts.minTier]) {
-      res.status(402).json({
-        success: false,
-        error: 'SUBSCRIPTION_REQUIRED',
-        reason: 'TIER_TOO_LOW',
-        tierNeeded: opts.minTier,
-      });
-      return;
-    }
-
     // Per-action limit checks.
+    // Creating a group needs a PAID plan — the trial can't create groups.
     if (opts.gate === 'createGroup' && !ent.limits.canCreateGroup) {
       res.status(402).json({
         success: false,
         error: 'SUBSCRIPTION_REQUIRED',
-        reason: 'TIER_TOO_LOW',
-        tierNeeded: 'PRIME_PLUS',
+        reason: 'PAID_REQUIRED',
       });
       return;
     }
