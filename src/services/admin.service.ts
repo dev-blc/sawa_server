@@ -104,7 +104,6 @@ export class AdminService {
 
     const users = await prisma.user.findMany({
       orderBy: { createdAt: 'desc' },
-      take: 200,
       include: { 
         coupleProfile: {
           include: { answers: true }
@@ -112,17 +111,23 @@ export class AdminService {
       },
     });
 
-    return users.map((u, idx) => {
+    const mapped = users.map((u, idx) => {
       // Status hierarchy: banned > unverified > inactive (no recent activity) > active.
       let status: 'banned' | 'inactive' | 'active' = 'active';
       if (u.coupleProfile?.bannedAt) status = 'banned';
       else if (!u.isPhoneVerified) status = 'inactive';
       else if (isInactive(u.lastActiveAt)) status = 'inactive';
 
+      // Users who never finished onboarding have no `name`; the only identifying
+      // data captured at signup is their phone number, so fall back to that
+      // instead of a meaningless "Unknown".
+      const realName = (u.name ?? '').trim();
+
       return {
+        _hasName: realName !== '',
         _id: u.id,
         id: u.id,
-        name: u.name || 'Unknown',
+        name: realName || u.phone || 'Unknown',
         phone: u.phone,
         city: (u.coupleProfile?.locationCity && u.coupleProfile?.locationCity !== 'Unknown')
           ? u.coupleProfile.locationCity
@@ -145,6 +150,11 @@ export class AdminService {
         } : null
       };
     });
+
+    // Named users first (recency preserved within each group via stable sort),
+    // phone-only users at the bottom. Strip the helper flag.
+    mapped.sort((a, b) => Number(b._hasName) - Number(a._hasName));
+    return mapped.map(({ _hasName, ...rest }) => rest);
   }
 
   async getCouples(token?: string) {
