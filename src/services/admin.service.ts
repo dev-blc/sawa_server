@@ -179,10 +179,9 @@ export class AdminService {
         users: true,
         answers: true,
       },
-      take: 100,
     });
 
-    return couples.map((c, idx) => {
+    const mapped = couples.map((c, idx) => {
       // Prefer the real membership (users linked by coupleId); fall back to the
       // legacy partner1/partner2 pointers only if the membership list is empty.
       const memberUsers = (c.users && c.users.length > 0
@@ -212,12 +211,31 @@ export class AdminService {
         c.profileName && c.profileName.trim() && c.profileName.trim() !== 'Sawa Couple'
           ? c.profileName.trim()
           : '';
+      // Couples that signed up but never finished onboarding have no `User.name`,
+      // no partner1/2 pointers and the default "Sawa Couple" profileName — the
+      // only identifying data they carry is the phone number captured at signup.
+      // Use that as a last-resort label so the dashboard stays useful instead of
+      // collapsing every incomplete couple into "Anonymous Pair".
+      const partnerPhones = memberUsers
+        .map(u => (u?.phone ?? '').trim())
+        .filter(Boolean);
       const pairName =
         partnerNames.length >= 2
           ? partnerNames.slice(0, 2).join(' & ')
-          : customProfileName || partnerNames[0] || 'Anonymous Pair';
+          : customProfileName ||
+            partnerNames[0] ||
+            (partnerPhones.length >= 2
+              ? partnerPhones.slice(0, 2).join(' & ')
+              : partnerPhones[0]) ||
+            'Anonymous Pair';
+
+      // Couples that have entered a real name (either partner names or a
+      // customized profileName) are surfaced at the top of the dashboard;
+      // nameless signups (phone-only) sink to the bottom.
+      const hasName = partnerNames.length > 0 || customProfileName !== '';
 
       return {
+        _hasName: hasName,
         _id: c.coupleId,
         id: c.coupleId,
         pairName,
@@ -244,6 +262,11 @@ export class AdminService {
         }))
       };
     });
+
+    // Named couples first (kept in recency order within each group via the
+    // stable sort), phone-only couples at the bottom. Strip the helper flag.
+    mapped.sort((a, b) => Number(b._hasName) - Number(a._hasName));
+    return mapped.map(({ _hasName, ...rest }) => rest);
   }
 
   /** Fetch the raw stored image (base64 data URL or http URL) for lazy serving. */
