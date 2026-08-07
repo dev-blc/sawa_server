@@ -706,9 +706,14 @@ router.get('/game/active', authenticate, async (req: Request, res: Response): Pr
       res.json({ success: true, data: { session: null } });
       return;
     }
-    // Game type is encoded in the gameId prefix. Dots & Boxes stores a
-    // serialized state string (contains '|'); Tic-Tac-Toe stores a 9-char board.
-    const gameType = st.gameSessionId.startsWith('dab_') ? 'dab' : 'ttt';
+    // Game type is encoded in the gameId prefix. Dots & Boxes and Memory Match
+    // store a serialized state string (contains '|'); Tic-Tac-Toe stores a
+    // 9-char board.
+    const gameType = st.gameSessionId.startsWith('dab_')
+      ? 'dab'
+      : st.gameSessionId.startsWith('mem_')
+      ? 'mem'
+      : 'ttt';
     const board =
       gameType === 'ttt'
         ? (st.gameBoard || '_________')
@@ -724,7 +729,7 @@ router.get('/game/active', authenticate, async (req: Request, res: Response): Pr
           status: st.gameSessionStatus,
           challengerId: st.gameChallengerId,
           board,
-          state: gameType === 'dab' ? (st.gameBoard || null) : null,
+          state: gameType === 'ttt' ? null : (st.gameBoard || null),
           turn: st.gameTurn || 'X',
         },
       },

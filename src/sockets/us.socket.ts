@@ -19,20 +19,34 @@ const TTT_EMPTY_BOARD = '_________';
  */
 const DAB_EMPTY_BOARD = `${'0'.repeat(12)}|${'0'.repeat(12)}|${'-'.repeat(9)}|X`;
 
+/**
+ * A fallback Memory Match board (client normally supplies the shuffled layout in
+ * the challenge `state`). Format mirrors SAWA/src/Utils/memoryMatch.ts:
+ * "<16 emoji ids>|<16 owners>|<flipped>|<turn>".
+ */
+const MEM_EMPTY_BOARD = `0123456701234567|${'-'.repeat(16)}||X`;
+
 /** Supported couple games. The game type is encoded in the gameId prefix. */
-type GameType = 'ttt' | 'dab';
+type GameType = 'ttt' | 'dab' | 'mem';
 
 /** Derive the game type from a gameId (client prefixes ids with the type). */
 const gameTypeOf = (gameId: string): GameType =>
-  typeof gameId === 'string' && gameId.startsWith('dab_') ? 'dab' : 'ttt';
+  typeof gameId === 'string' && gameId.startsWith('dab_')
+    ? 'dab'
+    : typeof gameId === 'string' && gameId.startsWith('mem_')
+    ? 'mem'
+    : 'ttt';
 
 /** The starting board string for a given game type. */
 const emptyBoardFor = (type: GameType): string =>
-  type === 'dab' ? DAB_EMPTY_BOARD : TTT_EMPTY_BOARD;
+  type === 'dab' ? DAB_EMPTY_BOARD : type === 'mem' ? MEM_EMPTY_BOARD : TTT_EMPTY_BOARD;
+
+/** Whether the client owns the serialized board (state-based games). */
+const isStateGame = (type: GameType): boolean => type === 'dab' || type === 'mem';
 
 /** Human-readable game name for notifications. */
 const gameNameFor = (type: GameType): string =>
-  type === 'dab' ? 'Dots & Boxes' : 'Tic-Tac-Toe';
+  type === 'dab' ? 'Dots & Boxes' : type === 'mem' ? 'Memory Match' : 'Tic-Tac-Toe';
 
 /**
  * Clear the couple's persisted Tic-Tac-Toe session (challenge withdrawn, quit,
@@ -490,12 +504,17 @@ export const registerUsHandlers = (io: SocketIOServer, socket: Socket): void => 
   // from their notification tray.
 
   // ── us:game:challenge — invite the partner to a match ──────────────────
-  socket.on('us:game:challenge', async (payload: { gameId: string; gameType?: GameType }) => {
+  socket.on('us:game:challenge', async (payload: { gameId: string; gameType?: GameType; state?: string }) => {
     if (!userId || !coupleId || !payload?.gameId) return;
     const senderName = firstName(userName || 'Your partner');
     const gameType: GameType = payload.gameType || gameTypeOf(payload.gameId);
     const gameName = gameNameFor(gameType);
-    const emptyBoard = emptyBoardFor(gameType);
+    // For state-based games (Dots & Boxes, Memory Match) the challenger supplies
+    // the initial board so both devices share it (memory shuffle must match).
+    const emptyBoard =
+      isStateGame(gameType) && typeof payload.state === 'string' && payload.state.includes('|')
+        ? payload.state
+        : emptyBoardFor(gameType);
     logger.info(`[UsSocket] game challenge ${payload.gameId} (${gameType}) from ${userId} in couple ${coupleId}`);
 
     // 0. Persist a shared PENDING session so both partners can (re)join the same
@@ -526,10 +545,12 @@ export const registerUsHandlers = (io: SocketIOServer, socket: Socket): void => 
       logger.warn(`[UsSocket] persist challenge failed: ${err.message}`);
     }
 
-    // 1. Instant relay so an online partner sees the invite immediately.
+    // 1. Instant relay so an online partner sees the invite immediately. The
+    //    board `state` is included so state-based games render the shared layout.
     io.to(`couple:${coupleId}`).except(socket.id).emit('us:game:challenge', {
       gameId: payload.gameId,
       gameType,
+      state: isStateGame(gameType) ? emptyBoard : undefined,
       from: senderName,
       fromUserId: userId,
       at: new Date().toISOString(),
@@ -568,18 +589,24 @@ export const registerUsHandlers = (io: SocketIOServer, socket: Socket): void => 
   // ── us:game:accept — partner accepts; the whole room gets the start signal
   socket.on('us:game:accept', async (payload: { gameId: string }) => {
     if (!userId || !coupleId || !payload?.gameId) return;
+    const gameType = gameTypeOf(payload.gameId);
     // Flip the shared session to ACTIVE so a rejoining partner resumes the match.
+    let board: string | null = null;
     try {
       await prisma.coupleUsState.updateMany({
         where: { coupleId, gameSessionId: payload.gameId },
         data: { gameSessionStatus: 'active', gameSessionAt: new Date() },
       });
+      const st = await prisma.coupleUsState.findUnique({ where: { coupleId } });
+      if (st?.gameSessionId === payload.gameId) board = st.gameBoard || null;
     } catch (err: any) {
       logger.warn(`[UsSocket] persist accept failed: ${err.message}`);
     }
     io.to(`couple:${coupleId}`).emit('us:game:start', {
       gameId: payload.gameId,
-      gameType: gameTypeOf(payload.gameId),
+      gameType,
+      // Share the stored board so state-based games start from the same layout.
+      state: isStateGame(gameType) ? board ?? undefined : undefined,
       accepterUserId: userId,
       accepterName: firstName(userName || ''),
       at: new Date().toISOString(),
@@ -620,8 +647,9 @@ export const registerUsHandlers = (io: SocketIOServer, socket: Socket): void => 
         const st = await prisma.coupleUsState.findUnique({ where: { coupleId } });
         if (st?.gameSessionId !== payload.gameId) return;
 
-        if (gameType === 'dab') {
-          // Client is authoritative for Dots & Boxes — persist its serialized state.
+        if (isStateGame(gameType)) {
+          // Client is authoritative for Dots & Boxes / Memory Match — persist the
+          // serialized state verbatim so both partners can resume.
           if (typeof payload.state === 'string' && payload.state.includes('|')) {
             await prisma.coupleUsState.update({
               where: { coupleId },
