@@ -1,5 +1,6 @@
 import { Router, Request, Response } from 'express';
 import { authenticate } from '../middleware/authenticate';
+import { adminAuth } from '../middleware/adminAuth';
 import { cacheGet, cacheSet, cacheInvalidate, invalidateNotifUnreadCount } from '../lib/cache';
 import { prisma } from '../lib/prisma';
 import { logger } from '../utils/logger';
@@ -247,8 +248,8 @@ router.delete('/my-feeling', authenticate, async (req: Request, res: Response): 
   try {
     await cacheInvalidate(`us:feeling:${coupleId}:${myUserId}`);
     res.json({ success: true });
-  } catch (err: any) {
-    res.status(500).json({ success: false, error: err.message });
+  } catch {
+    res.status(500).json({ success: false, error: 'Failed to clear feeling' });
   }
 });
 
@@ -705,17 +706,25 @@ router.get('/game/active', authenticate, async (req: Request, res: Response): Pr
       res.json({ success: true, data: { session: null } });
       return;
     }
-    const board = (st.gameBoard || '_________')
-      .split('')
-      .map((c) => (c === 'X' ? 'X' : c === 'O' ? 'O' : null));
+    // Game type is encoded in the gameId prefix. Dots & Boxes stores a
+    // serialized state string (contains '|'); Tic-Tac-Toe stores a 9-char board.
+    const gameType = st.gameSessionId.startsWith('dab_') ? 'dab' : 'ttt';
+    const board =
+      gameType === 'ttt'
+        ? (st.gameBoard || '_________')
+            .split('')
+            .map((c) => (c === 'X' ? 'X' : c === 'O' ? 'O' : null))
+        : null;
     res.json({
       success: true,
       data: {
         session: {
           gameId: st.gameSessionId,
+          gameType,
           status: st.gameSessionStatus,
           challengerId: st.gameChallengerId,
           board,
+          state: gameType === 'dab' ? (st.gameBoard || null) : null,
           turn: st.gameTurn || 'X',
         },
       },
@@ -729,17 +738,17 @@ router.get('/game/active', authenticate, async (req: Request, res: Response): Pr
 /**
  * POST /api/v1/us/admin-clear-feeling
  * Admin-only: clears any user's feeling by coupleId + userId.
- * Requires ?secret=SAWA_ADMIN_2026
+ * Protected by the admin JWT (adminAuth) — the previous hardcoded query-string
+ * secret was removed as it was a trivial, unauthenticated backdoor.
  */
-router.post('/admin-clear-feeling', async (req: Request, res: Response): Promise<void> => {
-  if (req.query.secret !== 'SAWA_ADMIN_2026') { res.status(403).json({ success: false }); return; }
+router.post('/admin-clear-feeling', adminAuth, async (req: Request, res: Response): Promise<void> => {
   const { coupleId, userId } = req.body as { coupleId?: string; userId?: string };
   if (!coupleId || !userId) { res.status(400).json({ success: false, error: 'coupleId and userId required' }); return; }
   try {
     await cacheInvalidate(`us:feeling:${coupleId}:${userId}`);
     res.json({ success: true, deleted: `us:feeling:${coupleId}:${userId}` });
-  } catch (err: any) {
-    res.status(500).json({ success: false, error: err.message });
+  } catch {
+    res.status(500).json({ success: false, error: 'Failed to clear feeling' });
   }
 });
 
