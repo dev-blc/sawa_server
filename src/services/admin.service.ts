@@ -172,26 +172,55 @@ export class AdminService {
       include: { 
         partner1: true,
         partner2: true,
+        // The actual partners are the Users linked by coupleId. partner1Id /
+        // partner2Id are legacy pointers that are frequently unset, so relying on
+        // them alone made most couples show no partners (and fall back to the
+        // "Sawa Couple" placeholder name).
+        users: true,
         answers: true,
       },
       take: 100,
     });
 
     return couples.map((c, idx) => {
-      // Couple is "inactive" only if BOTH partners are inactive.
+      // Prefer the real membership (users linked by coupleId); fall back to the
+      // legacy partner1/partner2 pointers only if the membership list is empty.
+      const memberUsers = (c.users && c.users.length > 0
+        ? c.users
+        : [c.partner1, c.partner2].filter(Boolean) as typeof c.users);
+
+      // Couple is "inactive" only if it has members and ALL of them are inactive.
       const bothInactive =
-        isInactive(c.partner1?.lastActiveAt ?? null) &&
-        isInactive(c.partner2?.lastActiveAt ?? null);
+        memberUsers.length > 0 &&
+        memberUsers.every(u => isInactive(u?.lastActiveAt ?? null));
 
       let status: 'banned' | 'inactive' | 'engaged' | 'new' = 'new';
       if (c.bannedAt) status = 'banned';
       else if (c.isProfileComplete && bothInactive) status = 'inactive';
       else if (c.isProfileComplete) status = 'engaged';
 
+      // The couple's display name. `profileName` starts life as the generic
+      // "Sawa Couple" placeholder (set at registration) and is only replaced
+      // once a couple customizes it, so on its own it makes every un-customized
+      // couple read as "Sawa Couple" in the dashboard. Prefer the real partner
+      // names ("Alice & Bob"), then a genuinely customized profileName, and only
+      // fall back to a generic label when we have nothing else.
+      const partnerNames = memberUsers
+        .map(u => (u?.name ?? '').trim())
+        .filter(Boolean);
+      const customProfileName =
+        c.profileName && c.profileName.trim() && c.profileName.trim() !== 'Sawa Couple'
+          ? c.profileName.trim()
+          : '';
+      const pairName =
+        partnerNames.length >= 2
+          ? partnerNames.slice(0, 2).join(' & ')
+          : customProfileName || partnerNames[0] || 'Anonymous Pair';
+
       return {
         _id: c.coupleId,
         id: c.coupleId,
-        pairName: c.profileName || 'Anonymous Pair',
+        pairName,
         city: (c.locationCity && c.locationCity !== 'Unknown')
           ? c.locationCity
           : dummyCities[idx % dummyCities.length],
@@ -203,20 +232,12 @@ export class AdminService {
         banReason: c.banReason,
         bio: c.bio,
         primaryPhoto: imageRef('couple', c.coupleId, c.primaryPhoto, token),
-        partners: [
-          c.partner1 ? {
-            id: c.partner1.id,
-            name: c.partner1.name,
-            phone: c.partner1.phone,
-            lastActiveAt: c.partner1.lastActiveAt,
-          } : null,
-          c.partner2 ? {
-            id: c.partner2.id,
-            name: c.partner2.name,
-            phone: c.partner2.phone,
-            lastActiveAt: c.partner2.lastActiveAt,
-          } : null,
-        ].filter(Boolean),
+        partners: memberUsers.map(u => ({
+          id: u.id,
+          name: u.name,
+          phone: u.phone,
+          lastActiveAt: u.lastActiveAt,
+        })),
         answers: c.answers.map(a => ({
           question: questionMap[a.questionId] || a.questionId,
           options: a.selectedOptionIds.map(oid => optionLabelMap[oid] || oid)
