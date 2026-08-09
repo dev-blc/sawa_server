@@ -387,6 +387,22 @@ const T: Record<string, Entry> = {
       mr: 'कदाचित पुढच्या वेळी 🙏',
     },
   },
+  // Sent to BOTH partners the day before a confirmed date on the shared calendar.
+  // {timeText} is a pre-built clause (" · 7:00 PM") or empty — kept locale-neutral.
+  'us.date.reminder': {
+    title: {
+      en: '📅 You both have a date tomorrow',
+      hi: '📅 कल आप दोनों की एक डेट है',
+      kn: '📅 ನಾಳೆ ನಿಮ್ಮಿಬ್ಬರಿಗೆ ಒಂದು ಡೇಟ್ ಇದೆ',
+      mr: '📅 उद्या तुम्हा दोघांची एक डेट आहे',
+    },
+    body: {
+      en: '{activity} is tomorrow{timeText} — get ready together! 💕',
+      hi: '{activity} कल है{timeText} — साथ मिलकर तैयार हो जाइए! 💕',
+      kn: '{activity} ನಾಳೆ ಇದೆ{timeText} — ಒಟ್ಟಿಗೆ ಸಿದ್ಧರಾಗಿ! 💕',
+      mr: '{activity} उद्या आहे{timeText} — एकत्र तयार व्हा! 💕',
+    },
+  },
 
   // ── Us space: mood ───────────────────────────────────────────────────────────
   'us.mood': {
