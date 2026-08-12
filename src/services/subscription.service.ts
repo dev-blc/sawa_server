@@ -1,5 +1,6 @@
 import { prisma } from '../lib/prisma';
 import { logger } from '../utils/logger';
+import { AppError } from '../utils/AppError';
 import {
   TRIAL_DAYS,
   ACTIVE_STATUSES,
@@ -90,9 +91,22 @@ export const getEntitlement = async (coupleId: string): Promise<Entitlement> => 
   };
 };
 
-/** How many Discovery profiles the couple has acted on (skip + connect both count). */
+/** How many Discovery profiles the couple has acted on all-time (skip + connect). */
 export const connectionsUsed = (coupleId: string): Promise<number> =>
   prisma.match.count({ where: { actionById: coupleId } });
+
+/**
+ * How many Discovery profiles the couple has acted on SINCE THE START OF TODAY
+ * (UTC). This is the value the connection quota is enforced against — the free
+ * tier and trial both allow 5 connections PER DAY, not 5 lifetime.
+ */
+export const connectionsUsedToday = (coupleId: string): Promise<number> => {
+  const startOfDay = new Date();
+  startOfDay.setUTCHours(0, 0, 0, 0);
+  return prisma.match.count({
+    where: { actionById: coupleId, createdAt: { gte: startOfDay } },
+  });
+};
 
 /** How many groups the couple has joined. */
 export const groupsJoined = (coupleId: string): Promise<number> =>
@@ -105,35 +119,44 @@ export const groupsJoined = (coupleId: string): Promise<number> =>
 export const startTrial = async (
   coupleId: string,
 ): Promise<{ ok: true; entitlement: Entitlement } | { ok: false; reason: string }> => {
-  const existing = await prisma.subscription.findUnique({ where: { coupleId } });
-  if (existing?.trialUsed) {
-    return { ok: false, reason: 'TRIAL_ALREADY_USED' };
-  }
-  if (existing && ACTIVE_STATUSES.includes(existing.status as SubStatus)) {
-    return { ok: false, reason: 'ALREADY_SUBSCRIBED' };
-  }
-
   const now = new Date();
   const trialEndsAt = new Date(now.getTime() + TRIAL_DAYS * 24 * 60 * 60 * 1000);
 
-  await prisma.subscription.upsert({
-    where: { coupleId },
-    create: {
-      coupleId,
-      tier: 'PRIME',
-      status: 'TRIALING',
-      trialUsed: true,
-      trialStartedAt: now,
-      trialEndsAt,
-    },
-    update: {
-      tier: 'PRIME',
-      status: 'TRIALING',
-      trialUsed: true,
-      trialStartedAt: now,
-      trialEndsAt,
-    },
+  // Re-check + write inside one interactive transaction so two simultaneous
+  // "start trial" taps can't each grant a fresh trial window (check-then-write
+  // race). The unique coupleId still guarantees a single row.
+  const outcome = await prisma.$transaction(async (tx) => {
+    const existing = await tx.subscription.findUnique({ where: { coupleId } });
+    if (existing?.trialUsed) {
+      return { ok: false as const, reason: 'TRIAL_ALREADY_USED' };
+    }
+    if (existing && ACTIVE_STATUSES.includes(existing.status as SubStatus)) {
+      return { ok: false as const, reason: 'ALREADY_SUBSCRIBED' };
+    }
+    await tx.subscription.upsert({
+      where: { coupleId },
+      create: {
+        coupleId,
+        tier: 'PRIME',
+        status: 'TRIALING',
+        trialUsed: true,
+        trialStartedAt: now,
+        trialEndsAt,
+      },
+      update: {
+        tier: 'PRIME',
+        status: 'TRIALING',
+        trialUsed: true,
+        trialStartedAt: now,
+        trialEndsAt,
+      },
+    });
+    return { ok: true as const };
   });
+
+  if (!outcome.ok) {
+    return { ok: false, reason: outcome.reason };
+  }
 
   logger.info(`[Sub] Trial started for couple ${coupleId} (ends ${trialEndsAt.toISOString()})`);
   return { ok: true, entitlement: await getEntitlement(coupleId) };
@@ -259,6 +282,18 @@ export const applyGooglePurchase = async (
   const tier = tierForProduct(info.productId) ?? 'PRIME';
   const status = googleStatus(info);
   const currentPeriodEnd = info.expiryMs ? new Date(info.expiryMs) : null;
+
+  // Receipt-reuse guard: a Google purchaseToken must entitle only ONE couple.
+  // Reject if this token is already linked to a different couple (backed by the
+  // unique index on subscriptions.purchaseToken as a hard constraint).
+  const claimed = await prisma.subscription.findFirst({
+    where: { purchaseToken },
+    select: { coupleId: true },
+  });
+  if (claimed && claimed.coupleId !== coupleId) {
+    logger.warn(`[Sub] Rejected Google purchaseToken reuse — already linked to ${claimed.coupleId}`);
+    throw new AppError('This purchase is already linked to another account.', 409, 'PURCHASE_ALREADY_CLAIMED');
+  }
 
   await prisma.subscription.upsert({
     where: { coupleId },

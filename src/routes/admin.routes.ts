@@ -2,12 +2,13 @@ import { Router } from 'express';
 import { AdminController } from '../controllers/admin.controller';
 
 import { adminAuth } from '../middleware/adminAuth';
+import { authRateLimiter } from '../middleware/rateLimiter';
 
 const router = Router();
 const controller = new AdminController();
 
-// Public admin login
-router.post('/login', controller.adminLogin);
+// Public admin login — rate-limited to throttle online password guessing.
+router.post('/login', authRateLimiter, controller.adminLogin);
 
 // Lazy media (couple photo / community cover). Self-authenticates via ?token=
 // query param because <img> tags cannot send an Authorization header. Must be

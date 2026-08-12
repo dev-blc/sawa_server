@@ -609,6 +609,13 @@ class CommunityService {
         const community = await prisma_1.prisma.community.findUnique({ where: { id: communityId } });
         if (!community)
             throw new AppError_1.AppError('Community not found', 404);
+        // Authorization: only a member of the community may invite other couples.
+        // Without this any authenticated user could spam invites for any community.
+        const membership = await prisma_1.prisma.communityMember.findUnique({
+            where: { communityId_coupleId: { communityId, coupleId: me.coupleId } },
+        });
+        if (!membership)
+            throw new AppError_1.AppError('Only members can invite couples to this community', 403);
         // Process all invites in parallel instead of sequentially.
         await Promise.all(invitedCoupleIds.map(async (rawId) => {
             try {

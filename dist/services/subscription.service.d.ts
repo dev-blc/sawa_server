@@ -20,8 +20,14 @@ export interface Entitlement {
  * this guards the read path too).
  */
 export declare const getEntitlement: (coupleId: string) => Promise<Entitlement>;
-/** How many Discovery profiles the couple has acted on (skip + connect both count). */
+/** How many Discovery profiles the couple has acted on all-time (skip + connect). */
 export declare const connectionsUsed: (coupleId: string) => Promise<number>;
+/**
+ * How many Discovery profiles the couple has acted on SINCE THE START OF TODAY
+ * (UTC). This is the value the connection quota is enforced against — the free
+ * tier and trial both allow 5 connections PER DAY, not 5 lifetime.
+ */
+export declare const connectionsUsedToday: (coupleId: string) => Promise<number>;
 /** How many groups the couple has joined. */
 export declare const groupsJoined: (coupleId: string) => Promise<number>;
 /**

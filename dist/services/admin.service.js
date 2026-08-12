@@ -86,14 +86,13 @@ class AdminService {
         const dummyCities = ['Chennai', 'Goa', 'Mumbai', 'Delhi', 'Bangalore', 'Pune'];
         const users = await prisma_1.prisma.user.findMany({
             orderBy: { createdAt: 'desc' },
-            take: 200,
             include: {
                 coupleProfile: {
                     include: { answers: true }
                 }
             },
         });
-        return users.map((u, idx) => {
+        const mapped = users.map((u, idx) => {
             // Status hierarchy: banned > unverified > inactive (no recent activity) > active.
             let status = 'active';
             if (u.coupleProfile?.bannedAt)
@@ -102,10 +101,15 @@ class AdminService {
                 status = 'inactive';
             else if (isInactive(u.lastActiveAt))
                 status = 'inactive';
+            // Users who never finished onboarding have no `name`; the only identifying
+            // data captured at signup is their phone number, so fall back to that
+            // instead of a meaningless "Unknown".
+            const realName = (u.name ?? '').trim();
             return {
+                _hasName: realName !== '',
                 _id: u.id,
                 id: u.id,
-                name: u.name || 'Unknown',
+                name: realName || u.phone || 'Unknown',
                 phone: u.phone,
                 city: (u.coupleProfile?.locationCity && u.coupleProfile?.locationCity !== 'Unknown')
                     ? u.coupleProfile.locationCity
@@ -128,6 +132,10 @@ class AdminService {
                 } : null
             };
         });
+        // Named users first (recency preserved within each group via stable sort),
+        // phone-only users at the bottom. Strip the helper flag.
+        mapped.sort((a, b) => Number(b._hasName) - Number(a._hasName));
+        return mapped.map(({ _hasName, ...rest }) => rest);
     }
     async getCouples(token) {
         const questionMap = {
@@ -152,14 +160,23 @@ class AdminService {
             include: {
                 partner1: true,
                 partner2: true,
+                // The actual partners are the Users linked by coupleId. partner1Id /
+                // partner2Id are legacy pointers that are frequently unset, so relying on
+                // them alone made most couples show no partners (and fall back to the
+                // "Sawa Couple" placeholder name).
+                users: true,
                 answers: true,
             },
-            take: 100,
         });
-        return couples.map((c, idx) => {
-            // Couple is "inactive" only if BOTH partners are inactive.
-            const bothInactive = isInactive(c.partner1?.lastActiveAt ?? null) &&
-                isInactive(c.partner2?.lastActiveAt ?? null);
+        const mapped = couples.map((c, idx) => {
+            // Prefer the real membership (users linked by coupleId); fall back to the
+            // legacy partner1/partner2 pointers only if the membership list is empty.
+            const memberUsers = (c.users && c.users.length > 0
+                ? c.users
+                : [c.partner1, c.partner2].filter(Boolean));
+            // Couple is "inactive" only if it has members and ALL of them are inactive.
+            const bothInactive = memberUsers.length > 0 &&
+                memberUsers.every(u => isInactive(u?.lastActiveAt ?? null));
             let status = 'new';
             if (c.bannedAt)
                 status = 'banned';
@@ -167,10 +184,43 @@ class AdminService {
                 status = 'inactive';
             else if (c.isProfileComplete)
                 status = 'engaged';
+            // The couple's display name. `profileName` starts life as the generic
+            // "Sawa Couple" placeholder (set at registration) and is only replaced
+            // once a couple customizes it, so on its own it makes every un-customized
+            // couple read as "Sawa Couple" in the dashboard. Prefer the real partner
+            // names ("Alice & Bob"), then a genuinely customized profileName, and only
+            // fall back to a generic label when we have nothing else.
+            const partnerNames = memberUsers
+                .map(u => (u?.name ?? '').trim())
+                .filter(Boolean);
+            const customProfileName = c.profileName && c.profileName.trim() && c.profileName.trim() !== 'Sawa Couple'
+                ? c.profileName.trim()
+                : '';
+            // Couples that signed up but never finished onboarding have no `User.name`,
+            // no partner1/2 pointers and the default "Sawa Couple" profileName — the
+            // only identifying data they carry is the phone number captured at signup.
+            // Use that as a last-resort label so the dashboard stays useful instead of
+            // collapsing every incomplete couple into "Anonymous Pair".
+            const partnerPhones = memberUsers
+                .map(u => (u?.phone ?? '').trim())
+                .filter(Boolean);
+            const pairName = partnerNames.length >= 2
+                ? partnerNames.slice(0, 2).join(' & ')
+                : customProfileName ||
+                    partnerNames[0] ||
+                    (partnerPhones.length >= 2
+                        ? partnerPhones.slice(0, 2).join(' & ')
+                        : partnerPhones[0]) ||
+                    'Anonymous Pair';
+            // Couples that have entered a real name (either partner names or a
+            // customized profileName) are surfaced at the top of the dashboard;
+            // nameless signups (phone-only) sink to the bottom.
+            const hasName = partnerNames.length > 0 || customProfileName !== '';
             return {
+                _hasName: hasName,
                 _id: c.coupleId,
                 id: c.coupleId,
-                pairName: c.profileName || 'Anonymous Pair',
+                pairName,
                 city: (c.locationCity && c.locationCity !== 'Unknown')
                     ? c.locationCity
                     : dummyCities[idx % dummyCities.length],
@@ -182,26 +232,22 @@ class AdminService {
                 banReason: c.banReason,
                 bio: c.bio,
                 primaryPhoto: imageRef('couple', c.coupleId, c.primaryPhoto, token),
-                partners: [
-                    c.partner1 ? {
-                        id: c.partner1.id,
-                        name: c.partner1.name,
-                        phone: c.partner1.phone,
-                        lastActiveAt: c.partner1.lastActiveAt,
-                    } : null,
-                    c.partner2 ? {
-                        id: c.partner2.id,
-                        name: c.partner2.name,
-                        phone: c.partner2.phone,
-                        lastActiveAt: c.partner2.lastActiveAt,
-                    } : null,
-                ].filter(Boolean),
+                partners: memberUsers.map(u => ({
+                    id: u.id,
+                    name: u.name,
+                    phone: u.phone,
+                    lastActiveAt: u.lastActiveAt,
+                })),
                 answers: c.answers.map(a => ({
                     question: questionMap[a.questionId] || a.questionId,
                     options: a.selectedOptionIds.map(oid => optionLabelMap[oid] || oid)
                 }))
             };
         });
+        // Named couples first (kept in recency order within each group via the
+        // stable sort), phone-only couples at the bottom. Strip the helper flag.
+        mapped.sort((a, b) => Number(b._hasName) - Number(a._hasName));
+        return mapped.map(({ _hasName, ...rest }) => rest);
     }
     /** Fetch the raw stored image (base64 data URL or http URL) for lazy serving. */
     async getRawImage(kind, id) {

@@ -36,6 +36,11 @@ function getRedis(): Redis | null {
 // ---------------------------------------------------------------------------
 const _localCache = new Map<string, { value: string; expiresAt: number }>();
 
+// Hard cap on the fallback map. Without this, a prolonged Redis outage (every
+// set() falls through to here) would grow the heap without bound. Map preserves
+// insertion order, so the "oldest key" is a cheap FIFO eviction victim.
+const LOCAL_CACHE_MAX = 10_000;
+
 function localGet(key: string): string | null {
   const entry = _localCache.get(key);
   if (!entry) return null;
@@ -46,6 +51,18 @@ function localGet(key: string): string | null {
   return entry.value;
 }
 function localSet(key: string, value: string, ttlSeconds: number) {
+  // Bound the map: when full and inserting a new key, first sweep expired
+  // entries, then FIFO-evict the oldest if still at capacity.
+  if (_localCache.size >= LOCAL_CACHE_MAX && !_localCache.has(key)) {
+    const now = Date.now();
+    for (const [k, v] of _localCache) {
+      if (v.expiresAt <= now) _localCache.delete(k);
+    }
+    if (_localCache.size >= LOCAL_CACHE_MAX) {
+      const oldest = _localCache.keys().next().value;
+      if (oldest !== undefined) _localCache.delete(oldest);
+    }
+  }
   _localCache.set(key, { value, expiresAt: Date.now() + ttlSeconds * 1000 });
 }
 function localDel(key: string) {

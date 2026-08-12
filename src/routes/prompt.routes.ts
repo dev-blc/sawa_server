@@ -25,7 +25,8 @@ router.get('/active', async (req, res) => {
         const formatted = prompts.map(p => ({ ...p, _id: p.id }));
         res.status(200).json({ success: true, data: formatted });
     } catch (err: any) {
-        res.status(500).json({ success: false, message: err.message });
+        console.error('[PROMPT ACTIVE ERROR]', err);
+        res.status(500).json({ success: false, error: 'Failed to load prompts' });
     }
 });
 

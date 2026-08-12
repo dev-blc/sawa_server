@@ -1,5 +1,5 @@
 import { Router } from 'express';
-import { authRateLimiter } from '../middleware/rateLimiter';
+import { authRateLimiter, apiRateLimiter } from '../middleware/rateLimiter';
 import {
   sendOtp,
   verifyOtp,
@@ -33,7 +33,8 @@ router.post('/login-send-otp', authRateLimiter, validateLoginSendOtp, asyncHandl
 router.post('/login-verify-otp', authRateLimiter, validateLoginVerifyOtp, asyncHandler(loginVerifyOtp));
 
 // POST /api/v1/auth/refresh
-router.post('/refresh', validateRefresh, asyncHandler(refreshToken));
+// Lenient limiter (shared mobile/carrier IPs refresh often) but still bounded.
+router.post('/refresh', apiRateLimiter, validateRefresh, asyncHandler(refreshToken));
 
 // POST /api/v1/auth/logout  (protected)
 router.post('/logout', authenticate, asyncHandler(logout));
@@ -41,7 +42,8 @@ router.post('/logout', authenticate, asyncHandler(logout));
 // POST /api/v1/auth/resend-otp  — resend for ONE phone only, reuses existing coupleId
 router.post('/resend-otp', authRateLimiter, asyncHandler(resendOtp));
 
-// POST /api/v1/auth/invite-partner
-router.post('/invite-partner', asyncHandler(invitePartner));
+// POST /api/v1/auth/invite-partner — sends a Twilio SMS, so rate-limit per IP
+// to prevent unauthenticated SMS flooding / cost abuse.
+router.post('/invite-partner', authRateLimiter, asyncHandler(invitePartner));
 
 export default router;

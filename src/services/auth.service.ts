@@ -11,6 +11,14 @@ import { env } from '../config/env';
 /** Set of phone numbers (with country code) that skip OTP — for test / demo accounts */
 const getBypassPhones = (): Set<string> => {
   if (!env.BYPASS_PHONES) return new Set();
+  // Secure-by-default: the OTP bypass is a testing/demo backdoor and is DISABLED
+  // in production unless an operator explicitly opts in with
+  // BYPASS_PHONES_ALLOW_PROD=true. This prevents accidentally shipping a
+  // permanent OTP-less login for the listed numbers.
+  if (env.NODE_ENV === 'production' && process.env.BYPASS_PHONES_ALLOW_PROD !== 'true') {
+    logger.warn('[auth] BYPASS_PHONES is set but ignored in production (set BYPASS_PHONES_ALLOW_PROD=true to force).');
+    return new Set();
+  }
   return new Set(env.BYPASS_PHONES.split(',').map(p => p.trim()).filter(Boolean));
 };
 
@@ -195,7 +203,10 @@ export class AuthService {
       throw new AppError('Invalid refresh token', 401, 'INVALID_REFRESH_TOKEN');
     }
 
-    if (hashToken(refreshToken) !== user.refreshTokenHash) {
+    // Constant-time compare of the stored vs presented refresh-token hash.
+    const presented = Buffer.from(hashToken(refreshToken), 'utf8');
+    const stored = Buffer.from(user.refreshTokenHash, 'utf8');
+    if (presented.length !== stored.length || !crypto.timingSafeEqual(presented, stored)) {
       throw new AppError('Refresh token mismatch', 401, 'INVALID_REFRESH_TOKEN');
     }
 

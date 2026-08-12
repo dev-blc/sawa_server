@@ -4,6 +4,7 @@ var __importDefault = (this && this.__importDefault) || function (mod) {
 };
 Object.defineProperty(exports, "__esModule", { value: true });
 exports.otpService = exports.OtpService = void 0;
+const crypto_1 = __importDefault(require("crypto"));
 const twilio_1 = __importDefault(require("twilio"));
 const prisma_1 = require("../lib/prisma");
 const index_1 = require("../constants/index");
@@ -20,6 +21,13 @@ const cache_1 = require("../lib/cache");
  */
 const OTP_REPLAY_TTL_SECONDS = 600;
 const otpOkKey = (phone, code) => `otp_ok:${phone}:${code}`;
+// Brute-force guard: after OTP_MAX_ATTEMPTS wrong codes for a phone, verification
+// is locked for this window. 4-digit codes are only 10k combinations, so without
+// this an attacker could exhaust them within a single valid code's lifetime. The
+// counter is stored in Redis (shared across cluster workers) and resets on the
+// first correct code.
+const OTP_LOCKOUT_TTL_SECONDS = 15 * 60;
+const otpFailKey = (phone) => `otp_fail:${phone}`;
 // ─── CONFIGURATION ──────────────────────────────────────────────────────────
 const TWILIO_SID = process.env.TWILIO_ACCOUNT_SID;
 const TWILIO_AUTH = process.env.TWILIO_AUTH_TOKEN;
@@ -76,7 +84,8 @@ class OtpService {
         else {
             await prisma_1.prisma.otpToken.deleteMany({ where: { phone } });
         }
-        const code = Math.floor(1000 + Math.random() * 9000).toString();
+        // Use a CSPRNG (not Math.random) so codes are not predictable.
+        const code = crypto_1.default.randomInt(1000, 10000).toString();
         const expiresAt = new Date(Date.now() + index_1.OTP_EXPIRES_IN_MINUTES * 60 * 1000);
         await prisma_1.prisma.otpToken.create({
             data: { phone, coupleId, otpCode: code, expiresAt },
@@ -106,6 +115,17 @@ class OtpService {
     async verify(phone, enteredCode) {
         logger_1.logger.debug(`[OtpService] Verifying OTP for ${phone}`);
         const code = (enteredCode ?? '').trim();
+        // Brute-force guard: refuse verification once a phone has failed too many
+        // times within the lockout window.
+        let failCount = 0;
+        try {
+            const raw = await (0, cache_1.cacheGet)(otpFailKey(phone));
+            failCount = raw ? parseInt(raw, 10) || 0 : 0;
+        }
+        catch { /* best-effort — fail open on cache outage */ }
+        if (failCount >= index_1.OTP_MAX_ATTEMPTS) {
+            throw new AppError_1.AppError('Too many incorrect codes. Please wait a few minutes before trying again.', 429, 'OTP_LOCKED');
+        }
         // Accept ANY still-valid code issued for this phone (not just the latest).
         // A user may receive more than one code (resend, re-navigation, an older SMS
         // still on screen); as long as the code they entered hasn't expired, let them
@@ -124,6 +144,11 @@ class OtpService {
                 await (0, cache_1.cacheSet)(otpOkKey(phone, code), coupleId ?? '', OTP_REPLAY_TTL_SECONDS);
             }
             catch { /* best-effort */ }
+            // Reset the failed-attempt counter on the first correct code.
+            try {
+                await (0, cache_1.cacheInvalidate)(otpFailKey(phone));
+            }
+            catch { /* best-effort */ }
             return { valid: true, coupleId };
         }
         // No live token — it may have just been consumed by a duplicate request for
@@ -132,8 +157,18 @@ class OtpService {
         try {
             const cached = await (0, cache_1.cacheGet)(otpOkKey(phone, code));
             if (cached !== null) {
+                try {
+                    await (0, cache_1.cacheInvalidate)(otpFailKey(phone));
+                }
+                catch { /* best-effort */ }
                 return { valid: true, coupleId: cached || null };
             }
+        }
+        catch { /* best-effort */ }
+        // Wrong code — record the failed attempt (best-effort) so repeated guesses
+        // trip the lockout above.
+        try {
+            await (0, cache_1.cacheSet)(otpFailKey(phone), String(failCount + 1), OTP_LOCKOUT_TTL_SECONDS);
         }
         catch { /* best-effort */ }
         return { valid: false, coupleId: null };

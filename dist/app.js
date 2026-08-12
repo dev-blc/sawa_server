@@ -37,7 +37,6 @@ var __importDefault = (this && this.__importDefault) || function (mod) {
 };
 Object.defineProperty(exports, "__esModule", { value: true });
 exports.createApp = void 0;
-const os_1 = __importDefault(require("os"));
 const express_1 = __importDefault(require("express"));
 const cors_1 = __importDefault(require("cors"));
 const helmet_1 = __importDefault(require("helmet"));
@@ -46,7 +45,6 @@ const compression_1 = __importDefault(require("compression"));
 const env_1 = require("./config/env");
 const errorHandler_1 = require("./middleware/errorHandler");
 const index_1 = __importDefault(require("./routes/index"));
-const push_service_1 = require("./services/push.service");
 // ─── Deep-Link / Store Configuration ──────────────────────────────────────────
 // These identifiers power the /share/* redirect pages and the App Links /
 // Universal Links association files (/.well-known/*). Keep them in sync with the
@@ -68,6 +66,12 @@ const ANDROID_SHA256_FINGERPRINTS = [
     '65:6D:E0:45:54:C0:0B:F7:26:3F:0A:16:A9:1B:C3:4A:C6:ED:CD:DF:C6:88:FE:AE:B9:FA:36:D8:D4:F5:59:BD',
 ];
 const escapeHtml = (s) => s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+// Deep-link ids are cuid()/uuid-style. Express keeps URL-encoded slashes (%2F)
+// inside a single :id param, so without this a value like
+// `</script><script>…</script>` would survive into the inline share-page script
+// (whose CSP allows 'unsafe-inline') and execute — a reflected XSS. Restrict the
+// id to a safe charset before it's ever embedded in HTML/JS.
+const safeLinkId = (raw) => String(raw ?? '').replace(/[^A-Za-z0-9_-]/g, '');
 // These are public redirect/marketing pages that must run a small inline script
 // to bounce the visitor to the app or store. Helmet's default CSP blocks inline
 // scripts, so relax it to allow inline execution on these routes only.
@@ -148,7 +152,11 @@ const createApp = () => {
     const app = (0, express_1.default)();
     // ─── Security ───────────────────────────────────────────────────────────────
     app.set('trust proxy', 1);
-    app.use((0, helmet_1.default)());
+    app.use((0, helmet_1.default)({
+        // Force HTTPS for one year (browsers only; the mobile API is already
+        // HTTPS-only). TLS is terminated at the platform proxy in front of us.
+        hsts: { maxAge: 31536000, includeSubDomains: true, preload: false },
+    }));
     const allowedOrigins = env_1.env.CORS_ORIGINS.split(',').map((o) => o.trim());
     app.use((0, cors_1.default)({
         origin: (origin, callback) => {
@@ -172,8 +180,18 @@ const createApp = () => {
     // ─── Logging ─────────────────────────────────────────────────────────────────
     // Skip the high-frequency infra probes (/health, /wakeup) so production logs
     // aren't drowned by the healthcheck + self-wakeup traffic.
+    //
+    // Redact credential-bearing query params from logged URLs. Some endpoints (e.g.
+    // admin media) accept a `?token=` for <img>/loaders that can't send headers;
+    // `morgan('combined')` would otherwise write the full JWT to disk / Railway.
+    morgan_1.default.token('safeurl', (req) => {
+        const url = req.originalUrl || req.url || '';
+        return url.replace(/([?&](?:token|secret|otp|password|refreshtoken)=)[^&]*/gi, '$1REDACTED');
+    });
+    const combinedSafe = ':remote-addr - :remote-user [:date[clf]] ":method :safeurl HTTP/:http-version" :status :res[content-length] ":referrer" ":user-agent"';
+    const devSafe = ':method :safeurl :status :response-time ms - :res[content-length]';
     if (env_1.env.NODE_ENV !== 'test') {
-        app.use((0, morgan_1.default)(env_1.env.NODE_ENV === 'development' ? 'dev' : 'combined', {
+        app.use((0, morgan_1.default)(env_1.env.NODE_ENV === 'development' ? devSafe : combinedSafe, {
             skip: (req) => req.url === '/health' || req.url === '/wakeup',
         }));
     }
@@ -215,25 +233,16 @@ const createApp = () => {
             redisStatus = 'down';
         }
         const healthy = dbStatus === 'ok';
+        // Public payload is intentionally minimal — enough for the orchestrator to
+        // decide healthy/unhealthy, without disclosing NODE_ENV, pid/worker layout,
+        // CPU count or feature flags to anonymous callers. Verbose diagnostics are
+        // available in-process via logs.
         res.status(healthy ? 200 : 503).json({
             success: healthy,
             status: healthy ? 'healthy' : 'unhealthy',
             service: 'sawa-server',
-            environment: env_1.env.NODE_ENV,
-            db: { type: 'postgresql (prisma)', status: dbStatus },
+            db: { status: dbStatus },
             redis: { status: redisStatus },
-            // Cluster diagnostics: pmId is the PM2 worker index (undefined => single
-            // fork process). Hitting /health repeatedly should surface different
-            // pid/pmId pairs when cluster mode is live. cpus = cores visible to Node.
-            worker: {
-                pmId: process.env.pm_id ?? process.env.NODE_APP_INSTANCE ?? 'single',
-                pid: process.pid,
-                cpus: os_1.default.cpus().length,
-                uptimeSec: Math.round(process.uptime()),
-            },
-            // pushEnabled === false means FIREBASE_SERVICE_ACCOUNT_JSON is missing or
-            // invalid on this server → no push notifications will be delivered.
-            pushEnabled: (0, push_service_1.isPushEnabled)(),
             timestamp: new Date().toISOString(),
         });
     });
@@ -321,7 +330,7 @@ const createApp = () => {
     // ─── Share Deep-Link Redirect Pages ─────────────────────────────────────────
     // /share/community/:id — opens app if installed, store otherwise.
     app.get('/share/community/:id', async (req, res) => {
-        const { id } = req.params;
+        const id = safeLinkId(req.params.id);
         let communityName = 'a community';
         let communityCity = '';
         try {
@@ -345,7 +354,7 @@ const createApp = () => {
     });
     // /share/couple/:id — opens the couple's profile in the app, store otherwise.
     app.get('/share/couple/:id', async (req, res) => {
-        const { id } = req.params;
+        const id = safeLinkId(req.params.id);
         let coupleName = 'a couple';
         try {
             const { prisma } = await Promise.resolve().then(() => __importStar(require('./lib/prisma')));

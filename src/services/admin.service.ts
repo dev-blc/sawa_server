@@ -10,6 +10,7 @@ import { materializeImageLoose } from '../lib/storage';
  * window is considered inactive in the admin tables. Configurable via env;
  * defaults to 7 days per stakeholder requirement.
  */
+
 const INACTIVITY_DAYS = Number(process.env.INACTIVITY_DAYS || 7);
 
 const isInactive = (lastActiveAt: Date | null | undefined): boolean => {

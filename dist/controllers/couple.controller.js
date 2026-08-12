@@ -7,6 +7,7 @@ const prisma_1 = require("../lib/prisma");
 const response_1 = require("../utils/response");
 const validate_1 = require("../middleware/validate");
 const AppError_1 = require("../utils/AppError");
+const subscription_1 = require("../config/subscription");
 const cache_1 = require("../lib/cache");
 // ─── Onboarding step derivation ─────────────────────────────────────────────
 /**
@@ -36,13 +37,60 @@ function deriveOnboardingStep(couple) {
     return 'OnboardingLanguage';
 }
 // ─── Validation ─────────────────────────────────────────────────────────────
+// Parse a DOB string to age in years, or null if unparseable. Accepts the app's
+// DD/MM/YYYY display format and ISO (YYYY-MM-DD).
+const ageFromDobString = (dob) => {
+    const s = String(dob).trim();
+    if (!s)
+        return null;
+    let y, m, d;
+    const iso = s.match(/^(\d{4})-(\d{2})-(\d{2})/);
+    if (iso) {
+        y = +iso[1];
+        m = +iso[2];
+        d = +iso[3];
+    }
+    else {
+        const parts = s.replace(/[^0-9]/g, '/').split('/').filter(Boolean);
+        if (parts.length < 3)
+            return null;
+        d = +parts[0];
+        m = +parts[1];
+        y = +parts[2];
+    }
+    if (!d || !m || !y || y < 1900)
+        return null;
+    const birth = new Date(y, m - 1, d);
+    if (Number.isNaN(birth.getTime()))
+        return null;
+    const now = new Date();
+    let age = now.getFullYear() - birth.getFullYear();
+    const md = now.getMonth() - birth.getMonth();
+    if (md < 0 || (md === 0 && now.getDate() < birth.getDate()))
+        age--;
+    return age;
+};
+// Optional DOB that, WHEN present and parseable, must be >= 18 (Sawa is 18+).
+// Server-side backstop for the client age gate. Empty / absent / unparseable
+// values pass through so older app builds that omit DOB aren't broken; only a
+// clearly-parseable under-18 date is rejected.
+const optionalAdultDob = zod_1.z
+    .string()
+    .optional()
+    .or(zod_1.z.literal(''))
+    .refine((v) => {
+    if (!v)
+        return true;
+    const age = ageFromDobString(v);
+    return age === null || age >= 18;
+}, { message: 'You must be 18 or older to use Sawa' });
 const SetupProfileSchema = zod_1.z.object({
     yourName: zod_1.z.string().min(1, 'Your name is required'),
     yourEmail: zod_1.z.string().optional().or(zod_1.z.literal('')),
-    yourDob: zod_1.z.string().optional().or(zod_1.z.literal('')),
+    yourDob: optionalAdultDob,
     partnerName: zod_1.z.string().min(1, "Partner's name is required"),
     partnerEmail: zod_1.z.string().optional().or(zod_1.z.literal('')),
-    partnerDob: zod_1.z.string().optional().or(zod_1.z.literal('')),
+    partnerDob: optionalAdultDob,
     relationshipStatus: zod_1.z.string().optional(),
     location: zod_1.z.object({
         city: zod_1.z.string().optional(),
@@ -66,10 +114,10 @@ const CompleteOnboardingSchema = zod_1.z.object({
     // has the data from earlier steps.  We only call setupProfile when names are present.
     yourName: zod_1.z.string().min(1).optional().or(zod_1.z.literal('')),
     yourEmail: zod_1.z.string().optional().or(zod_1.z.literal('')),
-    yourDob: zod_1.z.string().optional().or(zod_1.z.literal('')),
+    yourDob: optionalAdultDob,
     partnerName: zod_1.z.string().min(1).optional().or(zod_1.z.literal('')),
     partnerEmail: zod_1.z.string().optional().or(zod_1.z.literal('')),
-    partnerDob: zod_1.z.string().optional().or(zod_1.z.literal('')),
+    partnerDob: optionalAdultDob,
     relationshipStatus: zod_1.z.string().optional(),
     primaryPhotoBase64: zod_1.z.string().optional(),
     secondaryPhotosBase64: zod_1.z.array(zod_1.z.string()).max(3).optional(),
@@ -291,16 +339,27 @@ const invitePartner = async (_req, _res) => {
 exports.invitePartner = invitePartner;
 /**
  * POST /api/v1/couples/subscribe
- * Marks the current couple as subscribed.
+ *
+ * LEGACY endpoint. It only flips the cosmetic `Couple.isSubscribed` flag used by
+ * the pre-paywall "activate free access" flow while SUBSCRIPTIONS_ENFORCED is
+ * off. It grants NO paid entitlement: real feature gating reads the verified
+ * `Subscription` table (populated only via App Store / Play receipt
+ * verification at /subscriptions/apple|google/verify), never this flag.
+ *
+ * Once real enforcement is enabled, this self-serve path is disabled so it can
+ * never set a stale/unverified flag — clients must go through IAP verification.
  */
 const subscribe = async (req, res) => {
+    if ((0, subscription_1.isEnforced)()) {
+        throw new AppError_1.AppError('This endpoint is no longer available. Purchase Sawa Prime through the app.', 410);
+    }
     const { coupleId } = req.user;
     const couple = await couple_service_1.coupleService.subscribe(coupleId);
     (0, response_1.sendSuccess)({
         res,
         statusCode: 200,
         message: 'Subscription activated. First month is on us!',
-        data: { couple }
+        data: { couple },
     });
 };
 exports.subscribe = subscribe;

@@ -5,8 +5,46 @@ import { AdminService } from '../services/admin.service';
 import { signAccessToken, verifyAccessToken } from '../utils/jwt';
 import { logger } from '../utils/logger';
 import { materializeImageLoose } from '../lib/storage';
+import { env } from '../config/env';
 
 const adminService = new AdminService();
+
+function hostOf(u?: string | null): string | null {
+  if (!u) return null;
+  try {
+    return new URL(u).host.toLowerCase();
+  } catch {
+    return null;
+  }
+}
+
+// Object-storage / CDN suffixes we host media on. A redirect target outside this
+// set (plus our own configured hosts) is refused so a user-supplied photo/cover
+// URL can't turn the admin media proxy into an open redirect.
+const TRUSTED_MEDIA_HOST_SUFFIXES = [
+  'amazonaws.com',
+  'backblazeb2.com',
+  'r2.cloudflarestorage.com',
+  'cloudfront.net',
+  'digitaloceanspaces.com',
+  'storage.googleapis.com',
+];
+
+function isTrustedMediaUrl(rawUrl: string): boolean {
+  let host: string;
+  try {
+    const u = new URL(rawUrl);
+    if (u.protocol !== 'https:' && u.protocol !== 'http:') return false;
+    host = u.host.toLowerCase();
+  } catch {
+    return false;
+  }
+  const configured = [hostOf(env.APP_URL), hostOf(env.S3_PUBLIC_BASE_URL), hostOf(env.S3_ENDPOINT)].filter(
+    Boolean,
+  ) as string[];
+  if (configured.includes(host)) return true;
+  return TRUSTED_MEDIA_HOST_SUFFIXES.some((suf) => host === suf || host.endsWith(`.${suf}`));
+}
 
 export class AdminController {
   async adminLogin(req: Request, res: Response) {
@@ -71,9 +109,14 @@ export class AdminController {
       const raw = await adminService.getRawImage(kind, id);
       if (!raw) return res.status(404).send('Not found');
 
-      // Already an external URL — just redirect to it.
+      // Already an external URL — redirect only to trusted media hosts so a
+      // user-supplied photo/cover URL can't turn this into an open redirect.
       if (raw.startsWith('http')) {
-        return res.redirect(raw);
+        if (isTrustedMediaUrl(raw)) {
+          return res.redirect(raw);
+        }
+        logger.warn(`⚠️ Admin getMedia refused redirect to untrusted host: ${raw}`);
+        return res.status(400).send('Untrusted media URL');
       }
 
       const match = raw.match(/^data:([^;]+);base64,(.*)$/s);

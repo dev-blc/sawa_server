@@ -45,12 +45,29 @@ const envSchema = zod_1.z.object({
     TWILIO_ACCOUNT_SID: zod_1.z.string().optional(),
     TWILIO_AUTH_TOKEN: zod_1.z.string().optional(),
     TWILIO_PHONE_NUMBER: zod_1.z.string().optional(),
+    // ─── WhatsApp notifications (Twilio) ─────────────────────────────────────────
+    // Master switch. Keep 'false' until a WhatsApp sender + template are approved,
+    // otherwise every notification attempts a (failing) WhatsApp send.
+    WHATSAPP_NOTIFICATIONS_ENABLED: zod_1.z.string().default('false').transform((v) => v === 'true'),
+    // The WhatsApp-enabled sender in Twilio, e.g. 'whatsapp:+14155238886' (sandbox)
+    // or 'whatsapp:+<your approved business number>'.
+    TWILIO_WHATSAPP_FROM: zod_1.z.string().optional(),
+    // Approved Content Template SID (starts with 'HX...'). REQUIRED for production
+    // business-initiated messages. When set, notifications are sent as this
+    // template with the notification text as variable {{1}}. When unset, the
+    // server sends free-form text (only delivers in the Twilio Sandbox or inside a
+    // live 24h session window).
+    TWILIO_WHATSAPP_CONTENT_SID: zod_1.z.string().optional(),
+    // Notification `type`s to NOT mirror to WhatsApp (comma-separated). Defaults to
+    // 'message' so high-frequency chat messages don't spam WhatsApp / rack up cost.
+    WHATSAPP_EXCLUDE_TYPES: zod_1.z.string().default('message'),
     GROQ_API_KEY: zod_1.z.string().min(1, 'GROQ_API_KEY is required'),
     // Admin portal bootstrap. On startup the server upserts an admin user with
     // these credentials so the admin dashboard login always works after a deploy.
-    // Override in Railway env vars for production security.
-    ADMIN_EMAIL: zod_1.z.string().default('admin@gmail.com'),
-    ADMIN_PASSWORD: zod_1.z.string().default('adminsawa'),
+    // No committed defaults: if unset, admin bootstrap is skipped (see
+    // bootstrapAdmin.ts). Set both in Railway env vars to enable admin login.
+    ADMIN_EMAIL: zod_1.z.string().optional(),
+    ADMIN_PASSWORD: zod_1.z.string().optional(),
     // ─── Subscriptions ──────────────────────────────────────────────────────────
     // Master switch for entitlement ENFORCEMENT. Keep 'false' until the paywall +
     // store products are live, otherwise every existing user (who has no

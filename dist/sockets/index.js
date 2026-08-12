@@ -63,6 +63,22 @@ const createSocketServer = (httpServer) => {
             const payload = (0, jwt_1.verifyAccessToken)(token);
             socket.userId = payload.userId;
             socket.coupleId = payload.coupleId;
+            // Mirror the HTTP `authenticate` middleware: banned or deleted couples must
+            // not be able to open a WebSocket (chat, US-space, games) either.
+            if (payload.coupleId) {
+                const couple = await prisma_1.prisma.couple.findUnique({
+                    where: { coupleId: payload.coupleId },
+                    select: { bannedAt: true },
+                });
+                if (!couple) {
+                    logger_1.logger.warn(`❌ Socket ${socket.id} rejected: account no longer exists`);
+                    return next(new Error('Account no longer exists'));
+                }
+                if (couple.bannedAt) {
+                    logger_1.logger.warn(`❌ Socket ${socket.id} rejected: account suspended`);
+                    return next(new Error('Account suspended'));
+                }
+            }
             const user = await prisma_1.prisma.user.findUnique({
                 where: { id: payload.userId },
                 select: { name: true, role: true, coupleId: true },

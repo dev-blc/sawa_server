@@ -8,8 +8,31 @@ import { getCoupleCommunityColor } from '../utils/communityColors';
 // notification.service (which internally calls emitRealtimeNotification →
 // pushToCouple). Do NOT emit here too or recipients get duplicate pushes.
 
+// Returns true only if `coupleId` participates in the given chat (private match
+// participant or community member). Used to stop a client from joining, posting
+// to, or reading chats it does not belong to (IDOR protection).
+async function socketCanAccessChat(chatId: string, coupleId: string): Promise<boolean> {
+  const [match, member] = await Promise.all([
+    prisma.match.findFirst({
+      where: { id: chatId, OR: [{ couple1Id: coupleId }, { couple2Id: coupleId }] },
+      select: { id: true },
+    }),
+    prisma.communityMember.findFirst({
+      where: { communityId: chatId, coupleId },
+      select: { communityId: true },
+    }),
+  ]);
+  return !!(match || member);
+}
+
 export const registerChatHandlers = (io: SocketIOServer, socket: Socket): void => {
-  socket.on(SOCKET_EVENTS.CHAT_JOIN, (data: { chatId: string }) => {
+  socket.on(SOCKET_EVENTS.CHAT_JOIN, async (data: { chatId: string }) => {
+    if (!socket.coupleId) return;
+    // Only allow joining a room the couple actually participates in.
+    if (!(await socketCanAccessChat(data.chatId, socket.coupleId))) {
+      logger.warn(`🚫 [Socket] ${socket.coupleId} denied join to chat:${data.chatId}`);
+      return;
+    }
     socket.join(`chat:${data.chatId}`);
     logger.info(`📡 [Socket] User ${socket.coupleId} joined chat room: chat:${data.chatId} (Socket: ${socket.id})`);
   });
@@ -38,6 +61,12 @@ export const registerChatHandlers = (io: SocketIOServer, socket: Socket): void =
       try {
         const chatId = data.chatId;
         const chatType = data.chatType || 'private';
+        // Authorize before broadcasting/persisting so a client can't post into a
+        // chat it isn't part of (IDOR). One indexed lookup — negligible latency.
+        if (!(await socketCanAccessChat(chatId, socket.coupleId))) {
+          logger.warn(`🚫 [Socket] ${socket.coupleId} denied CHAT_MESSAGE to chat:${chatId}`);
+          return;
+        }
         const timestamp = new Date().toISOString();
         const clientMessageId = data.clientMessageId || `srv-${Date.now()}`;
 
@@ -197,6 +226,11 @@ export const registerChatHandlers = (io: SocketIOServer, socket: Socket): void =
     
     try {
       const coupleId = socket.coupleId;
+      // Only the chat's participants may mark it read.
+      if (!(await socketCanAccessChat(data.chatId, coupleId))) {
+        logger.warn(`🚫 [Socket] ${coupleId} denied CHAT_READ on chat:${data.chatId}`);
+        return;
+      }
 
       // Mark all unread messages read in ONE statement (array_append) instead of
       // fetching every row and updating it individually (old N+1 pattern). The

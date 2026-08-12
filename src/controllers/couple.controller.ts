@@ -5,6 +5,7 @@ import { prisma } from '../lib/prisma';
 import { sendSuccess } from '../utils/response';
 import { validate } from '../middleware/validate';
 import { AppError } from '../utils/AppError';
+import { isEnforced } from '../config/subscription';
 import {
   getCachedCoupleProfile,
   setCachedCoupleProfile,
@@ -47,13 +48,54 @@ function deriveOnboardingStep(couple: {
 
 // ─── Validation ─────────────────────────────────────────────────────────────
 
+// Parse a DOB string to age in years, or null if unparseable. Accepts the app's
+// DD/MM/YYYY display format and ISO (YYYY-MM-DD).
+const ageFromDobString = (dob: string): number | null => {
+  const s = String(dob).trim();
+  if (!s) return null;
+  let y: number, m: number, d: number;
+  const iso = s.match(/^(\d{4})-(\d{2})-(\d{2})/);
+  if (iso) {
+    y = +iso[1]; m = +iso[2]; d = +iso[3];
+  } else {
+    const parts = s.replace(/[^0-9]/g, '/').split('/').filter(Boolean);
+    if (parts.length < 3) return null;
+    d = +parts[0]; m = +parts[1]; y = +parts[2];
+  }
+  if (!d || !m || !y || y < 1900) return null;
+  const birth = new Date(y, m - 1, d);
+  if (Number.isNaN(birth.getTime())) return null;
+  const now = new Date();
+  let age = now.getFullYear() - birth.getFullYear();
+  const md = now.getMonth() - birth.getMonth();
+  if (md < 0 || (md === 0 && now.getDate() < birth.getDate())) age--;
+  return age;
+};
+
+// Optional DOB that, WHEN present and parseable, must be >= 18 (Sawa is 18+).
+// Server-side backstop for the client age gate. Empty / absent / unparseable
+// values pass through so older app builds that omit DOB aren't broken; only a
+// clearly-parseable under-18 date is rejected.
+const optionalAdultDob = z
+  .string()
+  .optional()
+  .or(z.literal(''))
+  .refine(
+    (v) => {
+      if (!v) return true;
+      const age = ageFromDobString(v);
+      return age === null || age >= 18;
+    },
+    { message: 'You must be 18 or older to use Sawa' },
+  );
+
 const SetupProfileSchema = z.object({
   yourName: z.string().min(1, 'Your name is required'),
   yourEmail: z.string().optional().or(z.literal('')),
-  yourDob: z.string().optional().or(z.literal('')),
+  yourDob: optionalAdultDob,
   partnerName: z.string().min(1, "Partner's name is required"),
   partnerEmail: z.string().optional().or(z.literal('')),
-  partnerDob: z.string().optional().or(z.literal('')),
+  partnerDob: optionalAdultDob,
   relationshipStatus: z.string().optional(),
   location: z.object({
     city: z.string().optional(),
@@ -82,10 +124,10 @@ const CompleteOnboardingSchema = z.object({
   // has the data from earlier steps.  We only call setupProfile when names are present.
   yourName: z.string().min(1).optional().or(z.literal('')),
   yourEmail: z.string().optional().or(z.literal('')),
-  yourDob: z.string().optional().or(z.literal('')),
+  yourDob: optionalAdultDob,
   partnerName: z.string().min(1).optional().or(z.literal('')),
   partnerEmail: z.string().optional().or(z.literal('')),
-  partnerDob: z.string().optional().or(z.literal('')),
+  partnerDob: optionalAdultDob,
   relationshipStatus: z.string().optional(),
   primaryPhotoBase64: z.string().optional(),
   secondaryPhotosBase64: z.array(z.string()).max(3).optional(),
@@ -334,17 +376,32 @@ export const invitePartner = async (_req: Request, _res: Response) => {
 
 /**
  * POST /api/v1/couples/subscribe
- * Marks the current couple as subscribed.
+ *
+ * LEGACY endpoint. It only flips the cosmetic `Couple.isSubscribed` flag used by
+ * the pre-paywall "activate free access" flow while SUBSCRIPTIONS_ENFORCED is
+ * off. It grants NO paid entitlement: real feature gating reads the verified
+ * `Subscription` table (populated only via App Store / Play receipt
+ * verification at /subscriptions/apple|google/verify), never this flag.
+ *
+ * Once real enforcement is enabled, this self-serve path is disabled so it can
+ * never set a stale/unverified flag — clients must go through IAP verification.
  */
 export const subscribe = async (req: Request, res: Response) => {
+  if (isEnforced()) {
+    throw new AppError(
+      'This endpoint is no longer available. Purchase Sawa Prime through the app.',
+      410,
+    );
+  }
+
   const { coupleId } = req.user!;
   const couple = await coupleService.subscribe(coupleId!);
-  
-  sendSuccess({ 
-    res, 
-    statusCode: 200, 
+
+  sendSuccess({
+    res,
+    statusCode: 200,
     message: 'Subscription activated. First month is on us!',
-    data: { couple }
+    data: { couple },
   });
 };
 

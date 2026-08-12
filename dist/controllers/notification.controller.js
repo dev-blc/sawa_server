@@ -58,13 +58,16 @@ exports.getNotifications = getNotifications;
 const markAsRead = async (req, res) => {
     const { coupleId } = req.user;
     const { id } = req.params;
-    await prisma_1.prisma.notification.update({
-        where: { id },
+    if (!coupleId)
+        throw new AppError_1.AppError('Couple ID required', 400);
+    // Scope the update to the caller's own notifications so one couple can never
+    // mark another couple's notification as read (IDOR).
+    await prisma_1.prisma.notification.updateMany({
+        where: { id, recipientId: coupleId },
         data: { read: true }
     });
     // Bust cached unread count for this user.
-    if (coupleId)
-        await (0, cache_1.invalidateNotifUnreadCount)(coupleId);
+    await (0, cache_1.invalidateNotifUnreadCount)(coupleId);
     (0, response_1.sendSuccess)({ res, statusCode: 200, message: 'Notification marked as read' });
 };
 exports.markAsRead = markAsRead;

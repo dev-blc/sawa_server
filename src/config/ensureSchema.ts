@@ -44,6 +44,23 @@ export const ensureSchema = async (): Promise<void> => {
     `CREATE UNIQUE INDEX IF NOT EXISTS "subscriptions_originalTransactionId_key" ON "subscriptions"("originalTransactionId");`,
     // Dedup flag for the "trial ends tomorrow" nudge (added with subscriptionNotifier).
     `ALTER TABLE "subscriptions" ADD COLUMN IF NOT EXISTS "trialEndingNotifiedAt" TIMESTAMP(3);`,
+
+    // ── Performance indexes (2026-08 audit) ──────────────────────────────────
+    // Each mirrors an @@index/@unique in schema.prisma. Names match Prisma's
+    // convention so a future `prisma db push` sees them as already-present.
+    // All hot paths that were doing sequential scans in production.
+    // GIN index for `blocked: { has: X }` array membership (profile view / report stats).
+    `CREATE INDEX IF NOT EXISTS "couples_blocked_idx" ON "couples" USING GIN ("blocked");`,
+    // Match.actionById — filtered on every GET /subscriptions/me usage count.
+    `CREATE INDEX IF NOT EXISTS "matches_actionById_idx" ON "matches"("actionById");`,
+    // Message.senderUserId — admin per-user message queries.
+    `CREATE INDEX IF NOT EXISTS "messages_senderUserId_idx" ON "messages"("senderUserId");`,
+    // Report.createdAt / Community.createdAt — order-by on admin list pages.
+    `CREATE INDEX IF NOT EXISTS "reports_createdAt_idx" ON "reports"("createdAt");`,
+    `CREATE INDEX IF NOT EXISTS "communities_createdAt_idx" ON "communities"("createdAt");`,
+    // Subscription.purchaseToken UNIQUE — one Google receipt can entitle only one
+    // couple (multiple NULLs allowed in Postgres). Mirrors @unique in schema.
+    `CREATE UNIQUE INDEX IF NOT EXISTS "subscriptions_purchaseToken_key" ON "subscriptions"("purchaseToken");`,
   ];
 
   for (const sql of statements) {

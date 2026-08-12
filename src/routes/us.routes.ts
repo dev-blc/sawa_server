@@ -174,6 +174,19 @@ router.post('/planned-dates', authenticate, async (req: Request, res: Response):
   try {
     // Stable id lets multiple plans live on the same day; upsert by id.
     const entryId = id || `${rawDate}__${activity}__${time ?? ''}`;
+
+    // Ownership guard: the client can supply `id`, and upsert's `update` branch
+    // would otherwise let a caller overwrite (and reassign `coupleId` on) another
+    // couple's planned date. Reject any id already owned by a different couple.
+    const existing = await prisma.plannedDate.findUnique({
+      where: { id: entryId },
+      select: { coupleId: true },
+    });
+    if (existing && existing.coupleId !== coupleId) {
+      res.status(403).json({ success: false, error: 'Not allowed' });
+      return;
+    }
+
     const data = {
       coupleId,
       activity,

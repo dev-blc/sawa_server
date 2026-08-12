@@ -49,6 +49,7 @@ export declare class CoupleService {
         locationLatitude?: number;
         locationLongitude?: number;
     }, requestingUserId?: string): Promise<any>;
+    private _sanitizePartner;
     private _formatCouple;
     getCouple(coupleId: string): Promise<any | null>;
     getCoupleSummary(coupleId: string): Promise<any | null>;

@@ -1,4 +1,3 @@
-import os from 'os';
 import express, { Application, Request, Response } from 'express';
 import cors from 'cors';
 import helmet from 'helmet';
@@ -7,7 +6,6 @@ import compression from 'compression';
 import { env } from './config/env';
 import { errorHandler } from './middleware/errorHandler';
 import apiRouter from './routes/index';
-import { isPushEnabled } from './services/push.service';
 
 // ─── Deep-Link / Store Configuration ──────────────────────────────────────────
 // These identifiers power the /share/* redirect pages and the App Links /
@@ -33,6 +31,13 @@ const ANDROID_SHA256_FINGERPRINTS = [
 
 const escapeHtml = (s: string): string =>
   s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+
+// Deep-link ids are cuid()/uuid-style. Express keeps URL-encoded slashes (%2F)
+// inside a single :id param, so without this a value like
+// `</script><script>…</script>` would survive into the inline share-page script
+// (whose CSP allows 'unsafe-inline') and execute — a reflected XSS. Restrict the
+// id to a safe charset before it's ever embedded in HTML/JS.
+const safeLinkId = (raw: unknown): string => String(raw ?? '').replace(/[^A-Za-z0-9_-]/g, '');
 
 // These are public redirect/marketing pages that must run a small inline script
 // to bounce the visitor to the app or store. Helmet's default CSP blocks inline
@@ -125,7 +130,13 @@ export const createApp = (): Application => {
 
   // ─── Security ───────────────────────────────────────────────────────────────
   app.set('trust proxy', 1);
-  app.use(helmet());
+  app.use(
+    helmet({
+      // Force HTTPS for one year (browsers only; the mobile API is already
+      // HTTPS-only). TLS is terminated at the platform proxy in front of us.
+      hsts: { maxAge: 31536000, includeSubDomains: true, preload: false },
+    }),
+  );
 
   const allowedOrigins = env.CORS_ORIGINS.split(',').map((o) => o.trim());
   app.use(
@@ -154,9 +165,20 @@ export const createApp = (): Application => {
   // ─── Logging ─────────────────────────────────────────────────────────────────
   // Skip the high-frequency infra probes (/health, /wakeup) so production logs
   // aren't drowned by the healthcheck + self-wakeup traffic.
+  //
+  // Redact credential-bearing query params from logged URLs. Some endpoints (e.g.
+  // admin media) accept a `?token=` for <img>/loaders that can't send headers;
+  // `morgan('combined')` would otherwise write the full JWT to disk / Railway.
+  morgan.token('safeurl', (req: any) => {
+    const url: string = req.originalUrl || req.url || '';
+    return url.replace(/([?&](?:token|secret|otp|password|refreshtoken)=)[^&]*/gi, '$1REDACTED');
+  });
+  const combinedSafe =
+    ':remote-addr - :remote-user [:date[clf]] ":method :safeurl HTTP/:http-version" :status :res[content-length] ":referrer" ":user-agent"';
+  const devSafe = ':method :safeurl :status :response-time ms - :res[content-length]';
   if (env.NODE_ENV !== 'test') {
     app.use(
-      morgan(env.NODE_ENV === 'development' ? 'dev' : 'combined', {
+      morgan(env.NODE_ENV === 'development' ? devSafe : combinedSafe, {
         skip: (req) => req.url === '/health' || req.url === '/wakeup',
       }),
     );
@@ -203,25 +225,16 @@ export const createApp = (): Application => {
     }
 
     const healthy = dbStatus === 'ok';
+    // Public payload is intentionally minimal — enough for the orchestrator to
+    // decide healthy/unhealthy, without disclosing NODE_ENV, pid/worker layout,
+    // CPU count or feature flags to anonymous callers. Verbose diagnostics are
+    // available in-process via logs.
     res.status(healthy ? 200 : 503).json({
       success: healthy,
       status: healthy ? 'healthy' : 'unhealthy',
       service: 'sawa-server',
-      environment: env.NODE_ENV,
-      db: { type: 'postgresql (prisma)', status: dbStatus },
+      db: { status: dbStatus },
       redis: { status: redisStatus },
-      // Cluster diagnostics: pmId is the PM2 worker index (undefined => single
-      // fork process). Hitting /health repeatedly should surface different
-      // pid/pmId pairs when cluster mode is live. cpus = cores visible to Node.
-      worker: {
-        pmId: process.env.pm_id ?? process.env.NODE_APP_INSTANCE ?? 'single',
-        pid: process.pid,
-        cpus: os.cpus().length,
-        uptimeSec: Math.round(process.uptime()),
-      },
-      // pushEnabled === false means FIREBASE_SERVICE_ACCOUNT_JSON is missing or
-      // invalid on this server → no push notifications will be delivered.
-      pushEnabled: isPushEnabled(),
       timestamp: new Date().toISOString(),
     });
   });
@@ -310,7 +323,7 @@ export const createApp = (): Application => {
   // ─── Share Deep-Link Redirect Pages ─────────────────────────────────────────
   // /share/community/:id — opens app if installed, store otherwise.
   app.get('/share/community/:id', async (req: Request, res: Response) => {
-    const { id } = req.params;
+    const id = safeLinkId(req.params.id);
 
     let communityName = 'a community';
     let communityCity = '';
@@ -339,7 +352,7 @@ export const createApp = (): Application => {
 
   // /share/couple/:id — opens the couple's profile in the app, store otherwise.
   app.get('/share/couple/:id', async (req: Request, res: Response) => {
-    const { id } = req.params;
+    const id = safeLinkId(req.params.id);
 
     let coupleName = 'a couple';
     try {

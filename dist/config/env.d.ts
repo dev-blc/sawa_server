@@ -10,9 +10,9 @@ export declare const env: {
     RATE_LIMIT_WINDOW_MS: number;
     RATE_LIMIT_MAX: number;
     S3_REGION: string;
+    WHATSAPP_NOTIFICATIONS_ENABLED: boolean;
+    WHATSAPP_EXCLUDE_TYPES: string;
     GROQ_API_KEY: string;
-    ADMIN_EMAIL: string;
-    ADMIN_PASSWORD: string;
     SUBSCRIPTIONS_ENFORCED: boolean;
     APPLE_BUNDLE_ID: string;
     APPLE_ENVIRONMENT: "Sandbox" | "Production";
@@ -39,6 +39,10 @@ export declare const env: {
     TWILIO_ACCOUNT_SID?: string | undefined;
     TWILIO_AUTH_TOKEN?: string | undefined;
     TWILIO_PHONE_NUMBER?: string | undefined;
+    TWILIO_WHATSAPP_FROM?: string | undefined;
+    TWILIO_WHATSAPP_CONTENT_SID?: string | undefined;
+    ADMIN_EMAIL?: string | undefined;
+    ADMIN_PASSWORD?: string | undefined;
     APPLE_ISSUER_ID?: string | undefined;
     APPLE_KEY_ID?: string | undefined;
     APPLE_PRIVATE_KEY?: string | undefined;

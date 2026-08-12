@@ -367,6 +367,15 @@ class CoupleService {
         const updated = await prisma_1.prisma.couple.findUnique({ where: { coupleId }, include: { partner1: true, partner2: true } });
         return this._formatCouple(updated);
     }
+    // Fields on the User model that must NEVER be serialized to a client.
+    // (Password hash, refresh-token hash and the raw push token are secrets.)
+    _sanitizePartner(partner) {
+        if (!partner)
+            return partner;
+        const { password, refreshTokenHash, pushToken, ...safe } = partner;
+        safe._id = partner.id;
+        return safe;
+    }
     _formatCouple(couple) {
         if (!couple)
             return null;
@@ -380,10 +389,12 @@ class CoupleService {
             // Add legacy alias for "What we are looking for"
             lookingFor: (couple.matchCriteria && couple.matchCriteria.length > 0) ? couple.matchCriteria[0] : ""
         };
+        // Strip partner secrets (password/refreshTokenHash/pushToken) before the
+        // couple object is returned to any client.
         if (formatted.partner1)
-            formatted.partner1._id = formatted.partner1.id;
+            formatted.partner1 = this._sanitizePartner(formatted.partner1);
         if (formatted.partner2)
-            formatted.partner2._id = formatted.partner2.id;
+            formatted.partner2 = this._sanitizePartner(formatted.partner2);
         return formatted;
     }
     async getCouple(coupleId) {
@@ -418,13 +429,26 @@ class CoupleService {
         const couple = await prisma_1.prisma.couple.findUnique({
             where: { coupleId },
             include: {
-                partner1: { select: { id: true, name: true, email: true, dob: true } },
-                partner2: { select: { id: true, name: true, email: true, dob: true } },
+                // Public profile card — never expose partner email addresses here.
+                partner1: { select: { id: true, name: true, dob: true } },
+                partner2: { select: { id: true, name: true, dob: true } },
             }
         });
         if (!couple)
             return null;
-        return this._formatCouple({ ...couple, communities: [] });
+        // Strip couple-level fields that must never leak to another couple viewing a
+        // public profile card:
+        //  • blocked / bannedAt / banReason — moderation internals.
+        //  • locationLatitude / locationLongitude — EXACT home coordinates. Discovery
+        //    only ever exposes a coarse `distance` label; leaking raw lat/lng here is
+        //    a stalking/safety risk, so it must never appear on a profile card.
+        const publicCouple = { ...couple };
+        delete publicCouple.blocked;
+        delete publicCouple.bannedAt;
+        delete publicCouple.banReason;
+        delete publicCouple.locationLatitude;
+        delete publicCouple.locationLongitude;
+        return this._formatCouple({ ...publicCouple, communities: [] });
     }
     async subscribe(coupleId) {
         return prisma_1.prisma.couple.update({
@@ -567,24 +591,44 @@ class CoupleService {
         const couple = await prisma_1.prisma.couple.findUnique({ where: { coupleId } });
         if (!couple)
             return { success: true };
-        // Delete dependent records manually to satisfy foreign key constraints
-        await prisma_1.prisma.onboardingAnswer.deleteMany({ where: { coupleId } });
-        await prisma_1.prisma.message.deleteMany({ where: { senderId: coupleId } });
-        await prisma_1.prisma.notification.deleteMany({
-            where: { OR: [{ recipientId: coupleId }, { senderId: coupleId }] }
+        // Private chats hold messages from BOTH couples keyed by matchId. Deleting
+        // only `senderId = coupleId` would leave the partner's messages orphaned
+        // (matchId set-null) once the matches are removed — so gather this couple's
+        // match ids and delete every message under them.
+        const myMatches = await prisma_1.prisma.match.findMany({
+            where: { OR: [{ couple1Id: coupleId }, { couple2Id: coupleId }, { actionById: coupleId }] },
+            select: { id: true },
         });
-        await prisma_1.prisma.match.deleteMany({
-            where: { OR: [{ couple1Id: coupleId }, { couple2Id: coupleId }, { actionById: coupleId }] }
-        });
-        await prisma_1.prisma.communityMember.deleteMany({ where: { coupleId } });
-        await prisma_1.prisma.communityAdmin.deleteMany({ where: { coupleId } });
-        await prisma_1.prisma.communityJoinRequest.deleteMany({ where: { coupleId } });
-        await prisma_1.prisma.report.deleteMany({
-            where: { OR: [{ reporterId: coupleId }, { targetId: coupleId }] }
-        });
-        // 2. Delete the associated Users and finally the Couple
-        await prisma_1.prisma.user.deleteMany({ where: { coupleId } });
-        await prisma_1.prisma.couple.delete({ where: { coupleId } });
+        const matchIds = myMatches.map((m) => m.id);
+        // Run the whole deletion in ONE transaction so a mid-way failure can never
+        // leave a half-deleted account (privacy/GDPR: no dangling personal data).
+        // Order deletes children-before-parents to satisfy foreign keys. Includes
+        // the couple-scoped tables that have no FK to Couple and were previously
+        // never cleaned up (Us Space cycle/game data + subscription).
+        await prisma_1.prisma.$transaction([
+            prisma_1.prisma.onboardingAnswer.deleteMany({ where: { coupleId } }),
+            prisma_1.prisma.message.deleteMany({ where: { matchId: { in: matchIds } } }),
+            prisma_1.prisma.message.deleteMany({ where: { senderId: coupleId } }),
+            prisma_1.prisma.notification.deleteMany({
+                where: { OR: [{ recipientId: coupleId }, { senderId: coupleId }] },
+            }),
+            prisma_1.prisma.match.deleteMany({
+                where: { OR: [{ couple1Id: coupleId }, { couple2Id: coupleId }, { actionById: coupleId }] },
+            }),
+            prisma_1.prisma.communityMember.deleteMany({ where: { coupleId } }),
+            prisma_1.prisma.communityAdmin.deleteMany({ where: { coupleId } }),
+            prisma_1.prisma.communityJoinRequest.deleteMany({ where: { coupleId } }),
+            prisma_1.prisma.report.deleteMany({
+                where: { OR: [{ reporterId: coupleId }, { targetId: coupleId }] },
+            }),
+            prisma_1.prisma.fridgeNote.deleteMany({ where: { coupleId } }),
+            prisma_1.prisma.plannedDate.deleteMany({ where: { coupleId } }),
+            prisma_1.prisma.usGameScore.deleteMany({ where: { coupleId } }),
+            prisma_1.prisma.coupleUsState.deleteMany({ where: { coupleId } }),
+            prisma_1.prisma.subscription.deleteMany({ where: { coupleId } }),
+            prisma_1.prisma.user.deleteMany({ where: { coupleId } }),
+            prisma_1.prisma.couple.delete({ where: { coupleId } }),
+        ]);
         return { success: true };
     }
 }

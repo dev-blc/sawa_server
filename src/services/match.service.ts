@@ -666,10 +666,17 @@ export class MatchService {
     // Only delete SKIPPED records so un-met couples re-appear in the feed.
     // NEVER delete pending matches (outgoing OR incoming) — doing so would silently
     // destroy connection requests that the other person may be about to accept.
+    //
+    // Skips from TODAY are retained: they still count toward the per-day
+    // connection quota, so refreshing can't be used to reset today's usage.
+    // Couples skipped on earlier days still re-surface as intended.
+    const startOfDay = new Date();
+    startOfDay.setUTCHours(0, 0, 0, 0);
     await prisma.match.deleteMany({
       where: {
         OR: [{ couple1Id: me.coupleId }, { couple2Id: me.coupleId }],
         status: 'skipped',
+        createdAt: { lt: startOfDay },
       }
     });
 
@@ -677,7 +684,7 @@ export class MatchService {
   }
 
   async blockCouple(requestingCoupleId: string, targetCoupleIdStr: string) {
-    const me = await prisma.couple.findUnique({ where: { coupleId: requestingCoupleId }, select: { coupleId: true } });
+    const me = await prisma.couple.findUnique({ where: { coupleId: requestingCoupleId }, select: { coupleId: true, blocked: true } });
     if (!me) throw new AppError('Profile not found', 404);
 
     const target = await prisma.couple.findFirst({
@@ -686,29 +693,44 @@ export class MatchService {
     });
     if (!target) throw new AppError('Target profile not found', 404);
 
-    // 1. Add to blocked list + create report record (so admin can see the block)
-    await Promise.all([
-      prisma.couple.update({
-        where: { coupleId: me.coupleId },
-        data: { blocked: { push: target.coupleId } }
-      }),
-      prisma.report.create({
-        data: {
-          reporterId: me.coupleId,
-          targetId: target.coupleId,
-          reason: 'Blocked user',
-          details: 'User blocked from app',
-          status: 'pending',
-        }
-      }),
-    ]);
+    // 1. Add to blocked list + create report record (so admin can see the block).
+    // Guard against repeat calls: without this, blocking the same couple twice
+    // would push a duplicate into `blocked[]` (unbounded growth) and spawn a new
+    // "Blocked user" report row each time.
+    const alreadyBlocked = Array.isArray(me.blocked) && me.blocked.includes(target.coupleId);
+    if (!alreadyBlocked) {
+      await Promise.all([
+        prisma.couple.update({
+          where: { coupleId: me.coupleId },
+          data: { blocked: { push: target.coupleId } }
+        }),
+        prisma.report.create({
+          data: {
+            reporterId: me.coupleId,
+            targetId: target.coupleId,
+            reason: 'Blocked user',
+            details: 'User blocked from app',
+            status: 'pending',
+          }
+        }),
+      ]);
+    }
 
-    // 2. Destroy matches permanently
-    await prisma.match.deleteMany({
-      where: {
-        OR: [{ couple1Id: me.coupleId, couple2Id: target.coupleId }, { couple2Id: me.coupleId, couple1Id: target.coupleId }]
-      }
-    });
+    // 2. Destroy matches permanently — and their messages, in one transaction,
+    // so no message is left orphaned with matchId set-null (which corrupts
+    // unread-count queries and is never cleaned up otherwise).
+    const blockWhere = {
+      OR: [
+        { couple1Id: me.coupleId, couple2Id: target.coupleId },
+        { couple2Id: me.coupleId, couple1Id: target.coupleId },
+      ],
+    };
+    const blockedMatches = await prisma.match.findMany({ where: blockWhere, select: { id: true } });
+    const blockedMatchIds = blockedMatches.map((m) => m.id);
+    await prisma.$transaction([
+      prisma.message.deleteMany({ where: { matchId: { in: blockedMatchIds } } }),
+      prisma.match.deleteMany({ where: blockWhere }),
+    ]);
 
     // 3. Emit event to trigger UI refresh for blocker
     const io = (global as any).io;
@@ -736,15 +758,20 @@ export class MatchService {
     });
     if (!target) throw new AppError('Target profile not found', 404);
 
-    // Delete the match record so the connection is fully reset
-    await prisma.match.deleteMany({
-      where: {
-        OR: [
-          { couple1Id: me.coupleId, couple2Id: target.coupleId },
-          { couple2Id: me.coupleId, couple1Id: target.coupleId },
-        ]
-      }
-    });
+    // Delete the match record (and its messages) so the connection is fully
+    // reset with no orphaned messages left behind (matchId set-null).
+    const unfriendWhere = {
+      OR: [
+        { couple1Id: me.coupleId, couple2Id: target.coupleId },
+        { couple2Id: me.coupleId, couple1Id: target.coupleId },
+      ],
+    };
+    const unfriendMatches = await prisma.match.findMany({ where: unfriendWhere, select: { id: true } });
+    const unfriendMatchIds = unfriendMatches.map((m) => m.id);
+    await prisma.$transaction([
+      prisma.message.deleteMany({ where: { matchId: { in: unfriendMatchIds } } }),
+      prisma.match.deleteMany({ where: unfriendWhere }),
+    ]);
 
     // Notify both sides so UI updates immediately
     const io = (global as any).io;

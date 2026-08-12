@@ -11,6 +11,30 @@ const feelingKey = (coupleId, userId) => `us:feeling:${coupleId}:${userId}`;
 /** An empty Tic-Tac-Toe board, encoded as 9 chars ('_' = empty cell). */
 const TTT_EMPTY_BOARD = '_________';
 /**
+ * An empty Dots & Boxes board (3×3 boxes): 12 horizontal edges, 12 vertical
+ * edges, 9 box owners, then the turn — matching the client serialization in
+ * `SAWA/src/Utils/dotsAndBoxes.ts`. Stored in the same `gameBoard` text column.
+ */
+const DAB_EMPTY_BOARD = `${'0'.repeat(12)}|${'0'.repeat(12)}|${'-'.repeat(9)}|X`;
+/**
+ * A fallback Memory Match board (client normally supplies the shuffled layout in
+ * the challenge `state`). Format mirrors SAWA/src/Utils/memoryMatch.ts:
+ * "<16 emoji ids>|<16 owners>|<flipped>|<turn>".
+ */
+const MEM_EMPTY_BOARD = `0123456701234567|${'-'.repeat(16)}||X`;
+/** Derive the game type from a gameId (client prefixes ids with the type). */
+const gameTypeOf = (gameId) => typeof gameId === 'string' && gameId.startsWith('dab_')
+    ? 'dab'
+    : typeof gameId === 'string' && gameId.startsWith('mem_')
+        ? 'mem'
+        : 'ttt';
+/** The starting board string for a given game type. */
+const emptyBoardFor = (type) => type === 'dab' ? DAB_EMPTY_BOARD : type === 'mem' ? MEM_EMPTY_BOARD : TTT_EMPTY_BOARD;
+/** Whether the client owns the serialized board (state-based games). */
+const isStateGame = (type) => type === 'dab' || type === 'mem';
+/** Human-readable game name for notifications. */
+const gameNameFor = (type) => type === 'dab' ? 'Dots & Boxes' : type === 'mem' ? 'Memory Match' : 'Tic-Tac-Toe';
+/**
  * Clear the couple's persisted Tic-Tac-Toe session (challenge withdrawn, quit,
  * or game finished). Leaves the win-streak fields untouched.
  */
@@ -411,7 +435,14 @@ const registerUsHandlers = (io, socket) => {
         if (!userId || !coupleId || !payload?.gameId)
             return;
         const senderName = firstName(userName || 'Your partner');
-        logger_1.logger.info(`[UsSocket] game challenge ${payload.gameId} from ${userId} in couple ${coupleId}`);
+        const gameType = payload.gameType || gameTypeOf(payload.gameId);
+        const gameName = gameNameFor(gameType);
+        // For state-based games (Dots & Boxes, Memory Match) the challenger supplies
+        // the initial board so both devices share it (memory shuffle must match).
+        const emptyBoard = isStateGame(gameType) && typeof payload.state === 'string' && payload.state.includes('|')
+            ? payload.state
+            : emptyBoardFor(gameType);
+        logger_1.logger.info(`[UsSocket] game challenge ${payload.gameId} (${gameType}) from ${userId} in couple ${coupleId}`);
         // 0. Persist a shared PENDING session so both partners can (re)join the same
         //    challenge even after leaving the screen — this is what prevents the
         //    "stale challenge" where the requester left and the partner got stuck.
@@ -423,7 +454,7 @@ const registerUsHandlers = (io, socket) => {
                     gameSessionId: payload.gameId,
                     gameSessionStatus: 'pending',
                     gameChallengerId: userId,
-                    gameBoard: TTT_EMPTY_BOARD,
+                    gameBoard: emptyBoard,
                     gameTurn: 'X',
                     gameSessionAt: new Date(),
                 },
@@ -431,7 +462,7 @@ const registerUsHandlers = (io, socket) => {
                     gameSessionId: payload.gameId,
                     gameSessionStatus: 'pending',
                     gameChallengerId: userId,
-                    gameBoard: TTT_EMPTY_BOARD,
+                    gameBoard: emptyBoard,
                     gameTurn: 'X',
                     gameSessionAt: new Date(),
                 },
@@ -440,9 +471,12 @@ const registerUsHandlers = (io, socket) => {
         catch (err) {
             logger_1.logger.warn(`[UsSocket] persist challenge failed: ${err.message}`);
         }
-        // 1. Instant relay so an online partner sees the invite immediately.
+        // 1. Instant relay so an online partner sees the invite immediately. The
+        //    board `state` is included so state-based games render the shared layout.
         io.to(`couple:${coupleId}`).except(socket.id).emit('us:game:challenge', {
             gameId: payload.gameId,
+            gameType,
+            state: isStateGame(gameType) ? emptyBoard : undefined,
             from: senderName,
             fromUserId: userId,
             at: new Date().toISOString(),
@@ -452,9 +486,9 @@ const registerUsHandlers = (io, socket) => {
             coupleId,
             senderUserId: userId,
             subtype: 'us_game_challenge',
-            title: `${senderName} challenged you to Tic-Tac-Toe 🎮`,
+            title: `${senderName} challenged you to ${gameName} 🎮`,
             message: 'Tap to accept and play!',
-            extraData: { gameId: payload.gameId, ...(0, notif_1.i18nData)('us.game.challenge', { name: senderName }) },
+            extraData: { gameId: payload.gameId, gameType, ...(0, notif_1.i18nData)('us.game.challenge', { name: senderName, game: gameName }) },
         });
         io.to(`couple:${coupleId}`).except(socket.id).emit('notification:new', { type: 'us_game_challenge' });
         // 3. Push — only to the partner's device.
@@ -462,13 +496,14 @@ const registerUsHandlers = (io, socket) => {
         if (partnerId) {
             (0, push_service_1.pushToUser)(partnerId, {
                 title: `${senderName} challenged you 🎮`,
-                body: 'Tic-Tac-Toe! Tap to accept and play',
+                body: `${gameName}! Tap to accept and play`,
                 data: {
                     type: 'us_game_challenge',
                     gameId: payload.gameId,
+                    gameType,
                     navigate: 'Notifications',
                     ...(senderPhoto ? { senderPhoto } : {}),
-                    ...(0, notif_1.i18nData)('us.game.challenge', { name: senderName }),
+                    ...(0, notif_1.i18nData)('us.game.challenge', { name: senderName, game: gameName }),
                 },
                 collapseKey: 'us_game',
             }).catch(() => null);
@@ -478,38 +513,70 @@ const registerUsHandlers = (io, socket) => {
     socket.on('us:game:accept', async (payload) => {
         if (!userId || !coupleId || !payload?.gameId)
             return;
+        const gameType = gameTypeOf(payload.gameId);
         // Flip the shared session to ACTIVE so a rejoining partner resumes the match.
+        let board = null;
         try {
             await prisma_1.prisma.coupleUsState.updateMany({
                 where: { coupleId, gameSessionId: payload.gameId },
                 data: { gameSessionStatus: 'active', gameSessionAt: new Date() },
             });
+            const st = await prisma_1.prisma.coupleUsState.findUnique({ where: { coupleId } });
+            if (st?.gameSessionId === payload.gameId)
+                board = st.gameBoard || null;
         }
         catch (err) {
             logger_1.logger.warn(`[UsSocket] persist accept failed: ${err.message}`);
         }
         io.to(`couple:${coupleId}`).emit('us:game:start', {
             gameId: payload.gameId,
+            gameType,
+            // Share the stored board so state-based games start from the same layout.
+            state: isStateGame(gameType) ? board ?? undefined : undefined,
             accepterUserId: userId,
             accepterName: firstName(userName || ''),
             at: new Date().toISOString(),
         });
     });
     // ── us:game:move — relay a board move to the partner (fast path) ───────
+    // Tic-Tac-Toe sends { cell, symbol }; Dots & Boxes sends { edge, symbol,
+    // state, turn } where `state` is the full serialized board (client-authoritative,
+    // mirroring how TTT win detection lives on the client). The server relays the
+    // move verbatim and persists the resulting board for resume.
     socket.on('us:game:move', async (payload) => {
         if (!userId || !coupleId || !payload?.gameId)
             return;
+        const gameType = gameTypeOf(payload.gameId);
         // Relay first (fast path), then persist the board so both can resume.
         io.to(`couple:${coupleId}`).except(socket.id).emit('us:game:move', {
             gameId: payload.gameId,
+            gameType,
             cell: payload.cell,
             symbol: payload.symbol,
+            edge: payload.edge,
+            state: payload.state,
+            turn: payload.turn,
             byUserId: userId,
         });
         try {
             const st = await prisma_1.prisma.coupleUsState.findUnique({ where: { coupleId } });
-            if (st?.gameSessionId === payload.gameId &&
-                typeof payload.cell === 'number' &&
+            if (st?.gameSessionId !== payload.gameId)
+                return;
+            if (isStateGame(gameType)) {
+                // Client is authoritative for Dots & Boxes / Memory Match — persist the
+                // serialized state verbatim so both partners can resume.
+                if (typeof payload.state === 'string' && payload.state.includes('|')) {
+                    await prisma_1.prisma.coupleUsState.update({
+                        where: { coupleId },
+                        data: {
+                            gameBoard: payload.state,
+                            gameTurn: payload.turn === 'O' ? 'O' : 'X',
+                            gameSessionAt: new Date(),
+                        },
+                    });
+                }
+            }
+            else if (typeof payload.cell === 'number' &&
                 payload.cell >= 0 &&
                 payload.cell < 9) {
                 const arr = (st.gameBoard || TTT_EMPTY_BOARD).split('');

@@ -1,9 +1,10 @@
+import crypto from 'crypto';
 import twilio from 'twilio';
 import { prisma } from '../lib/prisma';
-import { OTP_EXPIRES_IN_MINUTES } from '../constants/index';
+import { OTP_EXPIRES_IN_MINUTES, OTP_MAX_ATTEMPTS } from '../constants/index';
 import { logger } from '../utils/logger';
 import { AppError } from '../utils/AppError';
-import { cacheGet, cacheSet } from '../lib/cache';
+import { cacheGet, cacheSet, cacheInvalidate } from '../lib/cache';
 
 /**
  * How long (seconds) a just-verified code stays "replayable". A second verify
@@ -15,6 +16,14 @@ import { cacheGet, cacheSet } from '../lib/cache';
  */
 const OTP_REPLAY_TTL_SECONDS = 600;
 const otpOkKey = (phone: string, code: string) => `otp_ok:${phone}:${code}`;
+
+// Brute-force guard: after OTP_MAX_ATTEMPTS wrong codes for a phone, verification
+// is locked for this window. 4-digit codes are only 10k combinations, so without
+// this an attacker could exhaust them within a single valid code's lifetime. The
+// counter is stored in Redis (shared across cluster workers) and resets on the
+// first correct code.
+const OTP_LOCKOUT_TTL_SECONDS = 15 * 60;
+const otpFailKey = (phone: string) => `otp_fail:${phone}`;
 
 // ─── CONFIGURATION ──────────────────────────────────────────────────────────
 
@@ -81,7 +90,8 @@ export class OtpService {
       await prisma.otpToken.deleteMany({ where: { phone } });
     }
 
-    const code = Math.floor(1000 + Math.random() * 9000).toString();
+    // Use a CSPRNG (not Math.random) so codes are not predictable.
+    const code = crypto.randomInt(1000, 10000).toString();
     const expiresAt = new Date(Date.now() + OTP_EXPIRES_IN_MINUTES * 60 * 1000);
 
     await prisma.otpToken.create({
@@ -116,6 +126,21 @@ export class OtpService {
 
     const code = (enteredCode ?? '').trim();
 
+    // Brute-force guard: refuse verification once a phone has failed too many
+    // times within the lockout window.
+    let failCount = 0;
+    try {
+      const raw = await cacheGet(otpFailKey(phone));
+      failCount = raw ? parseInt(raw, 10) || 0 : 0;
+    } catch { /* best-effort — fail open on cache outage */ }
+    if (failCount >= OTP_MAX_ATTEMPTS) {
+      throw new AppError(
+        'Too many incorrect codes. Please wait a few minutes before trying again.',
+        429,
+        'OTP_LOCKED',
+      );
+    }
+
     // Accept ANY still-valid code issued for this phone (not just the latest).
     // A user may receive more than one code (resend, re-navigation, an older SMS
     // still on screen); as long as the code they entered hasn't expired, let them
@@ -132,6 +157,8 @@ export class OtpService {
       // Remember this success briefly so a duplicate verify with the same code
       // (double-submit / retry / lost response) still succeeds.
       try { await cacheSet(otpOkKey(phone, code), coupleId ?? '', OTP_REPLAY_TTL_SECONDS); } catch { /* best-effort */ }
+      // Reset the failed-attempt counter on the first correct code.
+      try { await cacheInvalidate(otpFailKey(phone)); } catch { /* best-effort */ }
       return { valid: true, coupleId };
     }
 
@@ -141,9 +168,14 @@ export class OtpService {
     try {
       const cached = await cacheGet(otpOkKey(phone, code));
       if (cached !== null) {
+        try { await cacheInvalidate(otpFailKey(phone)); } catch { /* best-effort */ }
         return { valid: true, coupleId: cached || null };
       }
     } catch { /* best-effort */ }
+
+    // Wrong code — record the failed attempt (best-effort) so repeated guesses
+    // trip the lockout above.
+    try { await cacheSet(otpFailKey(phone), String(failCount + 1), OTP_LOCKOUT_TTL_SECONDS); } catch { /* best-effort */ }
 
     return { valid: false, coupleId: null };
   }

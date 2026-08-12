@@ -89,6 +89,9 @@ model Couple {
   @@index([partner2Id])
   @@index([isProfileComplete, isOpenToMeeting, locationCity])
   @@index([bannedAt])
+  // GIN index so `blocked: { has: X }` (profile-view / report-stats) uses an
+  // index instead of a sequential scan on every couple row.
+  @@index([blocked], type: Gin)
   @@map("couples")
 }
 
@@ -120,6 +123,7 @@ model Community {
   messages      Message[]
 
   @@index([city])
+  @@index([createdAt])
   @@map("communities")
 }
 
@@ -179,6 +183,8 @@ model Match {
   @@index([couple1Id, status])
   @@index([status])
   @@index([createdAt])
+  // Hit on every GET /subscriptions/me (usage counting filters by actionById).
+  @@index([actionById])
   @@map("matches")
 }
 
@@ -210,6 +216,8 @@ model Message {
   // Speeds up unread-count queries that filter by senderId within a chat.
   @@index([matchId, senderId])
   @@index([communityId, senderId])
+  // Used by the admin per-user message-count query (delete/inspect flows).
+  @@index([senderUserId])
   @@map("messages")
 }
 
@@ -277,6 +285,7 @@ model Report {
   @@index([reporterId])
   @@index([targetId])
   @@index([status])
+  @@index([createdAt])
   @@map("reports")
 }
 
@@ -370,8 +379,9 @@ model Subscription {
   productId             String?
   // Apple StoreKit: stable id across renewals for the same subscription.
   originalTransactionId String?   @unique
-  // Google Play purchase token (Android — wired later).
-  purchaseToken         String?
+  // Google Play purchase token (Android). Unique so a single receipt can never
+  // be replayed to entitle multiple couples (multiple NULLs are allowed).
+  purchaseToken         String?   @unique
   trialUsed             Boolean   @default(false)
   trialStartedAt        DateTime?
   trialEndsAt           DateTime?

@@ -3,10 +3,11 @@ Object.defineProperty(exports, "__esModule", { value: true });
 const express_1 = require("express");
 const admin_controller_1 = require("../controllers/admin.controller");
 const adminAuth_1 = require("../middleware/adminAuth");
+const rateLimiter_1 = require("../middleware/rateLimiter");
 const router = (0, express_1.Router)();
 const controller = new admin_controller_1.AdminController();
-// Public admin login
-router.post('/login', controller.adminLogin);
+// Public admin login — rate-limited to throttle online password guessing.
+router.post('/login', rateLimiter_1.authRateLimiter, controller.adminLogin);
 // Lazy media (couple photo / community cover). Self-authenticates via ?token=
 // query param because <img> tags cannot send an Authorization header. Must be
 // registered BEFORE the header-based adminAuth middleware.

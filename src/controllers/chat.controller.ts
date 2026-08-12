@@ -10,6 +10,25 @@ import {
   isStorageConfigured,
 } from '../lib/storage';
 
+// ─── Authorization helpers (prevent chat IDOR) ────────────────────────────────
+// A couple may only read/write a private chat if it is one of the two matched
+// couples, and a group chat only if it is a member of that community.
+async function assertMatchParticipant(matchId: string, coupleId: string): Promise<void> {
+  const match = await prisma.match.findFirst({
+    where: { id: matchId, OR: [{ couple1Id: coupleId }, { couple2Id: coupleId }] },
+    select: { id: true },
+  });
+  if (!match) throw new AppError('Not authorized for this chat', 403, 'FORBIDDEN');
+}
+
+async function assertCommunityMember(communityId: string, coupleId: string): Promise<void> {
+  const member = await prisma.communityMember.findFirst({
+    where: { communityId, coupleId },
+    select: { communityId: true },
+  });
+  if (!member) throw new AppError('Not authorized for this community', 403, 'FORBIDDEN');
+}
+
 export const getUnreadCounts = async (req: Request, res: Response): Promise<void> => {
   if (!req.user) throw new AppError('Unauthorized', 401);
   const { coupleId } = req.user;
@@ -153,6 +172,9 @@ export const getGroupUnreadCounts = async (req: Request, res: Response): Promise
 export const getPrivateMessages = async (req: Request, res: Response): Promise<void> => {
   if (!req.user) throw new AppError('Unauthorized', 401);
   const { matchId } = req.params;
+  const { coupleId } = req.user;
+  if (!coupleId) throw new AppError('Couple ID required', 400);
+  await assertMatchParticipant(matchId, coupleId);
 
   const messages = await prisma.message.findMany({
     where: {
@@ -208,6 +230,7 @@ export const sendPrivateMessage = async (req: Request, res: Response): Promise<v
 
   const { userId, coupleId } = req.user!;
   if (!coupleId) throw new AppError('Couple ID required', 400);
+  await assertMatchParticipant(matchId, coupleId);
 
   const senderUser = await prisma.user.findUnique({
     where: { id: userId },
@@ -251,6 +274,9 @@ export const sendPrivateMessage = async (req: Request, res: Response): Promise<v
 export const getGroupMessages = async (req: Request, res: Response): Promise<void> => {
   if (!req.user) throw new AppError('Unauthorized', 401);
   const { communityId } = req.params;
+  const { coupleId } = req.user;
+  if (!coupleId) throw new AppError('Couple ID required', 400);
+  await assertCommunityMember(communityId, coupleId);
 
   const messages = await prisma.message.findMany({
     where: {
@@ -292,6 +318,7 @@ export const sendGroupMessage = async (req: Request, res: Response): Promise<voi
 
   const { userId, coupleId } = req.user!;
   if (!coupleId) throw new AppError('Couple ID required', 400);
+  await assertCommunityMember(communityId, coupleId);
 
   const senderUser = await prisma.user.findUnique({
     where: { id: userId },
@@ -399,6 +426,22 @@ export const markChatRead = async (req: Request, res: Response): Promise<void> =
   const { chatId } = req.params;
   if (!chatId) throw new AppError('Chat ID required', 400);
 
+  // Only allow marking a chat read if the caller participates in it (private
+  // match participant or community member) — otherwise it's an IDOR.
+  const [matchMembership, communityMembership] = await Promise.all([
+    prisma.match.findFirst({
+      where: { id: chatId, OR: [{ couple1Id: coupleId }, { couple2Id: coupleId }] },
+      select: { id: true },
+    }),
+    prisma.communityMember.findFirst({
+      where: { communityId: chatId, coupleId },
+      select: { communityId: true },
+    }),
+  ]);
+  if (!matchMembership && !communityMembership) {
+    throw new AppError('Not authorized for this chat', 403, 'FORBIDDEN');
+  }
+
   // Mark all unread messages read in ONE statement using array_append, instead
   // of fetching every row and issuing an UPDATE per message (old N+1 pattern).
   // `array_append(... )` with the NOT(... = ANY) guard is idempotent.
@@ -469,6 +512,7 @@ export const createChatUploadUrl = async (req: Request, res: Response): Promise<
  */
 export const getMediaUrl = async (req: Request, res: Response): Promise<void> => {
   if (!req.user) throw new AppError('Unauthorized', 401);
+  const { coupleId } = req.user;
 
   if (!isStorageConfigured()) {
     throw new AppError('Media storage is not configured', 503, 'STORAGE_UNAVAILABLE');
@@ -480,6 +524,40 @@ export const getMediaUrl = async (req: Request, res: Response): Promise<void> =>
   // Only allow our own media prefixes — never sign arbitrary keys.
   if (!key || !/^(voice|image)\//.test(key)) {
     throw new AppError('Invalid media reference', 400, 'INVALID_KEY');
+  }
+
+  // Authorization: keys are shaped `<folder>/<ownerCoupleId>/<uuid>.<ext>`. Only
+  // the owning couple, or a couple that shares a chat with them (a private match
+  // or a common community), may mint a download URL — otherwise any authed user
+  // could sign a URL for any object. (Legacy `anon/` uploads have no owner to
+  // check and rely on their unguessable UUID.)
+  const ownerCouple = key.split('/')[1] || '';
+  let allowed = ownerCouple === 'anon' || (!!coupleId && ownerCouple === coupleId);
+  if (!allowed && coupleId && ownerCouple) {
+    const [match, myComms] = await Promise.all([
+      prisma.match.findFirst({
+        where: {
+          OR: [
+            { couple1Id: coupleId, couple2Id: ownerCouple },
+            { couple1Id: ownerCouple, couple2Id: coupleId },
+          ],
+        },
+        select: { id: true },
+      }),
+      prisma.communityMember.findMany({ where: { coupleId }, select: { communityId: true } }),
+    ]);
+    if (match) {
+      allowed = true;
+    } else if (myComms.length) {
+      const shared = await prisma.communityMember.findFirst({
+        where: { coupleId: ownerCouple, communityId: { in: myComms.map((c) => c.communityId) } },
+        select: { communityId: true },
+      });
+      allowed = !!shared;
+    }
+  }
+  if (!allowed) {
+    throw new AppError('Not allowed to access this media', 403, 'FORBIDDEN');
   }
 
   const url = await createPresignedDownload(key);

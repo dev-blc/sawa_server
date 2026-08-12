@@ -16,6 +16,14 @@ const env_1 = require("../config/env");
 const getBypassPhones = () => {
     if (!env_1.env.BYPASS_PHONES)
         return new Set();
+    // Secure-by-default: the OTP bypass is a testing/demo backdoor and is DISABLED
+    // in production unless an operator explicitly opts in with
+    // BYPASS_PHONES_ALLOW_PROD=true. This prevents accidentally shipping a
+    // permanent OTP-less login for the listed numbers.
+    if (env_1.env.NODE_ENV === 'production' && process.env.BYPASS_PHONES_ALLOW_PROD !== 'true') {
+        logger_1.logger.warn('[auth] BYPASS_PHONES is set but ignored in production (set BYPASS_PHONES_ALLOW_PROD=true to force).');
+        return new Set();
+    }
     return new Set(env_1.env.BYPASS_PHONES.split(',').map(p => p.trim()).filter(Boolean));
 };
 /**
@@ -157,7 +165,10 @@ class AuthService {
         if (!user || !user.refreshTokenHash) {
             throw new AppError_1.AppError('Invalid refresh token', 401, 'INVALID_REFRESH_TOKEN');
         }
-        if (hashToken(refreshToken) !== user.refreshTokenHash) {
+        // Constant-time compare of the stored vs presented refresh-token hash.
+        const presented = Buffer.from(hashToken(refreshToken), 'utf8');
+        const stored = Buffer.from(user.refreshTokenHash, 'utf8');
+        if (presented.length !== stored.length || !crypto_1.default.timingSafeEqual(presented, stored)) {
             throw new AppError_1.AppError('Refresh token mismatch', 401, 'INVALID_REFRESH_TOKEN');
         }
         const resolvedCoupleId = payload.coupleId ?? user.coupleId ?? undefined;

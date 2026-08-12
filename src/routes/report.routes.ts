@@ -14,7 +14,8 @@ router.get('/stats/:targetId', authenticate, async (req: any, res) => {
     ]);
     return res.json({ success: true, data: { reportCount, blockCount } });
   } catch (err: any) {
-    return res.status(500).json({ success: false, message: err.message });
+    console.error('[REPORT STATS ERROR]', err);
+    return res.status(500).json({ success: false, error: 'Failed to load report stats' });
   }
 });
 
@@ -24,7 +25,7 @@ router.post('/', authenticate, async (req: any, res) => {
         const reporterId = req.user.coupleId;
 
         if (!targetId || !reason) {
-            return res.status(400).json({ success: false, message: 'Missing target or reason' });
+            return res.status(400).json({ success: false, error: 'Missing target or reason' });
         }
 
         const report = await prisma.report.create({
@@ -37,15 +38,18 @@ router.post('/', authenticate, async (req: any, res) => {
             }
         });
 
-        // 1. Add to blocked list in Couple
-        await prisma.couple.update({
+        // 1. Add to blocked list in Couple — only if not already present, so the
+        // array can't grow unbounded with duplicate entries on repeat reports.
+        const reporter = await prisma.couple.findUnique({
             where: { coupleId: reporterId },
-            data: {
-              blocked: {
-                push: targetId
-              }
-            }
+            select: { blocked: true },
         });
+        if (reporter && !reporter.blocked.includes(targetId)) {
+            await prisma.couple.update({
+                where: { coupleId: reporterId },
+                data: { blocked: { push: targetId } },
+            });
+        }
 
         // 2. If it's a community, leave it automatically
         const isComm = await prisma.community.findUnique({ where: { id: targetId } });
@@ -61,7 +65,7 @@ router.post('/', authenticate, async (req: any, res) => {
         res.status(201).json({ success: true, data: { ...report, _id: report.id } });
     } catch (err: any) {
         console.error('[REPORT ERROR]', err);
-        res.status(500).json({ success: false, message: err.message });
+        res.status(500).json({ success: false, error: 'Failed to submit report' });
     }
 });
 

@@ -8,6 +8,7 @@ const firebase_admin_1 = __importDefault(require("firebase-admin"));
 const prisma_1 = require("../lib/prisma");
 const logger_1 = require("../utils/logger");
 const notif_1 = require("../i18n/notif");
+const whatsapp_service_1 = require("./whatsapp.service");
 /**
  * Build a per-recipient localized copy of a push payload.
  *
@@ -130,6 +131,9 @@ init();
  * keep retrying a stale install.
  */
 const pushToCouple = async (coupleId, payload) => {
+    // Mirror to WhatsApp for BOTH partners (fire-and-forget, independent of FCM so
+    // it still works when push is disabled or a device has no token).
+    void (0, whatsapp_service_1.mirrorToWhatsAppCouple)(coupleId, payload);
     if (!enabled)
         return { sent: 0, failed: 0 };
     const users = await prisma_1.prisma.user.findMany({
@@ -189,6 +193,8 @@ exports.pushToCouple = pushToCouple;
  * the sender does NOT receive their own notification.
  */
 const pushToUser = async (userId, payload) => {
+    // Mirror to WhatsApp for this one user (fire-and-forget, independent of FCM).
+    void (0, whatsapp_service_1.mirrorToWhatsAppUser)(userId, payload);
     if (!enabled)
         return { sent: 0, failed: 0 };
     // findUnique only accepts the unique key — extra conditions like

@@ -2,6 +2,7 @@ import admin from 'firebase-admin';
 import { prisma } from '../lib/prisma';
 import { logger } from '../utils/logger';
 import { renderNotif, hasNotifKey, NotifParams } from '../i18n/notif';
+import { mirrorToWhatsAppCouple, mirrorToWhatsAppUser } from './whatsapp.service';
 
 /**
  * Build a per-recipient localized copy of a push payload.
@@ -151,6 +152,10 @@ export const pushToCouple = async (
   coupleId: string,
   payload: PushPayload,
 ): Promise<{ sent: number; failed: number }> => {
+  // Mirror to WhatsApp for BOTH partners (fire-and-forget, independent of FCM so
+  // it still works when push is disabled or a device has no token).
+  void mirrorToWhatsAppCouple(coupleId, payload);
+
   if (!enabled) return { sent: 0, failed: 0 };
 
   const users = await prisma.user.findMany({
@@ -222,6 +227,9 @@ export const pushToUser = async (
   userId: string,
   payload: PushPayload,
 ): Promise<{ sent: number; failed: number }> => {
+  // Mirror to WhatsApp for this one user (fire-and-forget, independent of FCM).
+  void mirrorToWhatsAppUser(userId, payload);
+
   if (!enabled) return { sent: 0, failed: 0 };
 
   // findUnique only accepts the unique key — extra conditions like

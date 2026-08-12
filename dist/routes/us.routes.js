@@ -2,6 +2,7 @@
 Object.defineProperty(exports, "__esModule", { value: true });
 const express_1 = require("express");
 const authenticate_1 = require("../middleware/authenticate");
+const adminAuth_1 = require("../middleware/adminAuth");
 const cache_1 = require("../lib/cache");
 const prisma_1 = require("../lib/prisma");
 const logger_1 = require("../utils/logger");
@@ -153,6 +154,17 @@ router.post('/planned-dates', authenticate_1.authenticate, async (req, res) => {
     try {
         // Stable id lets multiple plans live on the same day; upsert by id.
         const entryId = id || `${rawDate}__${activity}__${time ?? ''}`;
+        // Ownership guard: the client can supply `id`, and upsert's `update` branch
+        // would otherwise let a caller overwrite (and reassign `coupleId` on) another
+        // couple's planned date. Reject any id already owned by a different couple.
+        const existing = await prisma_1.prisma.plannedDate.findUnique({
+            where: { id: entryId },
+            select: { coupleId: true },
+        });
+        if (existing && existing.coupleId !== coupleId) {
+            res.status(403).json({ success: false, error: 'Not allowed' });
+            return;
+        }
         const data = {
             coupleId,
             activity,
@@ -235,8 +247,8 @@ router.delete('/my-feeling', authenticate_1.authenticate, async (req, res) => {
         await (0, cache_1.cacheInvalidate)(`us:feeling:${coupleId}:${myUserId}`);
         res.json({ success: true });
     }
-    catch (err) {
-        res.status(500).json({ success: false, error: err.message });
+    catch {
+        res.status(500).json({ success: false, error: 'Failed to clear feeling' });
     }
 });
 // ─── Ask How They're Feeling ─────────────────────────────────────────────────
@@ -674,17 +686,29 @@ router.get('/game/active', authenticate_1.authenticate, async (req, res) => {
             res.json({ success: true, data: { session: null } });
             return;
         }
-        const board = (st.gameBoard || '_________')
-            .split('')
-            .map((c) => (c === 'X' ? 'X' : c === 'O' ? 'O' : null));
+        // Game type is encoded in the gameId prefix. Dots & Boxes and Memory Match
+        // store a serialized state string (contains '|'); Tic-Tac-Toe stores a
+        // 9-char board.
+        const gameType = st.gameSessionId.startsWith('dab_')
+            ? 'dab'
+            : st.gameSessionId.startsWith('mem_')
+                ? 'mem'
+                : 'ttt';
+        const board = gameType === 'ttt'
+            ? (st.gameBoard || '_________')
+                .split('')
+                .map((c) => (c === 'X' ? 'X' : c === 'O' ? 'O' : null))
+            : null;
         res.json({
             success: true,
             data: {
                 session: {
                     gameId: st.gameSessionId,
+                    gameType,
                     status: st.gameSessionStatus,
                     challengerId: st.gameChallengerId,
                     board,
+                    state: gameType === 'ttt' ? null : (st.gameBoard || null),
                     turn: st.gameTurn || 'X',
                 },
             },
@@ -698,13 +722,10 @@ router.get('/game/active', authenticate_1.authenticate, async (req, res) => {
 /**
  * POST /api/v1/us/admin-clear-feeling
  * Admin-only: clears any user's feeling by coupleId + userId.
- * Requires ?secret=SAWA_ADMIN_2026
+ * Protected by the admin JWT (adminAuth) — the previous hardcoded query-string
+ * secret was removed as it was a trivial, unauthenticated backdoor.
  */
-router.post('/admin-clear-feeling', async (req, res) => {
-    if (req.query.secret !== 'SAWA_ADMIN_2026') {
-        res.status(403).json({ success: false });
-        return;
-    }
+router.post('/admin-clear-feeling', adminAuth_1.adminAuth, async (req, res) => {
     const { coupleId, userId } = req.body;
     if (!coupleId || !userId) {
         res.status(400).json({ success: false, error: 'coupleId and userId required' });
@@ -714,8 +735,8 @@ router.post('/admin-clear-feeling', async (req, res) => {
         await (0, cache_1.cacheInvalidate)(`us:feeling:${coupleId}:${userId}`);
         res.json({ success: true, deleted: `us:feeling:${coupleId}:${userId}` });
     }
-    catch (err) {
-        res.status(500).json({ success: false, error: err.message });
+    catch {
+        res.status(500).json({ success: false, error: 'Failed to clear feeling' });
     }
 });
 exports.default = router;

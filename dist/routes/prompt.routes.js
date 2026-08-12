@@ -27,7 +27,8 @@ router.get('/active', async (req, res) => {
         res.status(200).json({ success: true, data: formatted });
     }
     catch (err) {
-        res.status(500).json({ success: false, message: err.message });
+        console.error('[PROMPT ACTIVE ERROR]', err);
+        res.status(500).json({ success: false, error: 'Failed to load prompts' });
     }
 });
 exports.default = router;

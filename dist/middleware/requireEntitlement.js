@@ -24,7 +24,10 @@ const requireEntitlement = (opts = {}) => {
             return;
         }
         const ent = await (0, subscription_service_1.getEntitlement)(coupleId);
-        if (!ent.active || !ent.tier || !ent.limits) {
+        const limits = ent.limits;
+        // limits is only null if no access path is defined for the state (should not
+        // happen now that free couples get FREE_LIMITS). Treat as paywalled.
+        if (!limits) {
             res.status(402).json({
                 success: false,
                 error: 'SUBSCRIPTION_REQUIRED',
@@ -32,9 +35,11 @@ const requireEntitlement = (opts = {}) => {
             });
             return;
         }
-        // Per-action limit checks.
-        // Creating a group needs a PAID plan — the trial can't create groups.
-        if (opts.gate === 'createGroup' && !ent.limits.canCreateGroup) {
+        // Per-action limit checks. Free and trial couples are allowed up to their
+        // limits; they only hit the paywall when they exceed them. Paid Prime has
+        // unlimited limits (INFINITY_SENTINEL), so these checks never trip for them.
+        // Creating a group needs a PAID plan — free/trial can't create groups.
+        if (opts.gate === 'createGroup' && !limits.canCreateGroup) {
             res.status(402).json({
                 success: false,
                 error: 'SUBSCRIPTION_REQUIRED',
@@ -43,15 +48,17 @@ const requireEntitlement = (opts = {}) => {
             return;
         }
         if (opts.gate === 'connection') {
-            const used = await (0, subscription_service_1.connectionsUsed)(coupleId);
-            if (used >= ent.limits.connections) {
+            // Per-DAY quota (5/day for free & trial), not lifetime.
+            const used = await (0, subscription_service_1.connectionsUsedToday)(coupleId);
+            if (used >= limits.connections) {
                 res.status(402).json({ success: false, error: 'SUBSCRIPTION_REQUIRED', reason: 'LIMIT_REACHED' });
                 return;
             }
         }
         if (opts.gate === 'joinGroup') {
+            // Total groups joined (5 total for free & trial).
             const used = await (0, subscription_service_1.groupsJoined)(coupleId);
-            if (used >= ent.limits.groups) {
+            if (used >= limits.groups) {
                 res.status(402).json({ success: false, error: 'SUBSCRIPTION_REQUIRED', reason: 'LIMIT_REACHED' });
                 return;
             }

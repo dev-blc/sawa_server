@@ -191,10 +191,17 @@ exports.resendOtp = resendOtp;
  * Body: { partnerPhone }
  */
 const invitePartner = async (req, res) => {
-    const { partnerPhone } = req.body;
-    if (!partnerPhone) {
-        throw new AppError_1.AppError('Partner phone number is required', 400);
-    }
+    // Unauthenticated by design (called during onboarding before the partner has an
+    // account), so validate/normalize strictly before it ever reaches Twilio.
+    // Per-IP rate limiting is applied at the route to bound SMS cost abuse.
+    const schema = zod_1.z.object({
+        partnerPhone: zod_1.z
+            .string()
+            .min(10, 'Partner phone must be at least 10 digits')
+            .max(15, 'Partner phone too long')
+            .regex(/^\d+$/, 'Partner phone must contain only digits'),
+    });
+    const { partnerPhone } = schema.parse(req.body);
     await auth_service_1.authService.sendPartnerInvite(partnerPhone);
     (0, response_1.sendSuccess)({
         res,

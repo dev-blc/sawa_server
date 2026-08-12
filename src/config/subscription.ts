@@ -41,8 +41,20 @@ export const PAID_LIMITS: TierLimits = {
   canCreateGroup: true,
 };
 
-/** The 7-day free trial — a taste: 5 swipes, 5 group joins, no group creation. */
+/** The 7-day free trial — a taste: 5 swipes/day, 5 group joins, no group creation. */
 export const TRIAL_LIMITS: TierLimits = {
+  connections: 5,
+  groups: 5,
+  canCreateGroup: false,
+};
+
+/**
+ * Non-subscribed (free) couples — trial not started, ended, or a lapsed
+ * subscription. Product rule: they are NOT locked out; they keep a limited
+ * taste of 5 connections/day + up to 5 group joins total, no group creation.
+ * They only hit the paywall when they exceed these limits.
+ */
+export const FREE_LIMITS: TierLimits = {
   connections: 5,
   groups: 5,
   canCreateGroup: false,
@@ -88,9 +100,17 @@ export const planForProduct = (productId: string | null | undefined): Plan | nul
   return null;
 };
 
-/** Limits for a given live state — the trial gets a reduced set. */
+/**
+ * Limits for a given live state:
+ *  - TRIALING            → reduced trial taste (5/day, 5 groups, no create)
+ *  - ACTIVE / GRACE      → full paid Prime (unlimited)
+ *  - NONE/EXPIRED/CANCELLED → free tier (still 5/day + 5 groups, no create)
+ *
+ * Free couples are never returned `null` (which would hard-block them); the
+ * paywall is reached only when they exceed FREE_LIMITS, matching the client.
+ */
 export const limitsForState = (state: SubStatus): TierLimits | null => {
   if (state === 'TRIALING') return TRIAL_LIMITS;
   if (state === 'ACTIVE' || state === 'GRACE') return PAID_LIMITS;
-  return null;
+  return FREE_LIMITS;
 };

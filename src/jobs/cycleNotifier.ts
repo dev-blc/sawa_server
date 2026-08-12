@@ -197,9 +197,26 @@ export async function runCheck(): Promise<void> {
   }
 }
 
+// Overlap guard: if a run is slow (large scan / DB latency) the next 30-min tick
+// must not start a second concurrent pass (which would double-scan and risk
+// duplicate pushes). Ticks that arrive while a run is in flight are skipped.
+let _cycleRunning = false;
+const guardedRun = async (): Promise<void> => {
+  if (_cycleRunning) {
+    logger.warn('[CycleNotifier] previous run still in progress — skipping this tick');
+    return;
+  }
+  _cycleRunning = true;
+  try {
+    await runCheck();
+  } finally {
+    _cycleRunning = false;
+  }
+};
+
 /** Start the notifier — immediate check on boot, then every 30 minutes. */
 export const startCycleNotifier = (): void => {
-  setTimeout(() => runCheck().catch(() => {}), 15_000); // after sockets/db settle
-  setInterval(() => runCheck().catch(() => {}), 30 * 60 * 1000);
+  setTimeout(() => guardedRun().catch(() => {}), 15_000); // after sockets/db settle
+  setInterval(() => guardedRun().catch(() => {}), 30 * 60 * 1000);
   logger.info('🌸 Cycle notifier scheduled (every 30 min, 08–21 IST)');
 };

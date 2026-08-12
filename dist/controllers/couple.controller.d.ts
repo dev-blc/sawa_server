@@ -38,7 +38,15 @@ export declare const updateMyCouple: (req: Request, res: Response) => Promise<vo
 export declare const invitePartner: (_req: Request, _res: Response) => Promise<void>;
 /**
  * POST /api/v1/couples/subscribe
- * Marks the current couple as subscribed.
+ *
+ * LEGACY endpoint. It only flips the cosmetic `Couple.isSubscribed` flag used by
+ * the pre-paywall "activate free access" flow while SUBSCRIPTIONS_ENFORCED is
+ * off. It grants NO paid entitlement: real feature gating reads the verified
+ * `Subscription` table (populated only via App Store / Play receipt
+ * verification at /subscriptions/apple|google/verify), never this flag.
+ *
+ * Once real enforcement is enabled, this self-serve path is disabled so it can
+ * never set a stale/unverified flag — clients must go through IAP verification.
  */
 export declare const subscribe: (req: Request, res: Response) => Promise<void>;
 export declare const getCoupleById: (req: Request, res: Response) => Promise<void>;

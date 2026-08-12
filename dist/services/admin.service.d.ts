@@ -44,12 +44,12 @@ export declare class AdminService {
         banReason: string | null;
         bio: string | null;
         primaryPhoto: string | null;
-        partners: ({
+        partners: {
             id: string;
             name: string | null;
             phone: string | null;
             lastActiveAt: Date | null;
-        } | null)[];
+        }[];
         answers: {
             question: string;
             options: string[];

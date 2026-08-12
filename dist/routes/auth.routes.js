@@ -15,12 +15,14 @@ router.post('/login-send-otp', rateLimiter_1.authRateLimiter, auth_controller_1.
 // POST /api/v1/auth/login-verify-otp
 router.post('/login-verify-otp', rateLimiter_1.authRateLimiter, auth_controller_1.validateLoginVerifyOtp, (0, asyncHandler_1.asyncHandler)(auth_controller_1.loginVerifyOtp));
 // POST /api/v1/auth/refresh
-router.post('/refresh', auth_controller_1.validateRefresh, (0, asyncHandler_1.asyncHandler)(auth_controller_1.refreshToken));
+// Lenient limiter (shared mobile/carrier IPs refresh often) but still bounded.
+router.post('/refresh', rateLimiter_1.apiRateLimiter, auth_controller_1.validateRefresh, (0, asyncHandler_1.asyncHandler)(auth_controller_1.refreshToken));
 // POST /api/v1/auth/logout  (protected)
 router.post('/logout', authenticate_1.authenticate, (0, asyncHandler_1.asyncHandler)(auth_controller_1.logout));
 // POST /api/v1/auth/resend-otp  — resend for ONE phone only, reuses existing coupleId
 router.post('/resend-otp', rateLimiter_1.authRateLimiter, (0, asyncHandler_1.asyncHandler)(auth_controller_1.resendOtp));
-// POST /api/v1/auth/invite-partner
-router.post('/invite-partner', (0, asyncHandler_1.asyncHandler)(auth_controller_1.invitePartner));
+// POST /api/v1/auth/invite-partner — sends a Twilio SMS, so rate-limit per IP
+// to prevent unauthenticated SMS flooding / cost abuse.
+router.post('/invite-partner', rateLimiter_1.authRateLimiter, (0, asyncHandler_1.asyncHandler)(auth_controller_1.invitePartner));
 exports.default = router;
 //# sourceMappingURL=auth.routes.js.map

@@ -7,6 +7,8 @@ const subscription_service_1 = require("../services/subscription.service");
 const appstore_service_1 = require("../services/appstore.service");
 const googleplay_service_1 = require("../services/googleplay.service");
 const env_1 = require("../config/env");
+const prisma_1 = require("../lib/prisma");
+const subscription_1 = require("../config/subscription");
 /** GET /api/v1/subscriptions/me — current entitlement + usage counts. */
 const getMySubscription = async (req, res) => {
     const coupleId = req.user?.coupleId;
@@ -16,7 +18,7 @@ const getMySubscription = async (req, res) => {
     }
     const [entitlement, connections, groups] = await Promise.all([
         (0, subscription_service_1.getEntitlement)(coupleId),
-        (0, subscription_service_1.connectionsUsed)(coupleId),
+        (0, subscription_service_1.connectionsUsedToday)(coupleId),
         (0, subscription_service_1.groupsJoined)(coupleId),
     ]);
     res.json({ success: true, data: { ...entitlement, usage: { connections, groups } } });
@@ -61,6 +63,17 @@ const verifyApple = async (req, res) => {
     const tx = await (0, appstore_service_1.verifyTransactionById)(transactionId);
     if (!tx) {
         res.status(400).json({ success: false, error: 'VERIFICATION_FAILED' });
+        return;
+    }
+    // Reject a receipt minted in the wrong store environment (e.g. a free
+    // Sandbox/TestFlight receipt replayed against the Production backend).
+    if (tx.environment && tx.environment !== env_1.env.APPLE_ENVIRONMENT) {
+        res.status(400).json({ success: false, error: 'WRONG_ENVIRONMENT' });
+        return;
+    }
+    // Only grant entitlement for products we actually sell.
+    if (!(0, subscription_1.tierForProduct)(tx.productId)) {
+        res.status(400).json({ success: false, error: 'UNKNOWN_PRODUCT' });
         return;
     }
     const entitlement = await (0, subscription_service_1.applyAppleTransaction)(coupleId, tx);
@@ -152,6 +165,21 @@ const verifyGoogle = async (req, res) => {
         res.status(202).json({ success: true, pending: true, data: entitlement });
         return;
     }
+    // Only grant entitlement for products we actually sell.
+    if (!(0, subscription_1.tierForProduct)(info.productId ?? productId)) {
+        res.status(400).json({ success: false, error: 'UNKNOWN_PRODUCT' });
+        return;
+    }
+    // Prevent a single purchase token from unlocking multiple different couples
+    // (subscription sharing). First couple to claim the token owns it.
+    const tokenOwner = await prisma_1.prisma.subscription.findFirst({
+        where: { purchaseToken },
+        select: { coupleId: true },
+    });
+    if (tokenOwner && tokenOwner.coupleId !== coupleId) {
+        res.status(409).json({ success: false, error: 'TOKEN_ALREADY_CLAIMED' });
+        return;
+    }
     // Acknowledge within Google's 3-day window (idempotent).
     const ackProduct = info.productId ?? productId;
     if (!info.acknowledged && ackProduct) {
@@ -167,8 +195,17 @@ exports.verifyGoogle = verifyGoogle;
  * authenticity comes from re-fetching the purchase from Google. Always 200 fast.
  */
 const googleNotifications = async (req, res) => {
-    // Optional shared-secret gate (?secret=...) on the Pub/Sub push URL.
-    if (env_1.env.GOOGLE_RTDN_SECRET && req.query.secret !== env_1.env.GOOGLE_RTDN_SECRET) {
+    // Shared-secret gate (?secret=...) on the Pub/Sub push URL. In production the
+    // secret is REQUIRED (an unset secret would otherwise accept any POST); in
+    // dev it stays optional for local testing.
+    const secretMatches = !!env_1.env.GOOGLE_RTDN_SECRET && req.query.secret === env_1.env.GOOGLE_RTDN_SECRET;
+    if (env_1.env.NODE_ENV === 'production') {
+        if (!secretMatches) {
+            res.status(200).json({ success: true }); // ack silently, ignore
+            return;
+        }
+    }
+    else if (env_1.env.GOOGLE_RTDN_SECRET && req.query.secret !== env_1.env.GOOGLE_RTDN_SECRET) {
         res.status(200).json({ success: true }); // ack silently, ignore
         return;
     }
