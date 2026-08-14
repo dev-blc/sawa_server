@@ -1,6 +1,6 @@
 import crypto from 'crypto';
 import { otpService } from './otp.service';
-import { userRepository } from '../repositories/user.repository';
+import { userRepository, normalizePhone } from '../repositories/user.repository';
 import { signAccessToken, signRefreshToken, verifyRefreshToken } from '../utils/jwt';
 import { AppError } from '../utils/AppError';
 import { prisma } from '../lib/prisma';
@@ -19,7 +19,14 @@ const getBypassPhones = (): Set<string> => {
     logger.warn('[auth] BYPASS_PHONES is set but ignored in production (set BYPASS_PHONES_ALLOW_PROD=true to force).');
     return new Set();
   }
-  return new Set(env.BYPASS_PHONES.split(',').map(p => p.trim()).filter(Boolean));
+  // Normalise every entry to bare 10-digit form so the bypass matches
+  // regardless of how the number is stored in env or sent by the client
+  // (+91…, 91…, or a bare 10-digit number all collapse to the same key).
+  return new Set(
+    env.BYPASS_PHONES.split(',')
+      .map(p => normalizePhone(p.trim()))
+      .filter(Boolean),
+  );
 };
 
 /**
@@ -258,7 +265,7 @@ export class AuthService {
     await assertNotBanned(user.coupleId);
 
     // ── Bypass: issue tokens immediately, no OTP needed ──────────────────────
-    if (getBypassPhones().has(phone)) {
+    if (getBypassPhones().has(normalizePhone(phone))) {
       logger.info(`[AuthService] Bypass login for ${phone}`);
 
       const couple = user.coupleId
