@@ -367,14 +367,14 @@ export class AuthService {
       coupleId = linked?.coupleId ?? crypto.randomUUID();
     }
 
-    // Persist the coupleId back to the user row if it was missing or stale.
-    if (!user.coupleId || user.coupleId !== coupleId) {
-      await prisma.user.update({ where: { id: user.id }, data: { coupleId } });
-    }
-
     await assertNotBanned(coupleId);
 
-    // Upsert couple (handles missing row) — single query, not a find + conditional create.
+    // Ensure the couple row exists BEFORE linking the user to it. The User→Couple
+    // foreign key (User.coupleId → Couple.coupleId) rejects any user update whose
+    // coupleId has no matching couple row yet — which is exactly the case for a
+    // freshly generated coupleId (legacy/edge accounts with no couple). Upserting
+    // first guarantees the FK target exists and prevents an "Internal server error"
+    // on an otherwise-valid OTP. Mirrors the signup ordering (couple before user).
     const couple = await prisma.couple.upsert({
       where: { coupleId },
       update: {},
@@ -385,6 +385,11 @@ export class AuthService {
         isSubscribed: false,
       },
     });
+
+    // Persist the coupleId back to the user row if it was missing or stale.
+    if (!user.coupleId || user.coupleId !== coupleId) {
+      await prisma.user.update({ where: { id: user.id }, data: { coupleId } });
+    }
 
     const accessToken = signAccessToken({
       userId: user.id,
