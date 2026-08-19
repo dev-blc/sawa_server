@@ -12,11 +12,12 @@ Backend API for the **SAWA** couples social matching app.
 
 - **Runtime**: Node.js 20 LTS + TypeScript 5
 - **Framework**: Express.js
-- **Database**: MongoDB (Mongoose)
+- **Database**: PostgreSQL via **Prisma 6** (`prisma/schema.prisma`)
 - **Auth**: JWT (Access + Refresh tokens)
 - **Real-time**: Socket.io
 - **Validation**: Zod
 - **Logging**: Winston + Morgan
+- **Process manager**: PM2 (`ecosystem.config.js`)
 
 ---
 

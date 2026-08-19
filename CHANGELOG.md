@@ -4,6 +4,26 @@
 
 ---
 
+## [2026-08-19] — Docs: RULES.md corrected to the real stack; living-document contract added
+
+**Why**: RULES.md §2 described a Mongoose/MongoDB architecture the codebase does not
+use (53 files import Prisma, zero import Mongoose), §5 said refresh tokens live in
+MongoDB, and a "§11 Frontend UI Rules" section described the mobile app (src/Service/Api.ts,
+Redux) — bled in from another repo's rules. Agents and new developers following the file
+verbatim would have written Mongoose code against a Prisma/PostgreSQL codebase.
+
+**Changed**
+- `RULES.md` §2: layered shape now ends at **Prisma (PostgreSQL)**; documents
+  `prisma/schema.prisma` as schema source of truth, the single client in `src/lib/prisma.ts`,
+  and `src/models/` as Prisma re-export shims (no Mongoose, no logic).
+- `RULES.md` §5: refresh tokens hashed in PostgreSQL; billing webhooks/receipt validation
+  flagged as review-sensitive surfaces.
+- `RULES.md`: removed §11 (mobile-app rules — now live in the mobile repo's AGENTS.md);
+  section numbering fixed (Documentation is §10); added a living-document contract
+  ("Last verified" stamp; any commit falsifying a line updates it in the same commit) and
+  a history note recording what was removed.
+- `README.md` tech stack: MongoDB (Mongoose) → PostgreSQL via Prisma 6; added PM2.
+
 ## [2026-03-19] — Phase 0: Initial Scaffold
 
 **Added**
