@@ -1,1 +1,0 @@
-{"version":3,"file":"Notification.model.d.ts","sourceRoot":"","sources":["../../src/models/Notification.model.ts"],"names":[],"mappings":"AAEA,OAAO,KAAK,EAAE,YAAY,IAAI,kBAAkB,EAAE,gBAAgB,EAAE,MAAM,gBAAgB,CAAC;AAE3F,MAAM,MAAM,aAAa,GAAG,kBAAkB,CAAC;AAC/C,YAAY,EAAE,gBAAgB,EAAE,CAAC;AAEjC,eAAO,MAAM,YAAY,iKAAsB,CAAC"}
