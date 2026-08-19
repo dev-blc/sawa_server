@@ -3,7 +3,7 @@ import { AppError } from '../utils/AppError';
 import { logger } from '../utils/logger';
 import { emitRealtimeNotification } from '../utils/realtime';
 import { i18nData } from '../i18n/notif';
-import { materializeImage, materializeImages } from '../lib/storage';
+import { materializeImageLoose } from '../lib/storage';
 
 export class CoupleService {
   /**
@@ -28,123 +28,130 @@ export class CoupleService {
         logger.warn(`[CoupleService.setupProfile] Partners attempted to use same email: ${data.yourEmail}`);
     }
 
-    let partner = null;
-    
-    // 1. Update primary user's details (Non-blocking on email conflict)
-    try {
-      await prisma.user.update({
+    // All writes (both user rows + the couple row) commit atomically: a crash
+    // mid-way used to be able to leave a renamed primary user with no couple
+    // row, or a couple pointing at a partner that was never created.
+    //
+    // Email-conflict semantics are preserved but implemented as an in-tx
+    // pre-check instead of the old catch-P2002-and-retry: a failed statement
+    // aborts a Postgres transaction, so catching inside one can't work. The
+    // residual check-then-write race (someone commits the same email between
+    // our check and our write) still raises P2002 — the transaction rolls
+    // back untouched and runTransaction() is retried once below, where the
+    // pre-check now sees the committed winner and skips the email.
+    const runTransaction = () => prisma.$transaction(async (tx) => {
+      /** True when `email` can be written to `excludeUserId` without violating
+       *  the unique constraint (unset emails are never "available"). */
+      const emailAvailable = async (
+        email: string | undefined,
+        excludeUserId?: string,
+      ): Promise<boolean> => {
+        if (!email) return false;
+        const owner = await tx.user.findFirst({ where: { email }, select: { id: true } });
+        return !owner || owner.id === excludeUserId;
+      };
+
+      // 1. Update primary user's details (email stays non-blocking on conflict)
+      const canUseYourEmail = await emailAvailable(data.yourEmail, primaryUserId);
+      if (data.yourEmail && !canUseYourEmail) {
+        logger.warn(`[CoupleService.setupProfile] Primary email already exists, skipping email update.`);
+      }
+      await tx.user.update({
         where: { id: primaryUserId },
         data: {
           name: data.yourName,
           dob: data.yourDob || undefined,
-          email: data.yourEmail || undefined,
+          email: canUseYourEmail ? data.yourEmail : undefined,
           role: 'primary'
         }
       });
+
+      // 2. Find and update the partner user (email stays non-blocking on conflict)
+      let partner = await tx.user.findFirst({
+          where: { coupleId, role: 'partner' }
+      });
+
+      if (partner) {
+          const canUsePartnerEmail = await emailAvailable(data.partnerEmail, partner.id);
+          if (data.partnerEmail && !canUsePartnerEmail) {
+            logger.warn(`[CoupleService.setupProfile] Partner email already exists, skipping email update.`);
+          }
+          await tx.user.update({
+              where: { id: partner.id },
+              data: {
+                  name: data.partnerName,
+                  dob: data.partnerDob || undefined,
+                  email: canUsePartnerEmail ? data.partnerEmail : undefined,
+              }
+          });
+      } else if (data.partnerName) {
+          const canUsePartnerEmail = await emailAvailable(data.partnerEmail);
+          if (data.partnerEmail && !canUsePartnerEmail) {
+            logger.warn(`[CoupleService.setupProfile] Partner email already exists during create, skipping email.`);
+          }
+          partner = await tx.user.create({
+              data: {
+                  name: data.partnerName,
+                  dob: data.partnerDob || undefined,
+                  email: canUsePartnerEmail ? data.partnerEmail : undefined,
+                  role: 'partner',
+                  coupleId: coupleId
+              }
+          });
+      }
+
+      // 3. Ensure role-based assignment for partner1/partner2 IDs
+      // We should always keep the 'primary' user as partner1 and 'partner' user as partner2
+      const users = await tx.user.findMany({ where: { coupleId } });
+      const primaryUser = users.find(u => u.role === 'primary');
+      const partnerUser = users.find(u => u.role === 'partner');
+
+      const partner1Id = primaryUser?.id || primaryUserId;
+      const partner2Id = partnerUser?.id || partner?.id || null;
+
+      // 4. Upsert the Couple document
+      const existingCouple = await tx.couple.findUnique({ where: { coupleId } });
+
+      if (!existingCouple) {
+        await tx.couple.create({
+          data: {
+            coupleId,
+            partner1Id,
+            partner2Id,
+            profileName: `${data.yourName} & ${data.partnerName}`,
+            relationshipStatus: data.relationshipStatus,
+            locationCity: data.location?.city || 'Unknown',
+            locationCountry: data.location?.country || 'India',
+            isProfileComplete: false,
+          }
+        });
+      } else {
+        await tx.couple.update({
+          where: { id: existingCouple.id },
+          data: {
+            partner1Id: partner1Id || existingCouple.partner1Id,
+            partner2Id: partner2Id || existingCouple.partner2Id,
+            profileName: `${data.yourName} & ${data.partnerName}`,
+            relationshipStatus: data.relationshipStatus,
+            locationCity: data.location?.city || undefined,
+            locationCountry: data.location?.country || undefined,
+          }
+        });
+      }
+    }, { timeout: 10000 });
+
+    try {
+      await runTransaction();
     } catch (err: any) {
-        if (err.code === 'P2002' && err.meta?.target?.includes('email')) {
-            logger.warn(`[CoupleService.setupProfile] Primary email already exists, skipping email update.`);
-            // Update just the name/dob
-            await prisma.user.update({
-                where: { id: primaryUserId },
-                data: { name: data.yourName, dob: data.yourDob || undefined, role: 'primary' }
-            });
-        } else {
-            throw err;
-        }
-    }
-
-    // 2. Find and update the partner user (Non-blocking on email conflict)
-    partner = await prisma.user.findFirst({
-        where: { coupleId, role: 'partner' }
-    });
-    
-    if (partner) {
-        try {
-            await prisma.user.update({
-                where: { id: partner.id },
-                data: {
-                    name: data.partnerName,
-                    dob: data.partnerDob || undefined,
-                    email: data.partnerEmail || undefined,
-                }
-            });
-        } catch (err: any) {
-            if (err.code === 'P2002' && err.meta?.target?.includes('email')) {
-                logger.warn(`[CoupleService.setupProfile] Partner email already exists, skipping email update.`);
-                await prisma.user.update({
-                    where: { id: partner.id },
-                    data: { name: data.partnerName, dob: data.partnerDob || undefined }
-                });
-            } else {
-                throw err;
-            }
-        }
-    } else if (data.partnerName) {
-        try {
-            partner = await prisma.user.create({
-                data: {
-                    name: data.partnerName,
-                    dob: data.partnerDob || undefined,
-                    email: data.partnerEmail || undefined,
-                    role: 'partner',
-                    coupleId: coupleId
-                }
-            });
-        } catch (err: any) {
-            if (err.code === 'P2002' && err.meta?.target?.includes('email')) {
-                logger.warn(`[CoupleService.setupProfile] Partner email already exists during create, skipping email.`);
-                partner = await prisma.user.create({
-                    data: {
-                        name: data.partnerName,
-                        dob: data.partnerDob || undefined,
-                        role: 'partner',
-                        coupleId: coupleId
-                    }
-                });
-            } else {
-                throw err;
-            }
-        }
-    }
-
-    // 3. Ensure role-based assignment for partner1/partner2 IDs
-    // We should always keep the 'primary' user as partner1 and 'partner' user as partner2
-    const users = await prisma.user.findMany({ where: { coupleId } });
-    const primaryUser = users.find(u => u.role === 'primary');
-    const partnerUser = users.find(u => u.role === 'partner');
-
-    const partner1Id = primaryUser?.id || primaryUserId; 
-    const partner2Id = partnerUser?.id || partner?.id || null;
-
-    // 4. Upsert the Couple document
-    const existingCouple = await prisma.couple.findUnique({ where: { coupleId } });
-    
-    if (!existingCouple) {
-      await prisma.couple.create({
-        data: {
-          coupleId,
-          partner1Id,
-          partner2Id,
-          profileName: `${data.yourName} & ${data.partnerName}`,
-          relationshipStatus: data.relationshipStatus,
-          locationCity: data.location?.city || 'Unknown',
-          locationCountry: data.location?.country || 'India',
-          isProfileComplete: false,
-        }
-      });
-    } else {
-      await prisma.couple.update({
-        where: { id: existingCouple.id },
-        data: {
-          partner1Id: partner1Id || existingCouple.partner1Id,
-          partner2Id: partner2Id || existingCouple.partner2Id,
-          profileName: `${data.yourName} & ${data.partnerName}`,
-          relationshipStatus: data.relationshipStatus,
-          locationCity: data.location?.city || undefined,
-          locationCountry: data.location?.country || undefined,
-        }
-      });
+      if (err?.code === 'P2002') {
+        // A concurrent writer won a unique race (email, or the couple row)
+        // mid-transaction. Nothing was committed — retry once so the in-tx
+        // pre-checks observe the winner and degrade gracefully, exactly like
+        // the old catch-P2002 path did. A second P2002 propagates.
+        await runTransaction();
+        return;
+      }
+      throw err;
     }
   }
 
@@ -160,22 +167,23 @@ export class CoupleService {
     }
   ) {
     const updateData: any = {};
-    
+
     if (data.primaryPhotoBase64 && data.primaryPhotoBase64.length > 10) {
-      const dataUri = data.primaryPhotoBase64.startsWith('data:')
-        ? data.primaryPhotoBase64
-        : 'data:image/jpeg;base64,' + data.primaryPhotoBase64;
-      // Store an S3 URL (falls back to base64 if storage is unavailable).
-      updateData.primaryPhoto = await materializeImage(dataUri, coupleId);
+      // materializeImageLoose handles raw base64, data: URIs AND already-hosted
+      // URLs (the presigned-upload pipeline sends public /img/ URLs — the old
+      // blind `data:image/jpeg;base64,<value>` wrap corrupted those).
+      // Stores an S3 URL; falls back to the input if storage is unavailable.
+      updateData.primaryPhoto = await materializeImageLoose(data.primaryPhotoBase64, coupleId);
     }
 
     const existingToKeep = data.keepSecondaryPhotoUrls || [];
-    const newPhotos = await materializeImages(
-      (data.secondaryPhotosBase64 || [])
-        .filter(b64 => b64 && b64.length > 10)
-        .map(b64 => (b64.startsWith('data:') ? b64 : 'data:image/jpeg;base64,' + b64)),
-      coupleId,
-    );
+    const newPhotos = (
+      await Promise.all(
+        (data.secondaryPhotosBase64 || [])
+          .filter(b64 => b64 && b64.length > 10)
+          .map(b64 => materializeImageLoose(b64, coupleId)),
+      )
+    ).filter((v): v is string => Boolean(v));
 
     if (data.keepSecondaryPhotoUrls !== undefined || data.secondaryPhotosBase64 !== undefined) {
       updateData.secondaryPhotos = [...existingToKeep, ...newPhotos].slice(0, 3);
@@ -327,21 +335,22 @@ export class CoupleService {
 
     // 1. Photos processing — convert incoming base64 to S3 URLs (keeps ~0.5 MB
     // blobs out of Postgres). Falls back to base64 if storage is unavailable.
+    // materializeImageLoose also passes hosted URLs through unchanged (the
+    // presigned-upload pipeline sends public /img/ URLs — the old blind
+    // base64 wrap corrupted those).
     if (data.primaryPhotoBase64 && data.primaryPhotoBase64.length > 10) {
-      const dataUri = data.primaryPhotoBase64.startsWith('data:')
-        ? data.primaryPhotoBase64
-        : 'data:image/jpeg;base64,' + data.primaryPhotoBase64;
-      updateData.primaryPhoto = await materializeImage(dataUri, coupleId);
+      updateData.primaryPhoto = await materializeImageLoose(data.primaryPhotoBase64, coupleId);
     }
 
     if (data.secondaryPhotosBase64 !== undefined || data.keepSecondaryPhotoUrls !== undefined) {
       const existingToKeep = data.keepSecondaryPhotoUrls || [];
-      const newPhotos = await materializeImages(
-        (data.secondaryPhotosBase64 || [])
-          .filter(b64 => b64 && b64.length > 10)
-          .map(b64 => b64.startsWith('data:') ? b64 : 'data:image/jpeg;base64,' + b64),
-        coupleId,
-      );
+      const newPhotos = (
+        await Promise.all(
+          (data.secondaryPhotosBase64 || [])
+            .filter(b64 => b64 && b64.length > 10)
+            .map(b64 => materializeImageLoose(b64, coupleId)),
+        )
+      ).filter((v): v is string => Boolean(v));
       updateData.secondaryPhotos = [...existingToKeep, ...newPhotos].slice(0, 3);
     }
 

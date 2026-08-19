@@ -1,7 +1,7 @@
 # SAWA Backend — Rules & Conventions
 
 > **Always read this file before making any changes to the backend.**
-> Last verified: 2026-08-19 against `arfam-fix` `42bbf2c`. **Living document**:
+> Last verified: 2026-08-20 against `arfam-fix`. **Living document**:
 > any commit that makes a line here false must update that line in the same
 > commit and bump this stamp.
 >
@@ -27,7 +27,13 @@
 - **The API contract is a design surface.** Every response goes through the
   helpers in `src/utils/response.ts` — shape `{ success: true, data, message }`
   on success, `{ success: false, error, code }` on failure. Never hand-roll a
-  `res.json()` shape in new code.
+  `res.json()` shape in new code. (Transition exception: admin error responses
+  additionally mirror the human text into a legacy `message` key until the
+  deployed admin panel is confirmed on the envelope — see `sendError`'s
+  `message` field. Two deliberate non-envelope survivors: `GET
+  /admin/media/*` serves image bytes/plain text for `<img>` loaders, and
+  `POST /subscriptions/google/verify`'s 202 keeps its historical top-level
+  `pending: true` flag.)
 - **Error messages are user-facing copy.** Throw `AppError`
   (`src/utils/AppError.ts`) with a message a person can read. Internals,
   stack details, and DB errors never reach the client.

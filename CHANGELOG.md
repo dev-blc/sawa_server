@@ -4,6 +4,103 @@
 
 ---
 
+## [2026-08-20] — Real match scoring, envelope unification, atomicity for multi-write paths
+
+**Why**: three classes of dishonesty/fragility. (1) The discovery feed's
+`matchScore` was `Math.random()*20+80` and its two "insights" were hardcoded
+strings shown to every user — a fake compatibility claim in a product whose
+core promise is matching couples well, while the real signal (onboarding
+answers, activities, vibes, criteria, city) sat unused in the DB. (2) Two of
+nine controllers (admin: 32 hand-rolled `res.json`, subscription: 25) bypassed
+the `src/utils/response.ts` envelope, so error text lived under `message` in
+one API and machine codes were stuffed into `error` in another — every client
+has to guess. (3) Several multi-write paths could commit halfway: a crash in
+`setupProfile` could rename a user with no couple row; a crash in the mutual
+accept could connect a couple with no notification; and the order-sensitive
+`@@unique([couple1Id, couple2Id])` let two simultaneous opposite-direction
+hellos create duplicate (A,B)+(B,A) rows the constraint never sees.
+
+**What changed**:
+
+- **Deterministic match scoring** (`src/services/matchScore.ts`, new; pure —
+  unit-tested in `src/__tests__/matchScore.test.ts`, 16 tests): weighted
+  overlap across onboarding answers (per-question Jaccard, weight 45),
+  activities (25), socialVibes (10), matchCriteria (10) — dimensions missing
+  on either side are excluded and weights renormalized (absence of data is not
+  disagreement) — plus a flat +10 same-city bonus that is never renormalized
+  (city alone can't fake a high match). Raw 0–100 remaps onto
+  **[55, 100]** (`SCORE_FLOOR`): in a couples app "12% match" reads as an
+  insult, so zero overlap displays as a warm 55 while remapping (not clamping)
+  keeps every real difference ordered. Option ids and legacy stored titles
+  normalize to the same tokens, so old rows still score.
+- **True insights**: up to 2 lines built only from genuine overlaps using the
+  feed's existing display-tag vocabulary (`Q3_TITLES` moved to matchScore.ts,
+  re-imported by the feed so tags render byte-identically) — e.g. "You both
+  love weekend trips", "Similar pace - you both prefer meeting once a month".
+  `[]` when nothing genuine is shared (the app shows neutral copy); nothing is
+  ever invented. Response shape unchanged: `matchScore: number`,
+  `insights: string[]`.
+- **Feed ranked by score** (`match.service.ts getDiscoveryFeed`): filters and
+  exclusions are unchanged; instead of returning an arbitrary DB-order 10, a
+  bounded pool of 50 candidates is fetched (same `where`), scored, sorted
+  descending (coupleId tiebreak for stability), and the top 10 returned.
+  Scoring inputs are selected but never serialized to the client.
+- **Score persisted on Match rows**: `sayHello` create and the skipped→pending
+  reset now write `matchScore`/`insights` (columns existed since the schema
+  was born, nothing ever wrote them). Skip rows stay unscored (they are
+  exclusion markers, not connections).
+- **Envelope unification** (`admin.controller.ts`, `subscription.controller.ts`
+  via `utils/response.ts`): all success paths → `sendSuccess`, all errors →
+  `sendError` with machine codes in `code` and human copy in `error`. Status
+  codes preserved exactly. Admin errors carry a transition-only `message`
+  mirror of the human text (new optional field on `sendError`) because the
+  deployed panel build may predate this migration; the repo's
+  `AdminDataProvider.tsx` reads only `res.ok`/`success`/`data`/`data.token`,
+  all preserved. Deliberate survivors, documented in RULES.md §1: `GET
+  /admin/media/*` (image bytes/plain text for `<img>` loaders),
+  `verifyGoogle`'s 202 (historical top-level `pending: true` the helper can't
+  carry), and `/.well-known/assetlinks.json` in app.ts (Google's Digital Asset
+  Links spec REQUIRES a bare top-level JSON array — the Android OS is the
+  consumer; enveloping it would break App Links verification).
+- **setupProfile atomic** (`couple.service.ts`): both user rows + the couple
+  row now commit in one interactive transaction. The old catch-P2002-and-retry
+  email fallback can't live inside a Postgres tx (a failed statement aborts
+  it), so the same non-blocking semantics are implemented as an in-tx email
+  pre-check; the residual check-then-write race rolls the tx back untouched
+  and it is retried once, where the pre-check sees the committed winner.
+- **Mutual-accept atomic** (`match.service.ts` sayHello + accept paths): the
+  `match.update` to accepted and BOTH "You've Connected!" notification upserts
+  commit in one transaction (notification upserts in
+  `notification.service.ts` now accept an optional transaction client);
+  sockets/push fire only after commit so a rolled-back accept can never buzz a
+  phone.
+- **Symmetric-race fix, no migration/backfill** (`match.service.ts`): new
+  Match rows are written in canonical orientation (lower coupleId first,
+  `canonicalMatchPair`) so simultaneous opposite-direction hellos/skips now
+  collide on the unique constraint instead of duplicating; every read stays
+  bidirectional (legacy rows exist in both orientations); the skipped→pending
+  reset no longer re-orients the row (re-orienting could P2002 against a
+  legacy duplicate — and `getIncomingRequests` resolves direction via
+  `actionById`, so orientation is meaningless); sayHello's P2002 recovery now
+  re-queries BOTH orientations and, when the racing row is the other couple's
+  incoming pending, accepts it as the mutual like it is; `skipCouple` treats a
+  P2002 as success (the pair row exists — exactly what a skip wants).
+- **Photo URL corruption fix** (`couple.service.ts` uploadPhotos +
+  updateProfile, `lib/storage.ts`): the app's presigned-upload pipeline sends
+  already-hosted URLs, but both photo paths blind-wrapped any non-`data:`
+  value as `data:image/jpeg;base64,<value>`, corrupting URL values — which is
+  why mobile kept primary photos on base64. Both now route through the
+  existing `materializeImageLoose` choke point (handles base64, data: URIs and
+  http URLs), which additionally passes relative `/img/…` image-proxy paths
+  through unchanged. Response shapes unchanged.
+- Known debt left in place deliberately: admin/subscription controllers still
+  lack zod validation (RULES §7 baseline) — adding schemas would change which
+  request bodies are accepted and risk the deployed panel; this pass was
+  response-serialization only.
+
+Gates: `npm run typecheck` 0 errors; `npm test` 28/28 (12 existing + 16 new).
+`npm run lint` is inert in this repo (no ESLint config exists — pre-existing).
+
 ## [2026-08-20] — Companion layer: game-result loop, partner presence, quiet hours, celebrations, mood history
 
 **Why**: the Us space had four emotional dead-ends. A finished game notified nobody — the

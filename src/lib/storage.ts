@@ -236,6 +236,10 @@ export async function materializeImageLoose(
 ): Promise<string | null | undefined> {
   if (!value || typeof value !== 'string') return value;
   if (value.startsWith('http')) return value;
+  // Relative image-proxy paths (see GET /img/* in app.ts) are already hosted —
+  // never re-wrap them as base64. A real base64 payload starting with exactly
+  // "/img/" is practically impossible (~1 in 64^5).
+  if (value.startsWith('/img/')) return value;
   const dataUri = value.startsWith('data:') ? value : `data:image/jpeg;base64,${value}`;
   return (await materializeImage(dataUri, coupleId)) ?? value;
 }

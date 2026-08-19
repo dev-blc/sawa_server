@@ -1,10 +1,19 @@
 import { prisma } from '../lib/prisma';
-import type { NotificationType } from '@prisma/client';
+import type { NotificationType, Prisma, PrismaClient } from '@prisma/client';
 import { emitRealtimeNotification } from '../utils/realtime';
 import { invalidateNotifUnreadCount } from '../lib/cache';
 import { i18nData } from '../i18n/notif';
 
 type NotificationData = Record<string, unknown>;
+
+/**
+ * Any client the upsert helpers can write through — the shared client by
+ * default, or a `prisma.$transaction` client so a caller can commit a
+ * notification atomically with the row it announces (e.g. a match accept).
+ * Callers inside a transaction should pass `emitRealtime: false` and emit
+ * after commit — a socket/push must never fire for a rolled-back write.
+ */
+type NotificationDb = PrismaClient | Prisma.TransactionClient;
 
 const groupKeyFromData = (n: {
   type: string;
@@ -102,10 +111,11 @@ async function findByGroupKey(
   recipientId: string,
   type: NotificationType,
   groupKey: string,
+  db: NotificationDb = prisma,
 ) {
   // Was: fetch up to 80 rows + JS scan.
   // Now: single row read using PostgreSQL JSON-path filter on _groupKey.
-  return prisma.notification.findFirst({
+  return db.notification.findFirst({
     where: {
       recipientId,
       type,
@@ -125,12 +135,12 @@ export async function upsertGroupedNotification(params: {
   data: NotificationData;
   groupKey: string;
   emitRealtime?: boolean;
-}) {
+}, db: NotificationDb = prisma) {
   const data = { ...params.data, _groupKey: params.groupKey };
-  const existing = await findByGroupKey(params.recipientId, params.type, params.groupKey);
+  const existing = await findByGroupKey(params.recipientId, params.type, params.groupKey, db);
 
   const notification = existing
-    ? await prisma.notification.update({
+    ? await db.notification.update({
         where: { id: existing.id },
         data: {
           senderId: params.senderId,
@@ -140,7 +150,7 @@ export async function upsertGroupedNotification(params: {
           read: false,
         },
       })
-    : await prisma.notification.create({
+    : await db.notification.create({
         data: {
           recipientId: params.recipientId,
           senderId: params.senderId,
@@ -214,10 +224,11 @@ export async function upsertMatchPendingNotification(params: {
   tags?: unknown;
   vibes?: unknown;
   matchCriteria?: unknown;
-}) {
+  emitRealtime?: boolean;
+}, db: NotificationDb = prisma) {
   // Was: fetch all match notifications from sender + JS filter.
   // Now: JSON-path DB filter on matchId + isPending to retrieve only relevant rows.
-  const staleRows = await prisma.notification.findMany({
+  const staleRows = await db.notification.findMany({
     where: {
       recipientId: params.recipientId,
       senderId: params.senderId,
@@ -230,7 +241,7 @@ export async function upsertMatchPendingNotification(params: {
     .filter((r) => (r.data as NotificationData)?.isPending === true)
     .map((r) => r.id);
   if (staleIds.length) {
-    await prisma.notification.deleteMany({ where: { id: { in: staleIds } } });
+    await db.notification.deleteMany({ where: { id: { in: staleIds } } });
   }
 
   return upsertGroupedNotification({
@@ -239,6 +250,7 @@ export async function upsertMatchPendingNotification(params: {
     type: 'match',
     title: 'New Connection Request!',
     message: `${params.profileName} wants to connect with you!`,
+    emitRealtime: params.emitRealtime,
     groupKey: `match:pending:${params.matchId}`,
     data: {
       matchId: params.matchId,
@@ -253,7 +265,7 @@ export async function upsertMatchPendingNotification(params: {
       isPending: true,
       ...i18nData('match.pending', { name: params.profileName }),
     },
-  });
+  }, db);
 }
 
 /** One "connected" row per match per recipient. */
@@ -269,10 +281,11 @@ export async function upsertMatchConnectedNotification(params: {
   tags?: unknown;
   vibes?: unknown;
   matchCriteria?: unknown;
-}) {
+  emitRealtime?: boolean;
+}, db: NotificationDb = prisma) {
   // Delete ALL pending match notifications from this sender to this recipient.
   // Was: fetch all + JS filter for isPending. Now: JSON-path filter on isPending.
-  const pendingRows = await prisma.notification.findMany({
+  const pendingRows = await db.notification.findMany({
     where: {
       recipientId: params.recipientId,
       senderId: params.senderId,
@@ -283,7 +296,7 @@ export async function upsertMatchConnectedNotification(params: {
   });
   const pendingIds = pendingRows.map((r) => r.id);
   if (pendingIds.length) {
-    await prisma.notification.deleteMany({ where: { id: { in: pendingIds } } });
+    await db.notification.deleteMany({ where: { id: { in: pendingIds } } });
   }
 
   return upsertGroupedNotification({
@@ -292,6 +305,7 @@ export async function upsertMatchConnectedNotification(params: {
     type: 'match',
     title: "You've Connected!",
     message: `You connected with ${params.profileName}!`,
+    emitRealtime: params.emitRealtime,
     groupKey: `match:connected:${params.matchId}`,
     data: {
       matchId: params.matchId,
@@ -306,5 +320,5 @@ export async function upsertMatchConnectedNotification(params: {
       isPending: false,
       ...i18nData('match.connected', { name: params.profileName }),
     },
-  });
+  }, db);
 }
