@@ -30,6 +30,16 @@ const failInternal = (res: Response, context: string, err: any): void => {
 
 const adminService = new AdminService();
 
+/**
+ * Typed-confirmation phrase required to run POST /admin/flush-database. The
+ * caller must pass it verbatim as `?confirm=<phrase>`. In production the flush
+ * ALSO requires env `ALLOW_PROD_DB_FLUSH=true`; default posture is REFUSE.
+ * A leaked admin token or a fat-finger cannot wipe the database without this
+ * exact string (and, in prod, the deploy-level flag). URL-safe on purpose
+ * (no spaces) so it needs no encoding.
+ */
+const FLUSH_CONFIRM_PHRASE = 'FLUSH-ENTIRE-SAWA-DATABASE';
+
 function hostOf(u?: string | null): string | null {
   if (!u) return null;
   try {
@@ -398,6 +408,51 @@ export class AdminController {
   }
 
   async flushDatabase(req: Request, res: Response) {
+    // ── Destructive-operation guard (v3 B3/H2) ───────────────────────────────
+    // This TRUNCATEs every table. Before touching the DB we require a typed
+    // ?confirm=<phrase>; in production we additionally hard-refuse unless the
+    // deploy-level ALLOW_PROD_DB_FLUSH flag is set. Default posture: REFUSE.
+    const adminId = req.user?.userId ?? 'unknown';
+    const confirm = String(req.query.confirm ?? '');
+    const confirmed = confirm === FLUSH_CONFIRM_PHRASE;
+
+    if (env.NODE_ENV === 'production') {
+      if (!env.ALLOW_PROD_DB_FLUSH) {
+        logger.error('ADMIN: flush-database REFUSED in production (ALLOW_PROD_DB_FLUSH not set)', {
+          adminId,
+        });
+        return adminError(
+          res,
+          'Database flush is disabled in production',
+          403,
+          'FLUSH_DISABLED_IN_PROD',
+        );
+      }
+      if (!confirmed) {
+        logger.error(
+          'ADMIN: flush-database REFUSED in production (missing/incorrect confirmation phrase)',
+          { adminId },
+        );
+        return adminError(
+          res,
+          'Confirmation phrase required to flush the production database',
+          403,
+          'FLUSH_CONFIRM_REQUIRED',
+        );
+      }
+    } else if (!confirmed) {
+      logger.error('ADMIN: flush-database refused (missing/incorrect confirmation phrase)', {
+        adminId,
+        env: env.NODE_ENV,
+      });
+      return adminError(
+        res,
+        'Confirmation phrase required to flush the database',
+        403,
+        'FLUSH_CONFIRM_REQUIRED',
+      );
+    }
+
     try {
       const tables = [
         'onboarding_answers',
@@ -420,7 +475,11 @@ export class AdminController {
         `TRUNCATE TABLE ${list} RESTART IDENTITY CASCADE;`,
       );
 
-      logger.warn('ADMIN: Full database flush', { tables: [...tables] });
+      logger.warn('ADMIN: Full database flush EXECUTED', {
+        adminId,
+        env: env.NODE_ENV,
+        tables: [...tables],
+      });
       // `cleared` moved from the response top level into `data` for the shared
       // envelope. Verified consumer-free: nothing in the admin panel calls
       // flush-database (manual/curl-only endpoint).

@@ -132,6 +132,17 @@ export async function createPresignedUpload(opts: {
   ext?: string;
   coupleId?: string;
   expiresInSeconds?: number;
+  /**
+   * Declared upload size in bytes. When provided it is signed onto the presigned
+   * PUT as `Content-Length`, so object storage rejects a body of any other size
+   * — a hard, server-enforced size bound. The caller validates it against the
+   * per-kind cap BEFORE calling (see chat.controller.createChatUploadUrl). Omit
+   * it and the URL is unbounded: kept for the currently-shipped client, which
+   * does not declare a length (a presigned PUT cannot express a size RANGE the
+   * way a presigned POST policy can — an exact signed Content-Length is the
+   * PUT-compatible bound).
+   */
+  contentLength?: number;
 }): Promise<{ uploadUrl: string; publicUrl: string; key: string }> {
   if (!isStorageConfigured()) {
     throw new Error('Object storage is not configured');
@@ -145,6 +156,11 @@ export async function createPresignedUpload(opts: {
     Bucket: bucketForFolder(opts.folder),
     Key: key,
     ContentType: opts.contentType,
+    // Bind the upload to the declared length when present (S3 signs it as a
+    // required header). Omitted → unbounded PUT (shipped client, no size yet).
+    ...(typeof opts.contentLength === 'number' && opts.contentLength > 0
+      ? { ContentLength: opts.contentLength }
+      : {}),
   });
 
   const uploadUrl = await getSignedUrl(getClient(), command, {

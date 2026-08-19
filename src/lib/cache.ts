@@ -132,6 +132,31 @@ export async function cacheIncrExpire(
   }
 }
 
+/**
+ * Set a key only if it does not exist (SET NX EX) — returns true when THIS call
+ * created the key. Used as a once-per-window flag (e.g. the abuse guard's
+ * first-trip-of-the-day alert). Falls back to the local map when Redis is
+ * unavailable: the flag then dedupes per process instead of per cluster, which
+ * for alerting means "at most one per worker" rather than silence.
+ */
+export async function cacheSetNX(key: string, value: string, ttlSeconds: number): Promise<boolean> {
+  const redis = getRedis();
+  if (!redis) {
+    if (localGet(key) !== null) return false;
+    localSet(key, value, ttlSeconds);
+    return true;
+  }
+  try {
+    const res = await redis.set(key, value, 'EX', ttlSeconds, 'NX');
+    return res === 'OK';
+  } catch (err: any) {
+    logger.warn(`[cache] setnx(${key}) failed:`, err?.message);
+    if (localGet(key) !== null) return false;
+    localSet(key, value, ttlSeconds);
+    return true;
+  }
+}
+
 export async function cacheInvalidate(key: string): Promise<void> {
   const redis = getRedis();
   if (!redis) { localDel(key); return; }

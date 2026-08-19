@@ -288,3 +288,35 @@ id, phone, otpHash, expiresAt, attempts, createdAt
 - [ ] Comprehensive error handling
 - [ ] Unit + integration tests
 - [ ] CI/CD pipeline
+
+## Security Decisions
+
+### 2026-08-20 — SMS abuse guard sits in the send funnel, not the route layer
+
+Every OTP/invite SMS passes `src/services/abuseGuard.ts` from inside
+`otp.service.ts` (`generateAndStore` / `sendInvitation`) — the single funnel to
+`twilioClient.messages.create` — so no current or future caller can send an
+SMS unguarded. Layers, each with its own Redis day-bucket key: corridor
+allowlist (`SMS_ALLOWED_PREFIXES`, default `+91`), per-phone daily cap,
+per-8-digit-prefix daily cap (blocks sequential-range pumping), per-IP daily
+budget (on top of the 15-min burst limiter), and a global daily kill-switch
+(`SMS_DAILY_GLOBAL_CAP`) incremented LAST so refused probes cannot drain the
+platform budget. Redis outage degrades to per-process counters (bounded at
+workers × cap), never to unbounded spend and never to a login outage. First
+trip of any layer per UTC day → `logger.error` + optional `ALERT_WEBHOOK_URL`
+POST (fire-and-forget). All knobs in `src/config/env.ts`, optional with
+defaults.
+
+### 2026-08-20 — Access-token TTL stays 7d; logout revokes via Redis (H4)
+
+`JWT_ACCESS_EXPIRES_IN` remains `7d`: the admin panel authenticates with the
+same access tokens and has NO refresh flow, so a shorter default would log
+admins out mid-session. Logout containment is Redis-side instead, on two axes
+checked in parallel by `middleware/authenticate.ts` and the Socket.io
+handshake: a per-token `jti` denylist (`utils/jwt.ts`, kills exactly the token
+presented at logout, TTL = its remaining life) and a per-user issued-before
+watermark (`services/tokenDenylist.ts`, kills EVERY access token issued before
+the logout — including older copies an attacker may hold from before a refresh
+rotation). Fail-open on Redis outage (bounded by token `exp`; refresh is
+already dead because logout clears the refresh hash). Shortening the TTL later
+requires an admin-panel refresh flow first and a PLAN.md entry (RULES §3).

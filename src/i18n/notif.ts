@@ -662,6 +662,26 @@ const T: Record<string, Entry> = {
     },
   },
 
+  // Neutral push copy for cycle nudges (v3 M5 / India DPDP). The FCM/APNs/Twilio
+  // push transits third parties and shows on a lock screen, so it must NOT name
+  // the cycle phase or prediction. The real content stays in the in-app
+  // Notification row + socket payload (behind auth). Used by cycleNotifier.ts
+  // and POST /us/cycle for the OUTBOUND push only.
+  'cycle.neutral': {
+    title: {
+      en: 'A gentle update in your space',
+      hi: 'आपके स्पेस में एक कोमल अपडेट',
+      kn: 'ನಿಮ್ಮ ಸ್ಪೇಸ್‌ನಲ್ಲಿ ಒಂದು ಸೌಮ್ಯ ಅಪ್‌ಡೇಟ್',
+      mr: 'तुमच्या स्पेसमध्ये एक हळुवार अपडेट',
+    },
+    body: {
+      en: 'Open Sawa to see it',
+      hi: 'देखने के लिए सावा खोलें',
+      kn: 'ನೋಡಲು ಸಾವಾ ತೆರೆಯಿರಿ',
+      mr: 'पाहण्यासाठी सावा उघडा',
+    },
+  },
+
   // ── Subscriptions ──────────────────────────────────────────────────────────
   'subscription.trialEnding': {
     title: {

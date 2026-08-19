@@ -1,22 +1,12 @@
 import { Request, Response, NextFunction } from 'express';
-import { verifyAccessToken } from '../utils/jwt';
+import { verifyAccessToken, isAccessTokenDenied } from '../utils/jwt';
+import { isAccessTokenRevoked } from '../services/tokenDenylist';
 import { AppError } from '../utils/AppError';
 import { prisma } from '../lib/prisma';
 
-declare global {
-  // eslint-disable-next-line @typescript-eslint/no-namespace
-  namespace Express {
-    interface Request {
-      user?: {
-        userId: string;
-        coupleMongoId?: string;
-        coupleId?: string;
-        userName?: string;
-        role?: string;
-      };
-    }
-  }
-}
+// `Request.user` / `Request.accessToken` augmentations live in
+// src/types/express.d.ts (single source — adminAuth.ts still carries a legacy
+// duplicate of `user` that must stay byte-identical, see the note there).
 
 /**
  * In-memory cache to throttle expensive ban/activity DB work.
@@ -85,11 +75,32 @@ export const authenticate = async (
 
     const payload = verifyAccessToken(token);
 
+    // Revocation checks (H4), both Redis-backed and evaluated in parallel:
+    //  - jti denylist: THIS specific token was revoked at logout.
+    //  - per-user watermark (services/tokenDenylist.ts): every access token
+    //    ISSUED BEFORE the user's last logout is dead — including older copies
+    //    from before a refresh rotation whose jti was never presented, i.e.
+    //    exactly the stolen-token case H4 is about.
+    // Rejected even though the signature is valid and `exp` is in the future.
+    // 401 → the mobile interceptor attempts a refresh; for a logged-out user
+    // the refresh-token hash is already cleared, so it fails and logs out cleanly.
+    const [jtiDenied, issuedBeforeLogout] = await Promise.all([
+      isAccessTokenDenied(payload.jti),
+      isAccessTokenRevoked(payload.userId, payload.iat),
+    ]);
+    if (jtiDenied || issuedBeforeLogout) {
+      return next(new AppError('Session ended. Please sign in again.', 401, 'TOKEN_REVOKED'));
+    }
+
     req.user = {
       userId: payload.userId,
       coupleId: payload.coupleId,
       coupleMongoId: payload.coupleMongoId,
     };
+    // Verified token metadata, carried separately from `user` (three files
+    // merge the `user` declaration — extending it breaks TS2717). The logout
+    // handler uses jti/exp to denylist exactly the token presented to it.
+    req.accessToken = { jti: payload.jti, exp: payload.exp };
 
     // ─── Ban + existence check (cached) ───────────────────────────────────
     if (payload.coupleId) {

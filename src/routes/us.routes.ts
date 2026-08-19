@@ -704,10 +704,14 @@ router.post('/cycle', authenticate, async (req: Request, res: Response): Promise
     }
 
     if (partnerId) {
+      // Privacy (v3 M5 / India DPDP): a "shared her cycle calendar" line on a
+      // lock screen (and across Google/Apple/Twilio) is itself a menstrual-health
+      // signal. The in-app Notification row above keeps the real copy; the
+      // OUTBOUND push is neutral (re-rendered per-locale from cycle.neutral).
       pushToUser(partnerId, {
-        title: `🌸 ${senderName} shared her cycle calendar`,
-        body: 'Tap to see it and be there for her',
-        data: { type: 'us_cycle', navigate: 'Notifications', ...i18nData('us.cycleShared', { name: senderName }) },
+        title: 'A gentle update in your space',
+        body: 'Open Sawa to see it',
+        data: { type: 'us_cycle', navigate: 'Notifications', ...i18nData('cycle.neutral') },
         collapseKey: 'us_cycle',
       }).catch(() => null);
     }

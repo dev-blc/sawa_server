@@ -123,6 +123,13 @@ export class MatchService {
       coupleId: { notIn: [...selfIds, ...interactedIds, ...blockedIds] },
       isProfileComplete: true,
       isOpenToMeeting: true,
+      // Bidirectional block (v3 M2): `blockedIds` above only hides couples WE
+      // blocked. A couple that blocked US must also disappear from our feed, or
+      // they keep receiving our "say hello". Exclude any couple whose `blocked[]`
+      // array contains our canonical coupleId. `has` compiles to the array
+      // contains operator (`@>`), served by the GIN index on Couple.blocked
+      // (schema.prisma @@index([blocked], type: Gin)) — no sequential scan.
+      NOT: { blocked: { has: me.coupleId } },
     };
 
     if (cityFilter && cityFilter !== 'All City' && cityFilter !== 'All Cities' && cityFilter !== 'Unknown') {
@@ -193,6 +200,8 @@ export class MatchService {
     const sayHelloSelect = {
       id: true, coupleId: true, profileName: true, primaryPhoto: true,
       locationCity: true, bio: true, activities: true, socialVibes: true, matchCriteria: true,
+      // `blocked` is needed for the bidirectional-block guard below (v3 M2).
+      blocked: true,
       ...SCORING_ANSWERS_SELECT,
     } as const;
     let me;
@@ -212,6 +221,16 @@ export class MatchService {
     if (!targetCouple) {
        logger.info(`[MatchService] Say Hello for unknown couple ${targetCoupleIdStr} - success (no DB)`);
        return { isMatch: false };
+    }
+
+    // Bidirectional block (v3 M2): refuse the hello when EITHER side has blocked
+    // the other. Covers every sayHello outcome below (new hello, skipped→pending
+    // reset, and the inline mutual-like accept). One neutral error — never leak
+    // which direction the block runs (a harassment vector in a couples app).
+    const iBlockedTarget = Array.isArray(me.blocked) && me.blocked.includes(targetCouple.coupleId);
+    const targetBlockedMe = Array.isArray(targetCouple.blocked) && targetCouple.blocked.includes(me.coupleId);
+    if (iBlockedTarget || targetBlockedMe) {
+      throw new AppError('This connection is not available', 403, 'BLOCKED');
     }
 
     // Deterministic compatibility for this pair — persisted on the Match row.
@@ -613,6 +632,20 @@ export class MatchService {
       prisma.couple.findUnique({ where: { coupleId: initiatorCoupleId } }),
       prisma.couple.findUnique({ where: { coupleId: me.coupleId } }),
     ]);
+
+    // Bidirectional block (v3 M2): never connect a pair where either side has
+    // blocked the other. Same neutral, direction-agnostic refusal as sayHello —
+    // this is the choke point for the accept endpoint + the mutual-like race
+    // path, so an accept can't slip a block. (When a profile row is missing we
+    // can't evaluate blocks; the legacy tolerate-missing-profile behavior below
+    // still applies.)
+    if (targetCouple && meFull) {
+      const meBlockedThem = Array.isArray(meFull.blocked) && meFull.blocked.includes(targetCouple.coupleId);
+      const themBlockedMe = Array.isArray(targetCouple.blocked) && targetCouple.blocked.includes(meFull.coupleId);
+      if (meBlockedThem || themBlockedMe) {
+        throw new AppError('This connection is not available', 403, 'BLOCKED');
+      }
+    }
 
     // Accept + both "You've Connected!" rows commit atomically (same rationale
     // as the sayHello mutual-like path: no connected-but-unnotified half state).

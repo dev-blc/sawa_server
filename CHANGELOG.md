@@ -4,6 +4,179 @@
 
 ---
 
+## [2026-08-20] — SMS abuse guard-stack + logout access-token revocation (H4)
+
+**Why**: the platform's #1 financial risk plus an auth-containment gap.
+(1) `/auth/send-otp` (which sends TWO SMS per call), `/auth/login-send-otp`,
+`/auth/resend-otp` and `/auth/invite-partner` are unauthenticated endpoints
+that spend real Twilio money, protected only by a per-IP burst limiter
+(10/15min) that IP rotation walks straight past — the exact shape of a prior
+real SMS-pumping attack at the sister company. (2) Access JWTs live
+`JWT_ACCESS_EXPIRES_IN` (7d default) and logout only cleared the refresh hash,
+so a stolen access token stayed valid for up to a week after logout (audit H4).
+
+**What changed**:
+
+- **SMS abuse guard** (`src/services/abuseGuard.ts`, new; wired inside
+  `otp.service.ts` at the single Twilio funnel — `generateAndStore` +
+  `sendInvitation` — so BOTH the OTP routes and invite-partner pass through it,
+  and no future caller can bypass it). Layers, all evaluated before any send,
+  each with its own Redis day-bucketed key + TTL: corridor allowlist
+  (`SMS_ALLOWED_PREFIXES`, default `+91` — India market; out-of-corridor →
+  400 `SMS_REGION_UNSUPPORTED`), per-phone daily cap (`SMS_PHONE_DAILY_CAP` 6),
+  per-8-digit-E.164-prefix daily cap (`SMS_PREFIX_DAILY_CAP` 30 — one prefix =
+  a 10k-number block; catches sequential-range pumping), per-IP daily budget
+  (`SMS_IP_DAILY_CAP` 20, on top of the burst limiter), and a global daily
+  kill-switch (`SMS_DAILY_GLOBAL_CAP` 2000 → 503 `SMS_TEMPORARILY_UNAVAILABLE`)
+  **incremented LAST, only after every other check passes**, so refused probes
+  can't drain the platform budget. Cap refusals share ONE uniform 429
+  (`SMS_LIMIT_REACHED`) so callers never learn which layer tripped. Counters
+  ride `cacheIncrExpire`; Redis outage degrades to per-process counters
+  (bounded workers × cap), never unbounded spend, never a login outage; the
+  corridor check is stateless and always enforced. First trip of any layer per
+  UTC day (new `cacheSetNX` in `lib/cache.ts`) → structured `logger.error` +
+  fire-and-forget POST to optional `ALERT_WEBHOOK_URL` (never blocks/fails the
+  request). Signup calls `precheckSmsSendAllowed` (read-only) BEFORE creating
+  couple/user rows or sending the first of its two SMS, so refused probes leave
+  no junk rows and no half-sent pairs. `req.ip` (real client — `trust proxy` is
+  set) threads controller → service → guard. Phones are masked in every new
+  log line (RULES §3), and the touched legacy `[OtpService]` lines now mask too.
+  Pure helpers unit-tested (`src/__tests__/abuseGuard.test.ts`, 15 tests).
+- **Logout revokes access tokens** (`services/tokenDenylist.ts` new,
+  `utils/jwt.ts`, `middleware/authenticate.ts`, `sockets/index.ts`,
+  `auth.service.logout`). **Decision: the 7d access TTL is deliberately
+  unchanged** — the admin panel authenticates with the same access tokens and
+  has no refresh flow, so shortening it would break admin sessions (a
+  concurrent edit that defaulted it to 1h was reverted for this recorded
+  reason; changing lifetimes goes through PLAN.md per RULES §3). Containment is
+  Redis-side on two axes, checked in parallel by `authenticate` AND the socket
+  handshake, 401/rejected with `TOKEN_REVOKED`: (a) per-token `jti` denylist —
+  every access token now carries a `jti` (uuid), and logout denylists the
+  presented token for its remaining lifetime; (b) per-user watermark — logout
+  stores an issued-before cutoff (TTL = access lifetime + 60s skew margin), so
+  EVERY token issued before the logout dies, including older copies an attacker
+  holds from before a refresh rotation (the case a jti-only deny misses).
+  Same-second re-login stays valid (strict `iat <` compare). Fail-open on Redis
+  outage — bounded by token `exp`, and refresh is already dead (hash cleared).
+  Token metadata rides a new `req.accessToken` (types/express.d.ts) instead of
+  widening `req.user`, whose shape is declaration-merged in 3 files (fixing the
+  TS2717 the previous concurrent edit introduced in `adminAuth.ts` — without
+  touching that file).
+- **Env** (`config/env.ts`): new optional-with-defaults `SMS_ALLOWED_PREFIXES`,
+  `SMS_PHONE_DAILY_CAP`, `SMS_PREFIX_DAILY_CAP`, `SMS_IP_DAILY_CAP`,
+  `SMS_DAILY_GLOBAL_CAP`, `ALERT_WEBHOOK_URL` — boot is unaffected. Removed a
+  concurrently-added duplicate SMS-guard var block (`SMS_PER_PHONE_HOURLY_CAP`
+  et al.) that referenced a `src/middleware/smsGuard.ts` which was never
+  created and had zero code references — one guard, one config vocabulary.
+- **Out of scope, noted**: WhatsApp notification mirrors
+  (`whatsapp.service.ts`) are a separate channel (not SMS) with their own
+  master switch and exclusion list; they do not pass this guard.
+
+**Gates**: `tsc --noEmit` clean (was 1 pre-existing error from the concurrent
+jti edit, now 0); all 47 unit tests pass (15 new). `npm run lint` cannot run in
+this repo — no ESLint config file exists (pre-existing, repo-wide).
+
+---
+
+## [2026-08-20] — Security hardening: flush guard, bidirectional block, cycle-push privacy, presign validation
+
+**Why**: four v3 audit findings where one leaked admin token, a fat-finger, a
+harassment attempt, or an oversized/mistyped upload could cause damage far out
+of proportion to the input. Each is verified at file:line against current code.
+
+1. **B3/H2 — `POST /admin/flush-database` had NO guard.** It runs
+   `TRUNCATE … RESTART IDENTITY CASCADE` on every table. A leaked/pasted admin
+   token, or a mis-click, wiped the entire database — in production — with no
+   confirmation and no attribution.
+2. **M2 — one-directional block (harassment vector in a couples app).**
+   `getDiscoveryFeed` and `sayHello` filtered only the requester's OWN
+   `blocked[]`. A couple that BLOCKED the requester still surfaced in the
+   requester's feed and could still receive a "say hello" — the block did not
+   protect the person who set it.
+3. **M5 — menstrual-cycle phase leaked to third parties (India DPDP).** The
+   cycle nudges (`cycleNotifier.ts`) and the "shared her cycle calendar" push
+   (`POST /us/cycle`) put the specific phase/prediction in the FCM/APNs/Twilio
+   push BODY — shown on a locked screen and transiting Google/Apple/Twilio.
+   Menstrual data is sensitive personal data under the DPDP Act.
+4. **M6 — chat presign accepted anything, unbounded.** `POST /chats/upload-url`
+   accepted any 3–100 char `contentType`, and the presigned PUT set no size
+   limit. That PUT streams straight to object storage, bypassing the app's 10mb
+   JSON body cap, so a valid token could push an arbitrary MIME at an arbitrary
+   size directly into the bucket.
+
+**What changed**:
+
+- **Flush-database guarded** (`admin.controller.ts`, `config/env.ts`). Default
+  posture is REFUSE. A typed confirmation `?confirm=FLUSH-ENTIRE-SAWA-DATABASE`
+  is now required in EVERY environment. In **production** the flush additionally
+  demands the deploy-level flag `ALLOW_PROD_DB_FLUSH=true` (new zod env var,
+  default `false`); without it the endpoint hard-refuses (403
+  `FLUSH_DISABLED_IN_PROD`), and with it but no/wrong phrase → 403
+  `FLUSH_CONFIRM_REQUIRED`. Non-prod without the phrase → 403
+  `FLUSH_CONFIRM_REQUIRED`. Every refusal and the actual execution log at
+  `error`/`warn` with the acting admin's id (`req.user.userId`). Admin 2FA is a
+  larger, separate task — recommended follow-up, not built here.
+- **Bidirectional block** (`match.service.ts`). (a) Discovery `where` gains
+  `NOT: { blocked: { has: me.coupleId } }` — couples that blocked us now
+  disappear from our feed. `has` compiles to the array-contains operator served
+  by the existing GIN index (`schema.prisma @@index([blocked], type: Gin)`), so
+  no sequential scan; all other feed filters are byte-identical. (b) `sayHello`
+  and `acceptPendingMatchRecord` (the single choke point for both the accept
+  endpoint and the mutual-like race path) now reject with a neutral `403 BLOCKED` when
+  EITHER side blocked the other — one message ("This connection is not
+  available"), never leaking which direction. `blocked` added to `sayHelloSelect`
+  for the guard. Unit-tested (`src/__tests__/match.block.test.ts`, 4 tests).
+- **Cycle-push privacy** (`cycleNotifier.ts`, `us.routes.ts`, `i18n/notif.ts`).
+  New neutral i18n key `cycle.neutral` (all 4 locales: en/hi/kn/mr) — "A gentle
+  update in your space" / "Open Sawa to see it". Both outbound cycle pushes now
+  send this neutral line and drop `milestone` + the `cycle.<phase>` i18n key
+  from the push `data` (either would re-render/expose the phase client-side);
+  `localizeFor` re-renders `cycle.neutral` per recipient locale, and the
+  WhatsApp mirror does the same. The **in-app Notification row + socket emit keep
+  the real phase content** (behind auth). The `[CycleNotifier]` info log no
+  longer prints the phase/day against a coupleId (that was menstrual-health data
+  in Winston). **Encryption-at-rest is DEFERRED** (needs a migration): the cycle
+  columns (`cycleLastPeriodStart`, `cyclePeriodLength`, `cycleCycleLength`) sit
+  in plaintext on `CoupleUsState`. Proposed approach in PLAN follow-up:
+  app-layer AES-256-GCM on those columns with a key from a KMS/env secret
+  (per-record IV, auth tag stored alongside), or Postgres `pgcrypto`. Either
+  requires a schema/migration change to widen/rename the columns to hold the
+  ciphertext + IV + tag and a backfill — out of scope for this code-only pass.
+- **Presign validation** (`chat.controller.ts`, `lib/storage.ts`, `config/env.ts`).
+  `contentType` is normalized (params stripped, lowercased) and allow-listed per
+  kind — voice `{audio/aac, audio/mpeg, audio/m4a}`, image `{image/jpeg,
+  image/png, image/webp}` (verified against mobile `uploadMedia.ts`: it sends
+  `audio/aac` for voice and the picker mime, overwhelmingly `image/jpeg`, for
+  images). Unlisted → `415 UNSUPPORTED_MEDIA_TYPE`; the client then uses its
+  existing base64 fallback, so nothing hard-breaks. Size caps are new
+  env-configurable vars `S3_MAX_IMAGE_BYTES` (default 10 MiB) /
+  `S3_MAX_VOICE_BYTES` (default 25 MiB): a declared `contentLength` over the cap
+  → `413 MEDIA_TOO_LARGE`, and when declared it is signed onto the presigned PUT
+  as `Content-Length` so storage rejects a mismatched body. NOTE: a presigned
+  **PUT** cannot express a size *range* the way a presigned POST policy can — an
+  exact signed `Content-Length` is the PUT-compatible bound, so a hard cap
+  applies only once the client declares its length. Recommended follow-up: have
+  the mobile client send `contentLength` in the `/chats/upload-url` body (it
+  already knows the blob size) — backward-compatible, no response-shape change.
+  The `{ uploadUrl, publicUrl, key, ref, contentType }` response shape is
+  unchanged, so the just-shipped presigned pipeline keeps working.
+
+**Concurrent-edit note (gates)**: this pass shares `config/env.ts` and
+`i18n/notif.ts` with another agent's in-flight security work (an SMS abuse guard
+plus a JWT jti-denylist). My additions merged cleanly at distinct locations. At
+hand-off, `npm run typecheck` reports 19 errors and `app.health.test.ts` fails
+to compile — **all** of them inside that other agent's files
+(`src/services/abuseGuard.ts` ×18: it references `SMS_PHONE_DAILY_CAP` /
+`SMS_IP_DAILY_CAP` / `ALERT_WEBHOOK_URL` while their env.ts defines
+`SMS_PER_PHONE_DAILY_CAP` / `SMS_PER_IP_DAILY_CAP` / no webhook var;
+`src/middleware/adminAuth.ts` ×1: their `express.d.ts` gained `jti`/
+`accessTokenExp` on `Request.user` but the duplicate augmentation in adminAuth
+was not updated). **Zero errors trace to the six files in this change**; all
+30 unit tests pass (the 4 new block tests + the prior 26). Re-run the gates
+once that agent's SMS/JWT work lands.
+
+---
+
 ## [2026-08-20] — Real match scoring, envelope unification, atomicity for multi-write paths
 
 **Why**: three classes of dishonesty/fragility. (1) The discovery feed's

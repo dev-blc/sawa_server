@@ -4,7 +4,8 @@ import { createAdapter } from '@socket.io/redis-adapter';
 import Redis from 'ioredis';
 import { env } from '../config/env';
 import { logger } from '../utils/logger';
-import { verifyAccessToken } from '../utils/jwt';
+import { verifyAccessToken, isAccessTokenDenied } from '../utils/jwt';
+import { isAccessTokenRevoked } from '../services/tokenDenylist';
 import { prisma } from '../lib/prisma';
 import { registerChatHandlers } from './chat.socket';
 import { registerMatchHandlers } from './match.socket';
@@ -71,6 +72,19 @@ export const createSocketServer = (httpServer: HTTPServer): SocketIOServer => {
 
     try {
       const payload = verifyAccessToken(token);
+
+      // Logout containment (H4): mirror the HTTP `authenticate` middleware — a
+      // token revoked at logout (its jti denylisted, or issued before the
+      // user's revocation watermark) must not open a WebSocket either.
+      const [jtiDenied, issuedBeforeLogout] = await Promise.all([
+        isAccessTokenDenied(payload.jti),
+        isAccessTokenRevoked(payload.userId, payload.iat),
+      ]);
+      if (jtiDenied || issuedBeforeLogout) {
+        logger.warn(`❌ Socket ${socket.id} rejected: token revoked by logout`);
+        return next(new Error('Session ended. Please sign in again.'));
+      }
+
       socket.userId = payload.userId;
       socket.coupleId = payload.coupleId;
 

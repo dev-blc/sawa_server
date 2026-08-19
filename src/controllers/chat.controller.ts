@@ -3,12 +3,27 @@ import { z } from 'zod';
 import { sendSuccess } from '../utils/response';
 import { AppError } from '../utils/AppError';
 import { prisma } from '../lib/prisma';
+import { env } from '../config/env';
 import { getCoupleCommunityColor } from '../utils/communityColors';
 import {
   createPresignedUpload,
   createPresignedDownload,
   isStorageConfigured,
 } from '../lib/storage';
+
+/**
+ * Allowed upload content types per kind (v3 M6). The presigned PUT streams
+ * straight to object storage, bypassing the app's JSON body limit, so the type
+ * and size the client declares are the only gate. Verified against the mobile
+ * `uploadMedia.ts`: voice notes are recorded as `audio/aac` (.m4a); images are
+ * sent as the picker's mime — overwhelmingly `image/jpeg`, plus png/webp. An
+ * unlisted type is refused (415); the mobile client then falls back to its
+ * legacy base64 path, so the allowlist never hard-breaks a real upload.
+ */
+const ALLOWED_UPLOAD_CONTENT_TYPES: Record<'voice' | 'image', ReadonlySet<string>> = {
+  voice: new Set(['audio/aac', 'audio/mpeg', 'audio/m4a']),
+  image: new Set(['image/jpeg', 'image/png', 'image/webp']),
+};
 
 // ─── Authorization helpers (prevent chat IDOR) ────────────────────────────────
 // A couple may only read/write a private chat if it is one of the two matched
@@ -482,17 +497,36 @@ export const createChatUploadUrl = async (req: Request, res: Response): Promise<
     kind: z.enum(['voice', 'image']).default('voice'),
     contentType: z.string().min(3).max(100).optional(),
     ext: z.string().max(8).optional(),
+    // Optional declared upload size (bytes). When present it is validated
+    // against the per-kind cap and signed onto the presigned PUT (hard bound).
+    contentLength: z.number().int().positive().optional(),
   });
-  const { kind, contentType, ext } = schema.parse(req.body ?? {});
+  const { kind, contentType, ext, contentLength } = schema.parse(req.body ?? {});
 
   const resolvedContentType =
     contentType || (kind === 'voice' ? 'audio/aac' : 'image/jpeg');
+  // Normalize before the allowlist check: drop any `; charset=`/`; codecs=`
+  // parameter and lowercase. This exact string is what the URL is signed with,
+  // so the client must echo it back as the PUT Content-Type header.
+  const normalizedContentType = resolvedContentType.split(';')[0].trim().toLowerCase();
+
+  if (!ALLOWED_UPLOAD_CONTENT_TYPES[kind].has(normalizedContentType)) {
+    throw new AppError('Unsupported media type', 415, 'UNSUPPORTED_MEDIA_TYPE');
+  }
+
+  // Size cap (v3 M6): reject an oversize DECLARED length up front; when declared
+  // it is also signed onto the PUT so storage rejects a mismatched body.
+  const maxBytes = kind === 'voice' ? env.S3_MAX_VOICE_BYTES : env.S3_MAX_IMAGE_BYTES;
+  if (contentLength !== undefined && contentLength > maxBytes) {
+    throw new AppError('Media exceeds the maximum allowed size', 413, 'MEDIA_TOO_LARGE');
+  }
 
   const { uploadUrl, publicUrl, key } = await createPresignedUpload({
     folder: kind,
-    contentType: resolvedContentType,
+    contentType: normalizedContentType,
     ext,
     coupleId,
+    contentLength,
   });
 
   // The bucket is private; the message stores this stable reference and playback
@@ -501,7 +535,7 @@ export const createChatUploadUrl = async (req: Request, res: Response): Promise<
 
   sendSuccess({
     res,
-    data: { uploadUrl, publicUrl, key, ref, contentType: resolvedContentType },
+    data: { uploadUrl, publicUrl, key, ref, contentType: normalizedContentType },
   });
 };
 
