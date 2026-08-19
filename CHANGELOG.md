@@ -4,6 +4,17 @@
 
 ---
 
+## [2026-08-19] — Add CLAUDE.md shim so RULES.md auto-loads for agent sessions
+
+**Why**: `sawa/` and `sawa_admin/` each carry a `CLAUDE.md` containing `@AGENTS.md`, so their
+rules auto-load for agent sessions started inside the repo. This repo had no equivalent — a
+session started in `sawa_server/` never saw RULES.md unless it was launched from the
+workspace folder above. The rules only work if they load.
+
+**What changed**: new `CLAUDE.md` containing `@RULES.md`. Docs only.
+
+---
+
 ## [2026-08-19] — RULES.md regenerated against verified code, restructured design → performance → security
 
 **Why**: a claim-by-claim verification of RULES.md against `arfam-fix` `42bbf2c` found six
