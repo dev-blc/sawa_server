@@ -9,6 +9,7 @@ import { prisma } from '../lib/prisma';
 import { registerChatHandlers } from './chat.socket';
 import { registerMatchHandlers } from './match.socket';
 import { registerUsHandlers } from './us.socket';
+import { SOCKET_EVENTS } from '../constants/socketEvents';
 
 declare module 'socket.io' {
   interface Socket {
@@ -117,6 +118,25 @@ export const createSocketServer = (httpServer: HTTPServer): SocketIOServer => {
     }
   });
 
+  // ─── Partner presence (ambient, socket-only) ────────────────────────────────
+  // Live socket count per userId for THIS worker. A user can hold several
+  // sockets at once (reconnect overlap, a second device), so presence
+  // transitions fire only on the FIRST socket in (offline → online) and the
+  // LAST socket out (online → offline). Deliberately no Notification row and no
+  // push — presence is ambient and must never buzz a phone.
+  //
+  // PM2-cluster truth (see ecosystem.config.js): the server runs in cluster
+  // mode (4 workers when REDIS_URL is set) and PM2 provides NO sticky sessions —
+  // the cluster module distributes each new connection across workers. A single
+  // socket lives its whole life on one worker, and the Redis adapter relays
+  // these emits to the couple room on every worker, so DELIVERY is
+  // cluster-correct. COUNTING is per-worker: exact for the dominant mobile case
+  // (one device → one socket), but a user whose sockets land on different
+  // workers (second device / reconnect overlap) can flicker a false
+  // offline → online. If presence ever needs to be exact across workers, move
+  // these counts to Redis (INCR/DECR with a TTL).
+  const liveSocketsPerUser = new Map<string, number>();
+
   io.on('connection', (socket: Socket) => {
     // Per-connection chatter is debug-only so production logs stay readable at scale.
     logger.debug(`✨ Socket Connected: ${socket.id}`);
@@ -129,8 +149,35 @@ export const createSocketServer = (httpServer: HTTPServer): SocketIOServer => {
         socket.join(`couple:${socket.coupleId}`);
     }
 
+    // Presence: first socket in → the partner sees them come online. The payload
+    // carries userId so each client ignores its own presence events.
+    if (socket.userId && socket.coupleId) {
+      const count = liveSocketsPerUser.get(socket.userId) ?? 0;
+      liveSocketsPerUser.set(socket.userId, count + 1);
+      if (count === 0) {
+        io.to(`couple:${socket.coupleId}`).emit(SOCKET_EVENTS.US_PARTNER_PRESENCE, {
+          userId: socket.userId,
+          online: true,
+        });
+      }
+    }
+
     socket.on('disconnect', (reason) => {
       logger.debug(`Socket disconnected: ${socket.id} — ${reason}`);
+
+      // Presence: last socket out → the partner sees them go offline.
+      if (socket.userId && socket.coupleId) {
+        const count = liveSocketsPerUser.get(socket.userId) ?? 0;
+        if (count <= 1) {
+          liveSocketsPerUser.delete(socket.userId);
+          io.to(`couple:${socket.coupleId}`).emit(SOCKET_EVENTS.US_PARTNER_PRESENCE, {
+            userId: socket.userId,
+            online: false,
+          });
+        } else {
+          liveSocketsPerUser.set(socket.userId, count - 1);
+        }
+      }
     });
   });
 

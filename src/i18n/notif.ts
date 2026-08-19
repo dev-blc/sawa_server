@@ -27,6 +27,9 @@ export interface NotifParams {
   date?: string;
   girl?: string;
   boy?: string;
+  game?: string;
+  count?: string;
+  years?: string;
   g?: NotifGender;
   [k: string]: string | undefined;
 }
@@ -433,6 +436,157 @@ const T: Record<string, Entry> = {
       hi: '{game}! स्वीकार करने और खेलने के लिए टैप करें',
       kn: '{game}! ಸ್ವೀಕರಿಸಲು ಮತ್ತು ಆಡಲು ಟ್ಯಾಪ್ ಮಾಡಿ',
       mr: '{game}! स्वीकारण्यासाठी आणि खेळण्यासाठी टॅप करा',
+    },
+  },
+  // Game results are written from the RECIPIENT's perspective (the partner who
+  // did NOT report the result). In `win` / `winStreak` the recipient won, so
+  // {name} is the partner who lost; in `loss` / `lossStreak` {name} is the
+  // winner. hi/mr use ergative ("ने") / respectful constructions so no gendered
+  // variants are needed; kn uses the genderless respectful plural.
+  'us.game.win': {
+    title: {
+      en: 'You won {game}! 🎉',
+      hi: 'आपने {game} जीत लिया! 🎉',
+      kn: 'ನೀವು {game} ಗೆದ್ದಿರಿ! 🎉',
+      mr: 'तुम्ही {game} जिंकलात! 🎉',
+    },
+    body: {
+      en: 'Nicely played — up for a rematch with {name}?',
+      hi: 'बहुत बढ़िया — {name} के साथ एक और मैच?',
+      kn: 'ಚೆನ್ನಾಗಿ ಆಡಿದಿರಿ — {name} ಜೊತೆ ಇನ್ನೊಂದು ಆಟ?',
+      mr: 'छान खेळलात — {name} सोबत आणखी एक डाव?',
+    },
+  },
+  'us.game.winStreak': {
+    title: {
+      en: 'You won {game}! 🎉',
+      hi: 'आपने {game} जीत लिया! 🎉',
+      kn: 'ನೀವು {game} ಗೆದ್ದಿರಿ! 🎉',
+      mr: 'तुम्ही {game} जिंकलात! 🎉',
+    },
+    body: {
+      en: "That's {count} in a row for you — give {name} a rematch? 😄",
+      hi: 'लगातार {count} जीत आपके नाम — {name} के लिए एक और मैच? 😄',
+      kn: 'ಸತತ {count} ಗೆಲುವು ನಿಮ್ಮದು — {name} ಗೆ ಇನ್ನೊಂದು ಅವಕಾಶ? 😄',
+      mr: 'सलग {count} वेळा तुमचीच सरशी — {name} ला आणखी एक संधी? 😄',
+    },
+  },
+  'us.game.loss': {
+    title: {
+      en: '{name} won this round of {game}',
+      hi: '{name} ने {game} की यह बाज़ी जीत ली',
+      kn: 'ಈ ಸುತ್ತಿನ {game} ಅನ್ನು {name} ಗೆದ್ದರು',
+      mr: '{name} ने {game} ची ही फेरी जिंकली',
+    },
+    body: {
+      en: 'Rematch? 😉',
+      hi: 'एक और मैच? 😉',
+      kn: 'ಇನ್ನೊಂದು ಆಟ? 😉',
+      mr: 'आणखी एक डाव? 😉',
+    },
+  },
+  'us.game.lossStreak': {
+    title: {
+      en: '{name} won this round of {game}',
+      hi: '{name} ने {game} की यह बाज़ी जीत ली',
+      kn: 'ಈ ಸುತ್ತಿನ {game} ಅನ್ನು {name} ಗೆದ್ದರು',
+      mr: '{name} ने {game} ची ही फेरी जिंकली',
+    },
+    body: {
+      en: "That's {count} in a row for {name} — time for a comeback? 😉",
+      hi: '{name} की लगातार {count} जीत — अब कमबैक का समय? 😉',
+      kn: '{name} ಅವರದ್ದು ಸತತ {count} ಗೆಲುವು — ಈಗ ಕಮ್‌ಬ್ಯಾಕ್ ಸಮಯ? 😉',
+      mr: '{name} ने सलग {count} डाव जिंकले — आता कमबॅकची वेळ? 😉',
+    },
+  },
+  'us.game.draw': {
+    title: {
+      en: "It's a draw at {game} 🤝",
+      hi: '{game} में बराबरी 🤝',
+      kn: '{game} ಸಮಬಲದಲ್ಲಿ ಮುಗಿಯಿತು 🤝',
+      mr: '{game} बरोबरीत सुटला 🤝',
+    },
+    body: {
+      en: 'Evenly matched, you two — rematch?',
+      hi: 'आप दोनों बराबर के खिलाड़ी — एक और मैच?',
+      kn: 'ನೀವಿಬ್ಬರೂ ಸರಿಸಮ — ಇನ್ನೊಂದು ಆಟ?',
+      mr: 'तुम्ही दोघेही तुल्यबळ — आणखी एक डाव?',
+    },
+  },
+
+  // ── Us space: celebrations (cron) — birthdays & Sawa anniversary ─────────────
+  // {name} is always the birthday person; `g` is THEIR gender (en needs it for
+  // him/her; hi/kn/mr use respectful genderless forms and stay plain strings).
+  'us.birthday.tomorrow': {
+    title: {
+      en: "🎂 {name}'s birthday is tomorrow",
+      hi: '🎂 कल {name} का जन्मदिन है',
+      kn: '🎂 ನಾಳೆ {name} ಅವರ ಹುಟ್ಟುಹಬ್ಬ',
+      mr: '🎂 उद्या {name} चा वाढदिवस आहे',
+    },
+    body: {
+      en: { m: 'Plan something small and lovely for him', f: 'Plan something small and lovely for her' },
+      hi: 'उनके लिए कुछ छोटा-सा और प्यारा प्लान करें',
+      kn: 'ಅವರಿಗಾಗಿ ಚಿಕ್ಕದಾದರೂ ಪ್ರೀತಿಯ ಏನಾದರೂ ಯೋಜಿಸಿ',
+      mr: 'त्यांच्यासाठी काहीतरी छोटंसं आणि गोड ठरवा',
+    },
+  },
+  'us.birthday.today.you': {
+    title: {
+      en: '🎂 Happy birthday, {name}!',
+      hi: '🎂 जन्मदिन मुबारक, {name}!',
+      kn: '🎂 ಹುಟ್ಟುಹಬ್ಬದ ಶುಭಾಶಯಗಳು, {name}!',
+      mr: '🎂 वाढदिवसाच्या शुभेच्छा, {name}!',
+    },
+    body: {
+      en: 'Wishing you a day full of little joys 💛',
+      hi: 'आपका दिन छोटी-छोटी खुशियों से भरा रहे 💛',
+      kn: 'ನಿಮ್ಮ ದಿನ ಸಣ್ಣ ಸಣ್ಣ ಸಂತೋಷಗಳಿಂದ ತುಂಬಿರಲಿ 💛',
+      mr: 'तुमचा दिवस छोट्या छोट्या आनंदांनी भरलेला असो 💛',
+    },
+  },
+  'us.birthday.today.partner': {
+    title: {
+      en: "🎂 It's {name}'s birthday today",
+      hi: '🎂 आज {name} का जन्मदिन है',
+      kn: '🎂 ಇಂದು {name} ಅವರ ಹುಟ್ಟುಹಬ್ಬ',
+      mr: '🎂 आज {name} चा वाढदिवस आहे',
+    },
+    body: {
+      en: { m: 'A little extra love will make his day', f: 'A little extra love will make her day' },
+      hi: 'आज थोड़ा और प्यार — उनका दिन बन जाएगा 💛',
+      kn: 'ಇಂದು ಸ್ವಲ್ಪ ಹೆಚ್ಚು ಪ್ರೀತಿ ತೋರಿಸಿ — ಅವರ ದಿನ ವಿಶೇಷವಾಗುತ್ತದೆ 💛',
+      mr: 'आज थोडं जास्त प्रेम — त्यांचा दिवस खास होईल 💛',
+    },
+  },
+  // Sawa anniversary of Couple.createdAt. Two keys because "1 year" pluralizes
+  // differently across the four languages; `many` takes numeric {years} ≥ 2.
+  'us.anniversary.one': {
+    title: {
+      en: '💛 One year of your shared space',
+      hi: '💛 आपके साझा स्पेस का एक साल',
+      kn: '💛 ನಿಮ್ಮಿಬ್ಬರ ಸಾವಾ ಸ್ಪೇಸ್‌ಗೆ ಒಂದು ವರ್ಷ',
+      mr: '💛 तुमच्या शेअर्ड स्पेसचं एक वर्ष',
+    },
+    body: {
+      en: "A year of Sawa together — here's to many more",
+      hi: 'सावा पर साथ-साथ एक साल पूरा — यह सिलसिला यूँ ही चले',
+      kn: 'ಸಾವಾದಲ್ಲಿ ಜೊತೆಯಾಗಿ ಒಂದು ವರ್ಷ ಪೂರ್ಣ — ಹೀಗೇ ಜೊತೆಗಿರಿ',
+      mr: 'सावावर सोबतीचं एक वर्ष पूर्ण — असंच सोबत राहा',
+    },
+  },
+  'us.anniversary.many': {
+    title: {
+      en: '💛 {years} years of your shared space',
+      hi: '💛 आपके साझा स्पेस के {years} साल',
+      kn: '💛 ನಿಮ್ಮಿಬ್ಬರ ಸಾವಾ ಸ್ಪೇಸ್‌ಗೆ {years} ವರ್ಷಗಳು',
+      mr: '💛 तुमच्या शेअर्ड स्पेसची {years} वर्षं',
+    },
+    body: {
+      en: "{years} years of Sawa together — here's to many more",
+      hi: 'सावा पर साथ-साथ {years} साल पूरे — यह सिलसिला यूँ ही चले',
+      kn: 'ಸಾವಾದಲ್ಲಿ ಜೊತೆಯಾಗಿ {years} ವರ್ಷಗಳು ಪೂರ್ಣ — ಹೀಗೇ ಜೊತೆಗಿರಿ',
+      mr: 'सावावर सोबतीची {years} वर्षं पूर्ण — असंच सोबत राहा',
     },
   },
 

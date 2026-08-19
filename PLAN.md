@@ -220,6 +220,15 @@ id, phone, otpHash, expiresAt, attempts, createdAt
 | POST | `/chats/private/:matchId` | ✅ | Send private message |
 | POST | `/chats/group/:communityId` | ✅ | Send group message |
 
+### Us space (`/us`)
+> The wider `/us` surface (feelings, planned dates, fridge notes, cycle, game
+> state) predates this reference and is not yet tabulated — see
+> `src/routes/us.routes.ts`. New endpoints are documented as they land:
+
+| Method | Path | Auth | Description |
+|---|---|---|---|
+| GET | `/us/mood-history` | ✅ | Couple's last 30 days of mood events `{ userId, mood, at }` (both partners, newest first), read from the `us_mood` Notification rows |
+
 ---
 
 ## Socket.io Events
@@ -233,6 +242,7 @@ id, phone, otpHash, expiresAt, attempts, createdAt
 | `chat:read` | Client → Server | Mark messages as read |
 | `match:new` | Server → Client | New match notification |
 | `match:accepted` | Server → Client | Match accepted notification |
+| `us:partner:presence` | Server → Client | Ambient partner presence in the couple room: `{ userId, online }` on first-socket connect / last-socket disconnect. Socket-only — no notification, no push |
 
 ---
 

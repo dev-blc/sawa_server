@@ -4,7 +4,69 @@
 
 ---
 
-## [2026-08-19] — Add CLAUDE.md shim so RULES.md auto-loads for agent sessions
+## [2026-08-20] — Companion layer: game-result loop, partner presence, quiet hours, celebrations, mood history
+
+**Why**: the Us space had four emotional dead-ends. A finished game notified nobody — the
+`us_game_result` subtype was declared (`us.socket.ts`) but never sent, so an offline partner
+never learned the game ended. The couple room existed but never said whether the partner was
+there. Socket-driven pushes (nudges, moods, game results) buzzed phones at 2am while every cron
+job politely respected 08–21 IST. And nothing celebrated birthdays or the couple's own Sawa
+anniversary even though `User.dob` and `Couple.createdAt` sit in the schema. All five changes
+ride the existing schema — no migration.
+
+**What changed**:
+
+- **Game-result loop closed** (`src/sockets/us.socket.ts`): when `us:game:result` is scored
+  (inside the existing scored-once idempotency guard), the partner who did NOT report gets the
+  full us.mood-pattern treatment — Notification row (`subtype: 'us_game_result'`),
+  `notification:new` socket refresh, localized push via `pushToUser`. Copy is written from the
+  recipient's perspective (win / loss / draw), mentions the live streak from 2 consecutive wins,
+  and keeps a playful "Rematch?" tone. New i18n keys `us.game.win|winStreak|loss|lossStreak|draw`
+  in all four locales (`src/i18n/notif.ts`), phrased with ergative/respectful constructions in
+  hi/mr/kn so no gendered variants are needed.
+- **Ambient partner presence** (`src/sockets/index.ts`, `src/constants/socketEvents.ts`):
+  `us:partner:presence { userId, online }` is emitted to `couple:{coupleId}` on a user's FIRST
+  socket connecting and LAST socket disconnecting (per-user socket counting in a per-worker
+  Map). Socket-only by design — no Notification row, no push. The comment documents the PM2
+  truth: cluster mode has NO sticky sessions, so delivery is cluster-correct via the Redis
+  adapter but counting is per-worker (exact for one-device users; multi-worker users can flicker
+  a false offline). Redis INCR/DECR is the named upgrade path.
+- **Quiet hours for event pushes** (`src/services/push.service.ts`): outside 08:00–22:00 IST,
+  `pushToUser`/`pushToCouple` suppress the FCM push AND the WhatsApp mirror for the types in the
+  new exported `QUIET_HOURS_GATED_TYPES` (us_nudge, us_love, us_feeling, us_ask_feeling,
+  us_fridge_note, us_fridge_ack, us_game_challenge, us_game_result). Notification rows and
+  socket emits are unaffected (callers write them first) — in-app surfaces stay live; only the
+  phone buzz respects the night. Chat/match pushes stay exempt; cron types already self-gate.
+  Timezone hardcoded IST to match the jobs; per-user timezone is a named known gap.
+- **Celebrations job** (`src/jobs/celebrationNotifier.ts`, wired in `src/server.ts` worker-0
+  gate like the other three): every 3h inside 08–21 IST, Redis once-per-day dedupe. Birthday
+  tomorrow → heads-up to the other partner; birthday today → warm wish to the birthday person +
+  gentle nudge to the partner (per-partner visibility via the existing `data.senderUserId`
+  client filter); Sawa anniversary of `Couple.createdAt` (years ≥ 1) → both partners via
+  couple-level row + `pushToCouple`. Subtypes `us_birthday`/`us_anniversary` on the existing
+  `type: 'system'` enum value — no schema change. New i18n keys `us.birthday.tomorrow`,
+  `us.birthday.today.you`, `us.birthday.today.partner`, `us.anniversary.one`,
+  `us.anniversary.many` (two keys because "1 year" pluralizes differently across the four
+  languages). DOB parsing mirrors `ageFromDobString` (DD/MM/YYYY and ISO); Feb-29 celebrates on
+  Feb 28 in non-leap years; banned couples are skipped.
+- **Mood history read-path** (`src/routes/us.routes.ts`): `GET /api/v1/us/mood-history` returns
+  the couple's last 30 days of mood events `{ userId, mood, at }` (both partners, newest first)
+  from the `us_mood` Notification rows the socket path already writes — Redis moods TTL out at
+  7 days, these don't. Bounded (30-day window + take 200), served by the `[recipientId, type]`
+  index with a JSON-path subtype filter. New-code rules applied: `sendSuccess` envelope +
+  `asyncHandler` (rest of the file remains baseline debt).
+- **Test harness repaired** (no production code): `src/__tests__/setup.ts` set a `JWT_SECRET`
+  nothing reads and lacked `GROQ_API_KEY`, so env validation `process.exit(1)`-ed every suite at
+  import; `@types/supertest` was never installed, so two suites failed to compile (bridged with
+  `src/types/supertest.d.ts` — install the real types on the next dependency change);
+  `report.routes.test.ts` mock predated the route's blocked-list read (`couple.findUnique`) and
+  the `req.user.userId` augmentation; `app.health.test.ts` demanded a live Postgres for what is
+  a contract test (DB ping now mocked). `npm test`: 3/3 suites, 12/12 tests green — it could
+  not even start before.
+
+Gates: `tsc --noEmit` 0 errors (baseline 0), `npm test` green (baseline: env-exit before any
+test). `eslint src --ext .ts` cannot run — the repo has no ESLint config file (pre-existing;
+adding one is a separate decision, not smuggled in here).
 
 **Why**: `sawa/` and `sawa_admin/` each carry a `CLAUDE.md` containing `@AGENTS.md`, so their
 rules auto-load for agent sessions started inside the repo. This repo had no equivalent — a

@@ -7,6 +7,7 @@ import { createSocketServer } from './sockets/index';
 import { startCycleNotifier } from './jobs/cycleNotifier';
 import { startSubscriptionNotifier } from './jobs/subscriptionNotifier';
 import { startEventReminderNotifier } from './jobs/eventReminderNotifier';
+import { startCelebrationNotifier } from './jobs/celebrationNotifier';
 import { migrateUsRedisToPostgres } from './jobs/migrateUsToPg';
 import { env } from './config/env';
 import { logger } from './utils/logger';
@@ -37,6 +38,7 @@ const start = async (): Promise<void> => {
     startCycleNotifier();
     startSubscriptionNotifier();
     startEventReminderNotifier();
+    startCelebrationNotifier();
     // One-time backfill of Us-space data from Redis into Postgres.
     migrateUsRedisToPostgres().catch(() => null);
   }

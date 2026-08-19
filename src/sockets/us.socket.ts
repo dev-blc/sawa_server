@@ -2,7 +2,7 @@ import { Server as SocketIOServer, Socket } from 'socket.io';
 import { prisma } from '../lib/prisma';
 import { logger } from '../utils/logger';
 import { pushToUser } from '../services/push.service';
-import { i18nData, NotifParams } from '../i18n/notif';
+import { i18nData, renderNotif, NotifParams } from '../i18n/notif';
 import { invalidateNotifUnreadCount, cacheSet, cacheGet } from '../lib/cache';
 
 /** Redis key for a user's last shared feeling. TTL 7 days. */
@@ -712,6 +712,10 @@ export const registerUsHandlers = (io: SocketIOServer, socket: Socket): void => 
       if (already) return;
       await cacheSet(scoredKey, '1', 24 * 60 * 60);
 
+      // The winner's live streak after this game (0 on a draw) — used below so
+      // the result notification can celebrate a streak that is still alive.
+      let streakCount = 0;
+
       if (!payload.draw && payload.winnerUserId) {
         const winnerId = payload.winnerUserId;
 
@@ -732,6 +736,7 @@ export const registerUsHandlers = (io: SocketIOServer, socket: Socket): void => 
           create: { coupleId, gameStreakUserId: winnerId, gameStreakCount: nextCount },
           update: { gameStreakUserId: winnerId, gameStreakCount: nextCount },
         });
+        streakCount = nextCount;
 
         // Read back the full scoreboard and broadcast to BOTH partners.
         const scores = await prisma.usGameScore.findMany({ where: { coupleId } });
@@ -740,6 +745,66 @@ export const registerUsHandlers = (io: SocketIOServer, socket: Socket): void => 
         const streak = { userId: winnerId, count: nextCount };
 
         io.to(`couple:${coupleId}`).emit('us:game:points', { points: pts, streak });
+      }
+
+      // ── Close the loop: tell the partner who did NOT report the result ────
+      // The reporter's client just rendered the ending locally; an offline
+      // partner otherwise never learns the game ended. Same Notification-row +
+      // notification:new + localized-push pattern as us:feeling / us:nudge
+      // above (idempotent: we are inside the scored-once guard). Copy is
+      // written from the RECIPIENT's perspective, "Rematch?" tone.
+      const gameType = gameTypeOf(payload.gameId);
+      const gameName = gameNameFor(gameType);
+      const senderName = firstName(userName || 'Your partner');
+      const { partnerId, senderPhoto } = await findPartnerIdAndPhoto(userId, coupleId);
+
+      const recipientWon =
+        !payload.draw && !!payload.winnerUserId && payload.winnerUserId === partnerId;
+      // A single win is not a streak yet — mention it from 2 consecutive wins.
+      const showStreak = !payload.draw && streakCount >= 2;
+      const resultKey = payload.draw
+        ? 'us.game.draw'
+        : recipientWon
+        ? (showStreak ? 'us.game.winStreak' : 'us.game.win')
+        : (showStreak ? 'us.game.lossStreak' : 'us.game.loss');
+      const resultParams: NotifParams = {
+        name: senderName,
+        game: gameName,
+        ...(showStreak ? { count: String(streakCount) } : {}),
+      };
+      const { title: resultTitle, body: resultBody } = renderNotif('en', resultKey, resultParams);
+
+      await saveUsNotification({
+        coupleId,
+        senderUserId: userId,
+        subtype: 'us_game_result',
+        title: resultTitle,
+        message: resultBody,
+        extraData: {
+          gameId: payload.gameId,
+          gameType,
+          draw: !!payload.draw,
+          ...(payload.winnerUserId ? { winnerUserId: payload.winnerUserId } : {}),
+          ...(showStreak ? { streakCount } : {}),
+          ...i18nData(resultKey, resultParams),
+        },
+      });
+      io.to(`couple:${coupleId}`).except(socket.id).emit('notification:new', { type: 'us_game_result' });
+
+      if (partnerId) {
+        pushToUser(partnerId, {
+          title: resultTitle,
+          body: resultBody,
+          data: {
+            type: 'us_game_result',
+            gameId: payload.gameId,
+            gameType,
+            navigate: 'Notifications',
+            ...(senderPhoto ? { senderPhoto } : {}),
+            ...i18nData(resultKey, resultParams),
+          },
+          collapseKey: 'us_game',
+        }).catch(() => null);
       }
     } catch (err: any) {
       logger.warn(`[UsSocket] game result failed: ${err.message}`);

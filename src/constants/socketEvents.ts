@@ -21,6 +21,12 @@ export const SOCKET_EVENTS = {
   MATCH_ACCEPTED: 'match:accepted',
   MATCH_REJECTED: 'match:rejected',
 
+  // ─── Us space ────────────────────────────────────────────────────────────────
+  // Ambient partner presence in the couple room. Server → Client only, payload
+  // { userId, online: boolean }. Socket-only by design: no Notification row, no
+  // push (see src/sockets/index.ts).
+  US_PARTNER_PRESENCE: 'us:partner:presence',
+
   // ─── Errors ─────────────────────────────────────────────────────────────────
   ERROR: 'error',
 } as const;

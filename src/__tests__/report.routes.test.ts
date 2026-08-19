@@ -4,7 +4,8 @@ import reportRoutes from '../routes/report.routes';
 
 jest.mock('../middleware/authenticate', () => ({
   authenticate: (req: express.Request, _res: express.Response, next: express.NextFunction) => {
-    (req as express.Request & { user: { coupleId: string } }).user = { coupleId: 'reporter-couple' };
+    // Mirror the real Request augmentation (userId is required on req.user).
+    req.user = { userId: 'reporter-user', coupleId: 'reporter-couple' };
     next();
   },
 }));
@@ -12,7 +13,8 @@ jest.mock('../middleware/authenticate', () => ({
 jest.mock('../lib/prisma', () => ({
   prisma: {
     report: { create: jest.fn() },
-    couple: { update: jest.fn() },
+    // The route reads the reporter's blocked list before pushing to it.
+    couple: { findUnique: jest.fn(), update: jest.fn() },
     community: { findUnique: jest.fn() },
     communityMember: { deleteMany: jest.fn() },
   },
@@ -45,6 +47,7 @@ describe('POST /reports', () => {
       status: 'pending',
     });
     (prisma.community.findUnique as jest.Mock).mockResolvedValue({ id: 'comm-1' });
+    (prisma.couple.findUnique as jest.Mock).mockResolvedValue({ blocked: [] });
     (prisma.couple.update as jest.Mock).mockResolvedValue({});
     (prisma.communityMember.deleteMany as jest.Mock).mockResolvedValue({ count: 1 });
 

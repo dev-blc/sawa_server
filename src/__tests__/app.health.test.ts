@@ -1,4 +1,13 @@
 import request from 'supertest';
+
+// /health deep-checks Postgres via prisma.$queryRaw — mock it so this suite
+// verifies the endpoint's CONTRACT (envelope shape + status mapping) without
+// needing a live database (none exists in the test environment; Redis is
+// optional and already reports 'disabled' without REDIS_URL).
+jest.mock('../lib/prisma', () => ({
+  prisma: { $queryRaw: jest.fn().mockResolvedValue([{ ok: 1 }]) },
+}));
+
 import { createApp } from '../app';
 
 describe('App health', () => {

@@ -7,6 +7,8 @@ import { logger } from '../utils/logger';
 import { pushToUser } from '../services/push.service';
 import { i18nData } from '../i18n/notif';
 import { type CycleSettings } from '../jobs/cycleNotifier';
+import { sendSuccess } from '../utils/response';
+import { asyncHandler } from '../utils/asyncHandler';
 
 const router = Router();
 
@@ -143,6 +145,59 @@ router.get('/partner-feeling', authenticate, async (req: Request, res: Response)
     res.json({ success: true, data: null });
   }
 });
+
+// ─── Mood history (read-path) ────────────────────────────────────────────────
+
+const MOOD_HISTORY_DAYS = 30;
+// Hard cap so the query stays bounded even for a very chatty couple
+// (~2 partners × 30 days × a few moods/day sits far below this).
+const MOOD_HISTORY_MAX = 200;
+
+/**
+ * GET /api/v1/us/mood-history
+ *
+ * The couple's mood events from the last 30 days (both partners), newest
+ * first, each shaped { userId, mood, at }. Live moods sit in Redis with a
+ * 7-day TTL, but every mood shared over the socket also writes a Notification
+ * row (us.socket.ts `us:feeling` → subtype 'us_mood', data.feeling +
+ * data.senderUserId) — those rows are the durable history this endpoint reads.
+ * Served by the existing `[recipientId, type]` index with a JSON-path subtype
+ * filter; bounded by the 30-day window + take cap, so RULES §5 pagination
+ * (for unbounded lists) does not apply. Unlocks the mobile week-at-a-glance.
+ */
+router.get(
+  '/mood-history',
+  authenticate,
+  asyncHandler(async (req: Request, res: Response): Promise<void> => {
+    const coupleId = req.user?.coupleId;
+    if (!coupleId) {
+      sendSuccess({ res, data: [] });
+      return;
+    }
+
+    const since = new Date(Date.now() - MOOD_HISTORY_DAYS * 24 * 60 * 60 * 1000);
+    const rows = await prisma.notification.findMany({
+      where: {
+        recipientId: coupleId,
+        type: 'system',
+        createdAt: { gte: since },
+        data: { path: ['subtype'], equals: 'us_mood' },
+      },
+      select: { data: true, createdAt: true },
+      orderBy: { createdAt: 'desc' },
+      take: MOOD_HISTORY_MAX,
+    });
+
+    const events = rows.flatMap((r) => {
+      const d = r.data as { senderUserId?: unknown; feeling?: unknown } | null;
+      const userId = typeof d?.senderUserId === 'string' ? d.senderUserId : null;
+      const mood = typeof d?.feeling === 'string' ? d.feeling : null;
+      return userId && mood ? [{ userId, mood, at: r.createdAt.toISOString() }] : [];
+    });
+
+    sendSuccess({ res, data: events });
+  }),
+);
 
 /** Map a Postgres PlannedDate row to the client shape the app expects. */
 const serializePlan = (p: {
