@@ -16,6 +16,7 @@
 import { Router, Request, Response } from 'express';
 import { authenticate } from '../middleware/authenticate';
 import { adminAuth } from '../middleware/adminAuth';
+import { idempotency } from '../middleware/idempotency';
 import { logger } from '../utils/logger';
 import { sendSuccess } from '../utils/response';
 import { asyncHandler } from '../utils/asyncHandler';
@@ -50,7 +51,7 @@ const router = Router();
  * Saves the authenticated user's current mood to Redis so their partner can
  * fetch it after a fresh login (even if the socket was not connected).
  */
-router.post('/my-feeling', authenticate, async (req: Request, res: Response): Promise<void> => {
+router.post('/my-feeling', authenticate, idempotency, async (req: Request, res: Response): Promise<void> => {
   const coupleId = req.user?.coupleId;
   const myUserId = req.user?.userId;
   if (!coupleId || !myUserId) {
@@ -117,7 +118,7 @@ router.get(
  * Add or update a planned date entry for the couple.
  * Body: { activity, date, rawDate, from?, time?, note? }
  */
-router.post('/planned-dates', authenticate, async (req: Request, res: Response): Promise<void> => {
+router.post('/planned-dates', authenticate, idempotency, async (req: Request, res: Response): Promise<void> => {
   const coupleId = req.user?.coupleId;
   const myUserId = req.user?.userId;
   if (!coupleId) { res.status(400).json({ success: false, error: 'Missing couple context' }); return; }
@@ -195,7 +196,7 @@ router.delete('/my-feeling', authenticate, async (req: Request, res: Response): 
  * Sends a gentle "how are you feeling?" nudge to the partner — push + in-app
  * notification. Throttled to once per 30 minutes per sender.
  */
-router.post('/ask-feeling', authenticate, async (req: Request, res: Response): Promise<void> => {
+router.post('/ask-feeling', authenticate, idempotency, async (req: Request, res: Response): Promise<void> => {
   const coupleId = req.user?.coupleId;
   const myUserId = req.user?.userId;
   if (!coupleId || !myUserId) {
@@ -237,7 +238,7 @@ router.get('/fridge-notes', authenticate, async (req: Request, res: Response): P
  * Create a sticky note. Body: { text, color }
  * Notifies the partner (push + in-app + socket).
  */
-router.post('/fridge-notes', authenticate, async (req: Request, res: Response): Promise<void> => {
+router.post('/fridge-notes', authenticate, idempotency, async (req: Request, res: Response): Promise<void> => {
   const coupleId = req.user?.coupleId;
   const myUserId = req.user?.userId;
   if (!coupleId || !myUserId) { res.status(400).json({ success: false, error: 'Missing couple context' }); return; }
@@ -260,7 +261,7 @@ router.post('/fridge-notes', authenticate, async (req: Request, res: Response): 
  * PATCH /api/v1/us/fridge-notes/:id/ack
  * Partner acknowledges a note (seen/done). Notifies the author.
  */
-router.patch('/fridge-notes/:id/ack', authenticate, async (req: Request, res: Response): Promise<void> => {
+router.patch('/fridge-notes/:id/ack', authenticate, idempotency, async (req: Request, res: Response): Promise<void> => {
   const coupleId = req.user?.coupleId;
   const myUserId = req.user?.userId;
   const { id } = req.params;

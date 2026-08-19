@@ -4,6 +4,21 @@
 
 ---
 
+## [2026-08-20] — Idempotency middleware for the couple's core writes (offline-lite server half)
+
+**Why:** the mobile app is gaining an offline queue that replays writes on reconnect. Without
+server dedup, a replayed create (a fridge note, a planned date) would double-apply. This is the
+safety half of the contract.
+
+**What:** new `src/middleware/idempotency.ts` — reads the `Idempotency-Key` header, keys by
+authenticated identity + key, and (a) replays the stored 2xx response verbatim on a repeat,
+(b) `cacheSetNX`-locks a first-seen key so concurrent duplicates don't both run (409 the loser),
+(c) stores the success for 24h (matches the client queue's max lifetime). **Fails open** — any
+cache error calls `next()`, never blocks a write. Requests without the header are untouched, so
+normal online writes are unaffected. Applied to the five whitelisted `/us` writes the client
+queues: `POST /my-feeling`, `POST /planned-dates`, `POST /ask-feeling`, `POST /fridge-notes`,
+`PATCH /fridge-notes/:id/ack`. 5 new unit tests (replay, lock, fail-open); 74 tests green.
+
 ## [2026-08-20] — Us-space honest layering, cursor pagination, .env.example, LOW security fixes
 
 **Why**: five audit/debt items. (1) The **entire** Us feature (feelings, planned
