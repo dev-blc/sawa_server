@@ -4,6 +4,58 @@
 
 ---
 
+## [2026-08-19] — Audit cleanup: reliability & security fixes across middleware, chat, admin, jobs
+
+**Why**: re-verification of the v2 platform audit against current main showed 91e8eea fixed
+most security findings but left the reliability class open. These are the items fixable
+without a DB migration or API-contract change.
+
+**Fixed**
+- `authenticate.ts`: the per-request `banStatusCache`/`lastActivityWriteAt` Maps are now
+  bounded (50k cap, expired-sweep then FIFO eviction) — was an unbounded leak, one entry per
+  distinct user forever.
+- `chat.socket.ts`: messages are **persisted before broadcast** and the broadcast carries the
+  real DB id (clientMessageId kept for optimistic reconciliation). The old emit-then-save in a
+  detached block could show everyone a message that a failed insert then erased. On persist
+  failure the sender now gets `chat:messageFailed`. `chat:messageId` still emitted for
+  compatibility.
+- `chat.socket.ts` CHAT_READ: clears only THIS chat's message notifications (data.matchId /
+  data.communityId JSON filter) — reading one thread no longer wipes every chat's badge.
+- `couple.service.ts`: block/unblock now atomic in-DB (`array_append` with ANY-guard,
+  `array_remove`) — the read-modify-write `set:` lost concurrent blocks, unacceptable for a
+  safety feature.
+- `match.service.ts` say-hello: P2002 from the `@@unique([couple1Id,couple2Id])` constraint is
+  caught and resolved to the existing row instead of surfacing a 500 on concurrent duplicates.
+- `admin.service.ts`: `getCityDistribution` selects only city strings (was full rows + join);
+  `getCommunities` bounded (take 500) with narrow member/admin/request selects (was every full
+  couple row per member); `getReports` bounded + target names resolved in 2 batched queries
+  (was 1-2 per report); `getBlocks` resolved in 2 batched queries (was serial per block);
+  `getPrompts` bounded.
+- `admin.controller.ts`: all 18 raw `err.message` 500 responses replaced by a `failInternal`
+  helper — logs the real error, returns a generic message (schema/internals disclosure).
+- `rateLimiter.ts` + `cache.ts`: Redis-backed rate-limit store (new atomic `cacheIncrExpire`)
+  shared across PM2 workers when REDIS_URL is set — MemoryStore counted per process, making
+  the real limit N× the configured one under cluster mode. Fail-open per request on Redis
+  errors; without Redis, ecosystem pins instances=1 so MemoryStore remains correct.
+- `push.service.ts` `pushToCouples`: chunked 25 couples at a time — an admin broadcast used to
+  open ~2N simultaneous FCM calls.
+- `cycleNotifier.ts`: cursor-batched scan (500/page) instead of materializing every cycle row.
+- `otp.service.ts`: verified-OTP replay window 600s → 90s (covers double-submit/retry; a
+  one-time code no longer lives 10 extra minutes).
+
+**Deferred (need a decision / DB access / client coordination)**
+- Schema `onDelete` rules + a unique constraint for grouped notifications: require Prisma
+  migrations against the real database.
+- Pagination (`page`/`limit`/cursor) on chat & notification endpoints: API contract change,
+  needs the mobile client updated in step.
+- Profile-photo base64-in-JSON path → presigned PUTs (chat media already uses them).
+- Admin media-route JWT-in-query: mitigated (role re-check + morgan redaction); a short-lived
+  media token is the proper fix and touches the admin panel too.
+- `GOOGLE_RTDN_SECRET` has no production-startup assertion — unset means RTDNs are silently
+  dropped (fail-closed but invisible).
+- **Committed `dist/` is stale vs src** (predates 1ca9dd9): if deploys run the committed dist
+  without a build step, production is running old code. Flagged for the team.
+
 ## [2026-08-19] — Docs: RULES.md corrected to the real stack; living-document contract added
 
 **Why**: RULES.md §2 described a Mongoose/MongoDB architecture the codebase does not

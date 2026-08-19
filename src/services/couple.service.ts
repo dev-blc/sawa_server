@@ -540,10 +540,14 @@ export class CoupleService {
     const blocked = me.blocked || [];
     if (!blocked.includes(resolvedTargetId)) {
       await Promise.all([
-        prisma.couple.update({
-          where: { id: meId },
-          data: { blocked: { set: [...blocked, resolvedTargetId] } },
-        }),
+        // Atomic in-DB append (deduped by the ANY guard). The old
+        // read-modify-write with `set:` lost one block when two arrived
+        // concurrently — unacceptable for a safety feature.
+        prisma.$executeRaw`
+          UPDATE "couples"
+          SET "blocked" = array_append("blocked", ${resolvedTargetId})
+          WHERE "id" = ${meId} AND NOT (${resolvedTargetId} = ANY("blocked"))
+        `,
         // Always create a report so the admin can see blocks from all sources
         me.coupleId
           ? prisma.report.create({
@@ -570,13 +574,14 @@ export class CoupleService {
       where: { OR: [{ id: targetId }, { coupleId: targetId }] },
       select: { id: true, coupleId: true },
     });
-    const idsToRemove = new Set([targetId, target?.id, target?.coupleId].filter(Boolean));
-
-    const blocked = (me.blocked || []).filter((id: string) => !idsToRemove.has(id));
-    return prisma.couple.update({
-      where: { id: meId },
-      data: { blocked: { set: blocked } },
-    });
+    // Atomic in-DB removal of every id form the block may be stored under —
+    // no read-modify-write window. Passing the same value twice is harmless.
+    await prisma.$executeRaw`
+      UPDATE "couples"
+      SET "blocked" = array_remove(array_remove(array_remove("blocked", ${targetId}), ${target?.id ?? targetId}), ${target?.coupleId ?? targetId})
+      WHERE "id" = ${meId}
+    `;
+    return prisma.couple.findUnique({ where: { id: meId } });
   }
 
   async getBlockedCouples(meId: string) {
@@ -607,12 +612,13 @@ export class CoupleService {
   }
 
   async unblockCommunity(meId: string, communityId: string) {
-    const me = await prisma.couple.findUnique({ where: { id: meId } });
-    const blocked = (me?.blocked || []).filter((id: string) => id !== communityId);
-    return prisma.couple.update({
-      where: { id: meId },
-      data: { blocked: { set: blocked } },
-    });
+    // Atomic removal — same lost-update reasoning as unblockCouple.
+    await prisma.$executeRaw`
+      UPDATE "couples"
+      SET "blocked" = array_remove("blocked", ${communityId})
+      WHERE "id" = ${meId}
+    `;
+    return prisma.couple.findUnique({ where: { id: meId } });
   }
 
   /**

@@ -12,9 +12,11 @@ import { cacheGet, cacheSet, cacheInvalidate } from '../lib/cache';
  * with "Invalid or expired OTP". Covers the real edge cases where the token was
  * already consumed by the first request: a double auto-submit, the user tapping
  * Confirm while auto-fill also submits, or a lost/timed-out response that the
- * app (or user) retries.
+ * app (or user) retries. Those all resolve within seconds — the previous
+ * 10-minute window kept a supposedly one-time code live far longer than any
+ * legitimate retry needs (audit finding).
  */
-const OTP_REPLAY_TTL_SECONDS = 600;
+const OTP_REPLAY_TTL_SECONDS = 90;
 const otpOkKey = (phone: string, code: string) => `otp_ok:${phone}:${code}`;
 
 // Brute-force guard: after OTP_MAX_ATTEMPTS wrong codes for a phone, verification

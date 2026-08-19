@@ -290,14 +290,32 @@ export class MatchService {
       return { isMatch: false };
     }
 
-    const newMatch = await prisma.match.create({
-      data: {
-        couple1Id: me.coupleId,
-        couple2Id: targetCouple.coupleId,
-        status: 'pending',
-        actionById: me.coupleId,
+    let newMatch;
+    try {
+      newMatch = await prisma.match.create({
+        data: {
+          couple1Id: me.coupleId,
+          couple2Id: targetCouple.coupleId,
+          status: 'pending',
+          actionById: me.coupleId,
+        }
+      });
+    } catch (err: any) {
+      // Concurrent duplicate hello: the @@unique([couple1Id, couple2Id])
+      // constraint fired because another request won the check-then-create
+      // race. The row exists — resolve it instead of surfacing a 500.
+      if (err?.code === 'P2002') {
+        const existing = await prisma.match.findFirst({
+          where: { couple1Id: me.coupleId, couple2Id: targetCouple.coupleId },
+        });
+        if (existing) {
+          return existing.status === 'accepted'
+            ? { isMatch: true, matchId: existing.id }
+            : { isMatch: false };
+        }
       }
-    });
+      throw err;
+    }
 
     (async () => {
       try {

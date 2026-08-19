@@ -7,6 +7,16 @@ import { logger } from '../utils/logger';
 import { materializeImageLoose } from '../lib/storage';
 import { env } from '../config/env';
 
+/**
+ * Log the real error server-side, return a generic 500. Raw driver/Prisma
+ * messages disclose schema and internals; even admin-only responses end up
+ * in browser consoles, proxies, and screenshots.
+ */
+const failInternal = (res: Response, context: string, err: any): void => {
+  logger.error(`❌ Admin ${context} failed:`, err?.message || err);
+  res.status(500).json({ success: false, message: 'Internal server error' });
+};
+
 const adminService = new AdminService();
 
 function hostOf(u?: string | null): string | null {
@@ -184,7 +194,7 @@ export class AdminController {
       await adminService.deleteCouple(id);
       res.status(200).json({ success: true, message: 'Couple and associated users deleted' });
     } catch (err: any) {
-      res.status(500).json({ success: false, message: err.message });
+      failInternal(res, req.path, err);
     }
   }
 
@@ -194,7 +204,7 @@ export class AdminController {
       const c = await adminService.createCommunity(data);
       res.status(201).json({ success: true, data: c });
     } catch (err: any) {
-      res.status(500).json({ success: false, message: err.message });
+      failInternal(res, req.path, err);
     }
   }
 
@@ -215,7 +225,7 @@ export class AdminController {
       const c = await prisma.community.update({ where: { id }, data: updateData });
       res.status(200).json({ success: true, data: c });
     } catch (err: any) {
-      res.status(500).json({ success: false, message: err.message });
+      failInternal(res, req.path, err);
     }
   }
 
@@ -226,7 +236,7 @@ export class AdminController {
       const couple = await adminService.banCouple(id, reason);
       res.status(200).json({ success: true, data: couple });
     } catch (err: any) {
-      res.status(500).json({ success: false, message: err.message });
+      failInternal(res, req.path, err);
     }
   }
 
@@ -236,7 +246,7 @@ export class AdminController {
       const couple = await adminService.unbanCouple(id);
       res.status(200).json({ success: true, data: couple });
     } catch (err: any) {
-      res.status(500).json({ success: false, message: err.message });
+      failInternal(res, req.path, err);
     }
   }
 
@@ -253,7 +263,7 @@ export class AdminController {
       );
       res.status(200).json({ success: true, data: result });
     } catch (err: any) {
-      res.status(500).json({ success: false, message: err.message });
+      failInternal(res, req.path, err);
     }
   }
 
@@ -263,7 +273,7 @@ export class AdminController {
       const p = await adminService.addPrompt(title, category);
       res.status(201).json({ success: true, data: p });
     } catch (err: any) {
-      res.status(500).json({ success: false, message: err.message });
+      failInternal(res, req.path, err);
     }
   }
 
@@ -273,7 +283,7 @@ export class AdminController {
       const p = await adminService.togglePrompt(id);
       res.status(200).json({ success: true, data: p });
     } catch (err: any) {
-      res.status(500).json({ success: false, message: err.message });
+      failInternal(res, req.path, err);
     }
   }
 
@@ -287,7 +297,7 @@ export class AdminController {
       const p = await adminService.editPrompt(id, title.trim());
       res.status(200).json({ success: true, data: p });
     } catch (err: any) {
-      res.status(500).json({ success: false, message: err.message });
+      failInternal(res, req.path, err);
     }
   }
 
@@ -300,7 +310,7 @@ export class AdminController {
       await adminService.reorderPrompts(ids);
       res.status(200).json({ success: true });
     } catch (err: any) {
-      res.status(500).json({ success: false, message: err.message });
+      failInternal(res, req.path, err);
     }
   }
 
@@ -331,7 +341,7 @@ export class AdminController {
       res.status(200).json({ success: true, message: 'User and all associated data deleted' });
     } catch (err: any) {
       logger.error('❌ Admin deleteUser Error:', err.message);
-      res.status(500).json({ success: false, message: err.message });
+      failInternal(res, req.path, err);
     }
   }
 
@@ -348,7 +358,7 @@ export class AdminController {
       ]);
       res.status(200).json({ success: true, message: 'Community deleted' });
     } catch (err: any) {
-      res.status(500).json({ success: false, message: err.message });
+      failInternal(res, req.path, err);
     }
   }
 
@@ -358,7 +368,7 @@ export class AdminController {
       await adminService.deletePrompt(id);
       res.status(200).json({ success: true, message: 'Prompt deleted' });
     } catch (err: any) {
-      res.status(500).json({ success: false, message: err.message });
+      failInternal(res, req.path, err);
     }
   }
 
@@ -368,7 +378,7 @@ export class AdminController {
       const result = await adminService.sendNotification(title, message, recipientIds);
       res.status(200).json({ success: true, data: result });
     } catch (err: any) {
-      res.status(500).json({ success: false, message: err.message });
+      failInternal(res, req.path, err);
     }
   }
 
@@ -403,7 +413,7 @@ export class AdminController {
       });
     } catch (err: any) {
       logger.error('ADMIN: Database flush failed', { error: err.message });
-      res.status(500).json({ success: false, message: err.message });
+      failInternal(res, req.path, err);
     }
   }
 
@@ -412,7 +422,7 @@ export class AdminController {
       const blocks = await adminService.getBlocks();
       res.status(200).json({ success: true, data: { blocks } });
     } catch (err: any) {
-      res.status(500).json({ success: false, message: err.message });
+      failInternal(res, req.path, err);
     }
   }
 
@@ -432,7 +442,7 @@ export class AdminController {
       });
       res.status(200).json({ success: true, message: 'Unblocked successfully' });
     } catch (err: any) {
-      res.status(500).json({ success: false, message: err.message });
+      failInternal(res, req.path, err);
     }
   }
 
@@ -449,7 +459,7 @@ export class AdminController {
       });
       res.status(200).json({ success: true, data: report });
     } catch (err: any) {
-      res.status(500).json({ success: false, message: err.message });
+      failInternal(res, req.path, err);
     }
   }
 }

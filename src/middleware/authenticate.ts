@@ -32,6 +32,36 @@ const lastActivityWriteAt = new Map<string, number>();
 const banStatusCache = new Map<string, { bannedAt: Date | null; checkedAt: number }>();
 
 /**
+ * Both maps insert one entry per distinct user/couple and previously never
+ * evicted — a slow, unbounded leak on a long-lived process. Before any insert
+ * that would cross the cap, expired entries are swept; if every entry is still
+ * live (cap-many active users in one throttle window), the oldest-inserted go
+ * first. Map iteration order is insertion order, which makes that cheap.
+ */
+const MAX_CACHE_ENTRIES = 50_000;
+const boundedSet = <V>(
+  map: Map<string, V>,
+  key: string,
+  value: V,
+  isExpired: (v: V) => boolean,
+): void => {
+  if (map.size >= MAX_CACHE_ENTRIES && !map.has(key)) {
+    for (const [k, v] of map) {
+      if (isExpired(v)) map.delete(k);
+    }
+    if (map.size >= MAX_CACHE_ENTRIES) {
+      const overflow = map.size - MAX_CACHE_ENTRIES + 1;
+      let dropped = 0;
+      for (const k of map.keys()) {
+        if (dropped++ >= overflow) break;
+        map.delete(k);
+      }
+    }
+  }
+  map.set(key, value);
+};
+
+/**
  * Middleware: Validates JWT Bearer token, blocks banned couples, and
  * touches the user's lastActiveAt for the admin "Inactive" status logic.
  */
@@ -80,11 +110,16 @@ export const authenticate = async (
         });
         coupleFound = couple !== null;
         bannedAt = couple?.bannedAt ?? null;
-        banStatusCache.set(payload.coupleId, {
-          bannedAt,
-          checkedAt: now,
-          ...(({ coupleFound }) => ({ coupleFound }))({ coupleFound }),
-        } as any);
+        boundedSet(
+          banStatusCache,
+          payload.coupleId,
+          {
+            bannedAt,
+            checkedAt: now,
+            ...(({ coupleFound }) => ({ coupleFound }))({ coupleFound }),
+          } as any,
+          (v) => now - v.checkedAt >= BAN_CACHE_MS,
+        );
       }
 
       // Couple was deleted — revoke the session so the mobile app logs out
@@ -107,7 +142,8 @@ export const authenticate = async (
     // ─── Activity tracking (throttled write) ───────────────────────────────
     const lastWrite = lastActivityWriteAt.get(payload.userId) ?? 0;
     if (Date.now() - lastWrite > ACTIVITY_THROTTLE_MS) {
-      lastActivityWriteAt.set(payload.userId, Date.now());
+      const nowMs = Date.now();
+      boundedSet(lastActivityWriteAt, payload.userId, nowMs, (t) => nowMs - t > ACTIVITY_THROTTLE_MS);
       // Fire-and-forget — don't block the request on this.
       prisma.user
         .update({

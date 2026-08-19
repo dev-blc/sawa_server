@@ -81,9 +81,44 @@ export const registerChatHandlers = (io: SocketIOServer, socket: Socket): void =
           'Me';
         const senderName = senderIndividualName;
 
-        // 1. IMMEDIATE BROADCAST (Ultra-low latency 🚀)
+        // 1. PERSIST FIRST — the broadcast carries the real DB id, so nothing a
+        // client ever renders can silently vanish on reload. The old order
+        // (emit, then save in a detached block) showed everyone a message that
+        // a failed insert then erased. The sender's UI is optimistic locally,
+        // so this insert (~ms, and we already awaited the auth lookup) is
+        // invisible; on failure the sender is told instead of lied to.
+        let savedMessage;
+        try {
+          savedMessage = await prisma.message.create({
+            data: {
+              chatType: chatType as any,
+              matchId: chatType === 'private' ? chatId : null,
+              communityId: chatType === 'group' ? chatId : null,
+              senderId: socket.coupleId!,
+              senderUserId: socket.userId!,
+              senderName,
+              senderIndividualName,
+              content: data.content,
+              contentType: (data.contentType || 'text') as any,
+              audioDuration: data.audioDuration,
+              repliedToId: data.repliedToId,
+              repliedToText: data.repliedToText,
+              repliedToName: data.repliedToName,
+              createdAt: new Date(timestamp),
+              // Sender has inherently "read" their own message
+              readBy: [socket.coupleId!],
+            },
+          });
+        } catch (persistErr) {
+          logger.error('[Socket] Message persist failed — notifying sender:', persistErr);
+          socket.emit('chat:messageFailed', { clientMessageId, chatId });
+          return;
+        }
+
+        // 2. BROADCAST with the real id (clientMessageId kept for the sender's
+        // optimistic-bubble reconciliation).
         const broadcastData = {
-          _id: clientMessageId, // Real Database ID will be synced via fetchHistory later
+          _id: savedMessage.id,
           clientMessageId,
           chatId,
           chatType,
@@ -125,38 +160,17 @@ export const registerChatHandlers = (io: SocketIOServer, socket: Socket): void =
           })();
         }
 
-        // 2. BACKGROUND PERSISTENCE & NOTIFICATIONS
+        // Sync the real DB id back to the sender so edit/delete work immediately
+        // (kept for clients that reconcile via chat:messageId rather than the
+        // broadcast's _id).
+        socket.emit('chat:messageId', {
+          clientMessageId,
+          realMessageId: savedMessage.id,
+        });
+
+        // 3. BACKGROUND NOTIFICATIONS (side effects only — safe to detach)
         (async () => {
           try {
-            // Save to Database
-            const savedMessage = await prisma.message.create({
-              data: {
-                chatType: chatType as any,
-                matchId: chatType === 'private' ? chatId : null,
-                communityId: chatType === 'group' ? chatId : null,
-                senderId: socket.coupleId!,
-                senderUserId: socket.userId!,
-                senderName,
-                senderIndividualName,
-                content: data.content,
-                contentType: (data.contentType || 'text') as any,
-                audioDuration: data.audioDuration,
-                repliedToId: data.repliedToId,
-                repliedToText: data.repliedToText,
-                repliedToName: data.repliedToName,
-                createdAt: new Date(timestamp),
-                // Sender has inherently "read" their own message
-                readBy: [socket.coupleId!],
-              }
-            });
-
-            // Sync the real DB id back to the sender so edit/delete work immediately
-            socket.emit('chat:messageId', {
-              clientMessageId,
-              realMessageId: savedMessage.id,
-            });
-
-            // Notifications
             if (chatType === 'private') {
               const match = await prisma.match.findUnique({ 
                 where: { id: chatId },
@@ -248,8 +262,19 @@ export const registerChatHandlers = (io: SocketIOServer, socket: Socket): void =
         readByCoupleId: coupleId
       });
 
+      // Only THIS chat's message notifications — clearing every chat's badge
+      // because the user read one thread was the old (audited) behavior.
+      // Private notifications carry data.matchId, group ones data.communityId.
       await prisma.notification.updateMany({
-        where: { recipientId: coupleId, type: 'message' },
+        where: {
+          recipientId: coupleId,
+          type: 'message',
+          read: false,
+          OR: [
+            { data: { path: ['matchId'], equals: data.chatId } },
+            { data: { path: ['communityId'], equals: data.chatId } },
+          ],
+        },
         data: { read: true }
       });
 

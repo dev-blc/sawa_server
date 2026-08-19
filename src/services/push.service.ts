@@ -284,19 +284,27 @@ export const pushToUser = async (
 };
 
 /**
- * Convenience: push to many couples in parallel. Returns aggregate counts.
+ * Convenience: push to many couples. Returns aggregate counts.
+ * Chunked: an admin broadcast to N couples used to open ~2N simultaneous FCM
+ * calls (each couple fans out to ≤2 devices) — enough to starve the event
+ * loop and trip FCM rate limits on a big send. 25 couples at a time keeps
+ * peak concurrency ≤50 sockets with no meaningful latency cost.
  */
+const PUSH_CHUNK_SIZE = 25;
 export const pushToCouples = async (
   coupleIds: string[],
   payload: PushPayload,
 ): Promise<{ sent: number; failed: number }> => {
-  const results = await Promise.all(
-    coupleIds.map((id) => pushToCouple(id, payload)),
-  );
-  return results.reduce(
-    (acc, r) => ({ sent: acc.sent + r.sent, failed: acc.failed + r.failed }),
-    { sent: 0, failed: 0 },
-  );
+  const acc = { sent: 0, failed: 0 };
+  for (let i = 0; i < coupleIds.length; i += PUSH_CHUNK_SIZE) {
+    const chunk = coupleIds.slice(i, i + PUSH_CHUNK_SIZE);
+    const results = await Promise.all(chunk.map((id) => pushToCouple(id, payload)));
+    for (const r of results) {
+      acc.sent += r.sent;
+      acc.failed += r.failed;
+    }
+  }
+  return acc;
 };
 
 export const isPushEnabled = (): boolean => enabled;

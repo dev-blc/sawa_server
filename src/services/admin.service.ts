@@ -305,9 +305,13 @@ export class AdminService {
       distribution[city] = { city, users: 0, couples: 0 };
     });
 
+    // Only the city strings — the old include/no-select loaded every full
+    // user + couple row (photos, bios, hashes) into memory per dashboard hit.
     const [users, couples] = await Promise.all([
-      prisma.user.findMany({ include: { coupleProfile: true } }),
-      prisma.couple.findMany(),
+      prisma.user.findMany({
+        select: { coupleProfile: { select: { locationCity: true } } },
+      }),
+      prisma.couple.findMany({ select: { locationCity: true } }),
     ]);
 
     users.forEach((u, idx) => {
@@ -402,12 +406,22 @@ export class AdminService {
   }
 
   async getCommunities(token?: string) {
+    // Bounded + narrow: the old unbounded triple-include loaded every full
+    // couple row (hashes, bios, photos) for every member of every community
+    // on each dashboard hit — the worst single query in the admin panel.
     const comms = await prisma.community.findMany({
       orderBy: { createdAt: 'desc' },
+      take: 500,
       include: {
-        members: { include: { couple: true } },
-        admins: { include: { couple: true } },
-        joinRequests: { include: { couple: true } },
+        members: {
+          select: { coupleId: true, couple: { select: { profileName: true, primaryPhoto: true } } },
+        },
+        admins: {
+          select: { coupleId: true, couple: { select: { profileName: true, primaryPhoto: true } } },
+        },
+        joinRequests: {
+          select: { id: true, coupleId: true, couple: { select: { profileName: true, primaryPhoto: true } } },
+        },
       },
     });
 
@@ -500,6 +514,7 @@ export class AdminService {
   async getPrompts() {
     const list = await prisma.prompt.findMany({
       orderBy: [{ sortOrder: 'asc' }, { createdAt: 'asc' }],
+      take: 500,
     });
     return list.map(p => ({
       _id: p.id,
@@ -517,32 +532,35 @@ export class AdminService {
   async getReports() {
     const list = await prisma.report.findMany({
       orderBy: { createdAt: 'desc' },
-      include: { reporter: true },
+      take: 500,
+      include: { reporter: { select: { profileName: true } } },
     });
 
-    const reportsWithTargets = await Promise.all(list.map(async (r: any) => {
-      let targetName = 'Unknown Target';
-      
-      const cp = await (prisma.couple as any).findUnique({ where: { coupleId: r.targetId }, select: { profileName: true } });
-      if (cp) {
-        targetName = cp.profileName || 'Anonymous Couple';
-      } else {
-        const cm = await (prisma.community as any).findUnique({ where: { id: r.targetId }, select: { name: true } });
-        if (cm) targetName = cm.name;
-      }
+    // Resolve every target in TWO batched queries instead of 1-2 per report
+    // (the old N+1 issued up to a thousand lookups per dashboard load).
+    const targetIds = [...new Set(list.map((r: any) => r.targetId).filter(Boolean))];
+    const [targetCouples, targetCommunities] = await Promise.all([
+      prisma.couple.findMany({
+        where: { coupleId: { in: targetIds } },
+        select: { coupleId: true, profileName: true },
+      }),
+      prisma.community.findMany({
+        where: { id: { in: targetIds } },
+        select: { id: true, name: true },
+      }),
+    ]);
+    const coupleNames = new Map(targetCouples.map((c) => [c.coupleId, c.profileName || 'Anonymous Couple']));
+    const communityNames = new Map(targetCommunities.map((c) => [c.id, c.name]));
 
-      return {
-        _id: r.id,
-        id: r.id,
-        reporter: r.reporter?.profileName || 'Unknown',
-        target: targetName,
-        reason: r.reason,
-        status: r.status,
-        createdAt: r.createdAt,
-      };
+    return list.map((r: any) => ({
+      _id: r.id,
+      id: r.id,
+      reporter: r.reporter?.profileName || 'Unknown',
+      target: coupleNames.get(r.targetId) || communityNames.get(r.targetId) || 'Unknown Target',
+      reason: r.reason,
+      status: r.status,
+      createdAt: r.createdAt,
     }));
-    
-    return reportsWithTargets;
   }
 
   async getBlocks() {
@@ -553,43 +571,42 @@ export class AdminService {
       orderBy: { coupleId: 'asc' },
     });
 
-    // For each blocked ID, resolve whether it's a couple or community
-    const rows: any[] = [];
-    for (const c of couples) {
-      for (const blockedId of c.blocked) {
-        let targetName = 'Unknown';
-        let targetType: 'user' | 'community' = 'user';
+    // Resolve every blocked id in TWO batched queries (the old nested loop
+    // issued 1-2 serial queries per block row). blocked[] may hold coupleId
+    // (UUID) OR the internal id, so couples are matched on both.
+    const blockedIds = [...new Set(couples.flatMap((c) => c.blocked))];
+    const [blockedCouples, blockedCommunities] = await Promise.all([
+      prisma.couple.findMany({
+        where: { OR: [{ coupleId: { in: blockedIds } }, { id: { in: blockedIds } }] },
+        select: { id: true, coupleId: true, profileName: true },
+      }),
+      prisma.community.findMany({
+        where: { id: { in: blockedIds } },
+        select: { id: true, name: true },
+      }),
+    ]);
+    const coupleByAnyId = new Map<string, string>();
+    blockedCouples.forEach((c) => {
+      const name = c.profileName || 'Anonymous Couple';
+      coupleByAnyId.set(c.coupleId, name);
+      coupleByAnyId.set(c.id, name);
+    });
+    const communityById = new Map(blockedCommunities.map((c) => [c.id, c.name]));
 
-        // blocked[] may contain coupleId (UUID) OR Mongo id, check both
-        const cp = await (prisma.couple as any).findFirst({
-          where: { OR: [{ coupleId: blockedId }, { id: blockedId }] },
-          select: { profileName: true },
-        });
-        if (cp) {
-          targetName = cp.profileName || 'Anonymous Couple';
-          targetType = 'user';
-        } else {
-          const cm = await (prisma.community as any).findUnique({
-            where: { id: blockedId },
-            select: { name: true },
-          });
-          if (cm) {
-            targetName = cm.name;
-            targetType = 'community';
-          }
-        }
-
-        rows.push({
+    return couples.flatMap((c) =>
+      c.blocked.map((blockedId) => {
+        const coupleName = coupleByAnyId.get(blockedId);
+        const communityName = coupleName ? undefined : communityById.get(blockedId);
+        return {
           id: `${c.coupleId}:${blockedId}`,
           blockerName: c.profileName || 'Unknown',
           blockerCoupleId: c.coupleId,
-          targetName,
+          targetName: coupleName || communityName || 'Unknown',
           targetId: blockedId,
-          targetType,
-        });
-      }
-    }
-    return rows;
+          targetType: (communityName ? 'community' : 'user') as 'user' | 'community',
+        };
+      }),
+    );
   }
 
   async getChartData() {

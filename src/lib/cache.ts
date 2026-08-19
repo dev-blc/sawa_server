@@ -102,6 +102,36 @@ export async function cacheSet(key: string, value: string, ttlSeconds: number): 
   }
 }
 
+/**
+ * Atomic counter with a TTL set on first increment — the primitive behind the
+ * Redis-backed rate-limit store (per-IP counters shared across PM2 workers).
+ * Returns null when Redis is unavailable so callers can fall back explicitly;
+ * the local Map is NOT used here because a non-atomic fallback would just
+ * recreate the per-process-counter problem this exists to solve.
+ */
+export async function cacheIncrExpire(
+  key: string,
+  ttlSeconds: number,
+): Promise<{ count: number; ttlMs: number } | null> {
+  const redis = getRedis();
+  if (!redis) return null;
+  try {
+    const result = await redis.multi().incr(key).pttl(key).exec();
+    if (!result) return null;
+    const count = Number(result[0][1]);
+    let ttlMs = Number(result[1][1]);
+    if (ttlMs < 0) {
+      // First hit in this window (or a key that lost its TTL): start the window.
+      ttlMs = ttlSeconds * 1000;
+      await redis.pexpire(key, ttlMs);
+    }
+    return { count, ttlMs };
+  } catch (err: any) {
+    logger.warn(`[cache] incr(${key}) failed:`, err?.message);
+    return null;
+  }
+}
+
 export async function cacheInvalidate(key: string): Promise<void> {
   const redis = getRedis();
   if (!redis) { localDel(key); return; }
