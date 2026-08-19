@@ -4,6 +4,34 @@
 
 ---
 
+## [2026-08-19] — RULES.md regenerated against verified code, restructured design → performance → security
+
+**Why**: a claim-by-claim verification of RULES.md against `arfam-fix` `42bbf2c` found six
+statements the code contradicts — JWT lifetimes stated as 15m/30d (env defaults are 7d/90d,
+`src/config/env.ts:12-13`), fictional `group:`/`match:` socket rooms (real rooms are `chat:`
+and `couple:`), "bcrypt min 12 rounds" (cost is 10, admin-only; users are OTP-only), an
+asyncHandler claim that mismatched where it's actually wired (route layer, 8 of 13 files), a
+pagination spec no endpoint implements, and a `.env.example` reference when none exists. A
+rules file that states falsehoods as facts trains every future session wrong. Arfam also set
+the standing priority order: design first, performance second, security third.
+
+**What changed** (docs only, no code):
+- All six false claims corrected to what the code actually does, with file references.
+- Rules the codebase doesn't yet meet are now explicitly **baseline debt** with counts
+  (direct-prisma controllers 6/9, zod coverage 5/9 controllers, asyncHandler 8/13 route
+  files, ~53 legacy console.logs) — never add to it, shrink it in touched code. Counts are
+  part of the living-document contract.
+- Restructured: §1 Design (API contract as a design surface, error messages as user-facing
+  copy, brand/tone) → §2 Performance (cache.ts contract, query shaping, indexes-with-
+  migrations, no polling over sockets) → §3 Security (all prior guarantees kept: hashed
+  refresh tokens, CSPRNG OTP, prod-gated bypass, rate limits, requireEntitlement, S8
+  response shaping) → architecture/API/sockets/quality unchanged in substance.
+- Pagination rewritten as a convention for **new** list endpoints; bcrypt cost 12 set as the
+  target on next admin-auth touch; JWT lifetime changes routed through PLAN.md as a product
+  decision.
+
+---
+
 ## [2026-08-19] — Audit cleanup: reliability & security fixes across middleware, chat, admin, jobs
 
 **Why**: re-verification of the v2 platform audit against current main showed 91e8eea fixed
