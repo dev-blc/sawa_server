@@ -28,6 +28,7 @@ import { env } from '../config/env';
 import { prisma } from '../lib/prisma';
 import { tierForProduct, type SubStatus } from '../config/subscription';
 import { sendSuccess, sendError } from '../utils/response';
+import { timingSafeEqualStr } from '../utils/timingSafeEqual';
 
 /**
  * Envelope convention for this controller (migrated from hand-rolled shapes):
@@ -288,13 +289,16 @@ export const googleNotifications = async (req: Request, res: Response): Promise<
   // Shared-secret gate (?secret=...) on the Pub/Sub push URL. In production the
   // secret is REQUIRED (an unset secret would otherwise accept any POST); in
   // dev it stays optional for local testing.
-  const secretMatches = !!env.GOOGLE_RTDN_SECRET && req.query.secret === env.GOOGLE_RTDN_SECRET;
+  // Constant-time compare: a plain `===` short-circuits on the first differing
+  // byte, leaking how many leading chars matched — a timing oracle for guessing
+  // the secret. timingSafeEqualStr guards length, then compares in fixed time.
+  const secretMatches = !!env.GOOGLE_RTDN_SECRET && timingSafeEqualStr(req.query.secret, env.GOOGLE_RTDN_SECRET);
   if (env.NODE_ENV === 'production') {
     if (!secretMatches) {
       sendSuccess({ res }); // ack silently, ignore
       return;
     }
-  } else if (env.GOOGLE_RTDN_SECRET && req.query.secret !== env.GOOGLE_RTDN_SECRET) {
+  } else if (env.GOOGLE_RTDN_SECRET && !timingSafeEqualStr(req.query.secret, env.GOOGLE_RTDN_SECRET)) {
     sendSuccess({ res }); // ack silently, ignore
     return;
   }

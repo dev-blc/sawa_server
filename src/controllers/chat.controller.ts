@@ -5,11 +5,16 @@ import { AppError } from '../utils/AppError';
 import { prisma } from '../lib/prisma';
 import { env } from '../config/env';
 import { getCoupleCommunityColor } from '../utils/communityColors';
+import { encodeCursor, decodeCursor, clampLimit } from '../utils/cursor';
 import {
   createPresignedUpload,
   createPresignedDownload,
   isStorageConfigured,
 } from '../lib/storage';
+
+// Default chat history page size when the client sends no `?limit=`. Cursor
+// pagination lets the app load older messages on demand (RULES §5).
+const PRIVATE_MESSAGES_DEFAULT_LIMIT = 50;
 
 /**
  * Allowed upload content types per kind (v3 M6). The presigned PUT streams
@@ -191,20 +196,46 @@ export const getPrivateMessages = async (req: Request, res: Response): Promise<v
   if (!coupleId) throw new AppError('Couple ID required', 400);
   await assertMatchParticipant(matchId, coupleId);
 
-  const messages = await prisma.message.findMany({
+  // Cursor pagination — additive and backward compatible. No params → the most
+  // recent PRIVATE_MESSAGES_DEFAULT_LIMIT messages, oldest→newest as before,
+  // plus a `nextCursor` for loading OLDER history. `?cursor=<opaque>&limit=<n>`
+  // (limit capped at 100) walks backwards in time. The shipped mobile client
+  // sends neither and keeps reading `data.messages`; `data.nextCursor` is new.
+  const limit = clampLimit(req.query.limit, PRIVATE_MESSAGES_DEFAULT_LIMIT);
+  const decoded = decodeCursor(req.query.cursor);
+
+  const rows = await prisma.message.findMany({
     where: {
       chatType: 'private',
       matchId: matchId,
+      ...(decoded
+        ? {
+            OR: [
+              { createdAt: { lt: new Date(decoded.key) } },
+              { createdAt: new Date(decoded.key), id: { lt: decoded.id } },
+            ],
+          }
+        : {}),
     },
     include: {
       sender: { select: { coupleId: true, profileName: true } },
       senderUser: { select: { role: true, name: true } },
     },
-    orderBy: { createdAt: 'desc' },
-    take: 100,
+    // Total order (createdAt + id tie-break) so the cursor is stable when two
+    // messages share a timestamp.
+    orderBy: [{ createdAt: 'desc' }, { id: 'desc' }],
+    take: limit + 1,
   });
 
-  const finalMessages = messages.reverse().map((m: any) => {
+  // Peek one extra row to know whether an older page exists.
+  const hasMore = rows.length > limit;
+  const pageRows = hasMore ? rows.slice(0, limit) : rows;
+  // Oldest row in this desc page is the cursor into the next (older) page.
+  const oldest = pageRows[pageRows.length - 1];
+  const nextCursor =
+    hasMore && oldest ? encodeCursor(oldest.createdAt.toISOString(), oldest.id) : null;
+
+  const finalMessages = pageRows.reverse().map((m: any) => {
     // Derive a human-readable first name. Priority order:
     // 1. Stored senderIndividualName on the message row (set at send time)
     // 2. User.name from the individual user record
@@ -235,7 +266,7 @@ export const getPrivateMessages = async (req: Request, res: Response): Promise<v
     };
   });
 
-  sendSuccess({ res, data: { matchId, messages: finalMessages } });
+  sendSuccess({ res, data: { matchId, messages: finalMessages, nextCursor } });
 };
 
 export const sendPrivateMessage = async (req: Request, res: Response): Promise<void> => {

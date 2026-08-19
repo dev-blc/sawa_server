@@ -3,7 +3,9 @@ import { AppError } from '../utils/AppError';
 import { logger } from '../utils/logger';
 import { emitRealtimeNotification } from '../utils/realtime';
 import { i18nData } from '../i18n/notif';
-import { materializeImageLoose } from '../lib/storage';
+import { materializeImageLoose, deleteCoupleMedia } from '../lib/storage';
+import { cacheInvalidatePattern } from '../lib/cache';
+import { ageFromDobString } from '../utils/age';
 
 export class CoupleService {
   /**
@@ -507,18 +509,29 @@ export class CoupleService {
       where: { coupleId },
       include: {
         // Public profile card — never expose partner email addresses here.
+        // `dob` is fetched only to derive AGE below; the raw DOB is dropped.
         partner1: { select: { id: true, name: true, dob: true } },
         partner2: { select: { id: true, name: true, dob: true } },
       }
     });
     if (!couple) return null;
+    // Privacy: a stranger's public card needs AGE, never a full date of birth.
+    // Leaking day/month/year to any other couple is a needless PII disclosure
+    // (India DPDP / the-floor.md S8: return only what the client needs), so map
+    // each partner's `dob` → a computed integer `age` and drop the raw value.
+    const toPublicPartner = (p: any) =>
+      p ? { id: p.id, name: p.name, age: ageFromDobString(p.dob) } : p;
     // Strip couple-level fields that must never leak to another couple viewing a
     // public profile card:
     //  • blocked / bannedAt / banReason — moderation internals.
     //  • locationLatitude / locationLongitude — EXACT home coordinates. Discovery
     //    only ever exposes a coarse `distance` label; leaking raw lat/lng here is
     //    a stalking/safety risk, so it must never appear on a profile card.
-    const publicCouple: any = { ...couple };
+    const publicCouple: any = {
+      ...couple,
+      partner1: toPublicPartner(couple.partner1),
+      partner2: toPublicPartner(couple.partner2),
+    };
     delete publicCouple.blocked;
     delete publicCouple.bannedAt;
     delete publicCouple.banReason;
@@ -731,6 +744,26 @@ export class CoupleService {
       prisma.user.deleteMany({ where: { coupleId } }),
       prisma.couple.delete({ where: { coupleId } }),
     ]);
+
+    // Best-effort, POST-COMMIT cleanup of side-channel data the SQL transaction
+    // cannot reach: the couple's S3 media (profile photos + chat voice notes)
+    // and its Redis Us-state keys (`us:feeling:*` snapshots + `us:ask_feeling:*`
+    // throttles). Fire-and-forget — the account is already deleted, so a cleanup
+    // failure must NEVER fail or block the deletion; it only reclaims orphaned
+    // blobs/keys (LOW residual noted in the audit). Each step logs its own error.
+    void (async () => {
+      try {
+        await deleteCoupleMedia(coupleId);
+      } catch (err: any) {
+        logger.warn(`[CoupleService.deleteMyCouple] S3 media cleanup failed for ${coupleId}: ${err?.message}`);
+      }
+      try {
+        await cacheInvalidatePattern(`us:feeling:${coupleId}:*`);
+        await cacheInvalidatePattern(`us:ask_feeling:${coupleId}:*`);
+      } catch (err: any) {
+        logger.warn(`[CoupleService.deleteMyCouple] Redis Us-state cleanup failed for ${coupleId}: ${err?.message}`);
+      }
+    })();
 
     return { success: true };
   }

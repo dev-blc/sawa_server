@@ -4,6 +4,95 @@
 
 ---
 
+## [2026-08-20] — Us-space honest layering, cursor pagination, .env.example, LOW security fixes
+
+**Why**: five audit/debt items. (1) The **entire** Us feature (feelings, planned
+dates, fridge notes, cycle, games — ~27 direct Prisma calls) lived inside the
+route file, violating the Route→Controller→Service layering (RULES §4). (2) Three
+list reads were unbounded or fixed-`take` with no pagination (RULES §2 "no
+unbounded findMany", §5), a scaling and payload risk on chat history + planned
+dates. (3) No `.env.example` existed — the standing workspace setup blocker; the
+server refuses to boot without required env and gave newcomers no key list.
+(4) Three LOW findings: the Google RTDN webhook secret was compared with `===`
+(a timing side channel), the **public** couple profile card leaked both partners'
+full **date of birth** to any other couple (needless PII — only age is shown),
+and account deletion left orphaned S3 media + `us:*` Redis keys behind. (5) A
+mobile follow-up needed the primary-photo presign path verified.
+
+**What changed**:
+
+- **Us-space service extraction (honest layering)** — new
+  `src/services/us.service.ts` holds all DB/business logic + socket emits + pushes
+  for the `/us` surface; `src/routes/us.routes.ts` is now a thin HTTP layer
+  (validate context → call service → shape response). **833 → 391 lines; ~27
+  direct `prisma.*` calls in the route file → 0.** Behaviour is **byte-identical**
+  — this was a move, not a rewrite: same endpoints, same auth middleware, same
+  socket event names/payloads (`us:ask-feeling`, `us:fridge-note`,
+  `us:cycle:updated`, `notification:new`), same response shapes, same
+  `[UsRoutes]` 500 copy. Business rejections (429 cooldown, 403 not-partner /
+  not-owner, 404/400 on fridge ack) now throw `AppError` from the service and the
+  route's existing try/catch maps them to the **exact** prior status+body. The
+  explicit per-handler try/catch is deliberately **kept** (not swapped to
+  `asyncHandler` + the global handler) precisely to preserve those wire shapes —
+  the mobile contract (RULES §1) outranks the asyncHandler tidy-up here.
+- **Cursor pagination (v2-deferred), additive + backward-compatible** — new
+  `src/utils/cursor.ts` (opaque base64url `[key,id]` keyset cursor + `clampLimit`,
+  cap 100). Applied to the three unbounded/fixed reads; every existing field
+  stays put, only `nextCursor` (+ optional `?cursor=&limit=`) is added:
+  - `getPrivateMessages` (`chat.controller`): was fixed `take:100`. Now
+    `data:{ matchId, messages, nextCursor }`, **default limit 50**, keyset over
+    `(createdAt,id)` walking backwards into history. `messages` unchanged.
+  - `GET /us/planned-dates`: was an **unbounded** `findMany`. Now bounded
+    (default 100) + `nextCursor` as a **top-level sibling** of the `data` array
+    (array stays an array so the app keeps reading `data.data`), order unchanged
+    (earliest `rawDate` first).
+  - `GET /us/fridge-notes`: default 30 (matches the write-side hard cap) +
+    sibling `nextCursor`, newest-first unchanged.
+  - Contract + **mobile follow-up** documented in `PLAN.md` → API Reference →
+    "Cursor pagination". Follow-up: adopt `cursor`/`limit` on chat (the default
+    dropped 100→50) and load older messages on demand; the planned/fridge changes
+    need no app change.
+- **`.env.example` created** (repo root) — generated from the authoritative
+  `src/config/env.ts` (all **59** vars, verified 1:1, no omissions/extras),
+  grouped by concern, `[REQUIRED]` (`DATABASE_URL`, `JWT_ACCESS_SECRET`,
+  `JWT_REFRESH_SECRET`, `GROQ_API_KEY`) vs `[optional]` marked, placeholders only
+  (no real secrets). `.gitignore` already permits it (ignores `.env`, not
+  `.env.example`). Clears the workspace setup blocker; RULES §9 gap noted for a
+  later stamp.
+- **LOW security fixes**:
+  - *Constant-time webhook secret* — `subscription.controller.googleNotifications`
+    (~:291/:297) now compares `GOOGLE_RTDN_SECRET` via new
+    `src/utils/timingSafeEqualStr` (length-guarded `crypto.timingSafeEqual`)
+    instead of `===`/`!==`, closing the timing oracle (billing surface, RULES §3).
+  - *Age, not DOB, on the public card* — `couple.service.getCoupleSummary`
+    (~:507) now maps each partner's `dob` → a computed integer `age`
+    (`src/utils/age.ts`, extracted from `couple.controller` so the 18+ gate and
+    the card share one parser — RULES §7 DRY) and drops the raw DOB. Only
+    `getCoupleById` consumes this (verified); the private own-profile path
+    (`getCouple`) still returns DOB for profile editing. **Mobile follow-up:** the
+    public profile card must read `partner1.age`/`partner2.age` (integer|null)
+    instead of `.dob`.
+  - *Account-deletion completeness* — `couple.service.deleteMyCouple` (~:733) now,
+    **after** the DB transaction commits, fires best-effort (never blocks/fails
+    the deletion) cleanup of orphaned side-channel data: the couple's S3 media
+    (new `deleteCoupleMedia` → `deleteByPrefix` in `lib/storage.ts`, clearing
+    `image/<couple>/` + `voice/<couple>/`) and its Redis Us-state keys
+    (`cacheInvalidatePattern('us:feeling:<id>:*')` + `us:ask_feeling:<id>:*`),
+    each with error logging.
+- **Primary-photo presign readiness (verify only, no change)** — confirmed
+  `couple.service.uploadPhotos` (:176) and `updateProfile` (:342) route the
+  primary photo through `materializeImageLoose`, which passes `http…` and
+  `/img/…` URLs through **unchanged** (only raw base64 is wrapped). So the server
+  already accepts a URL primary photo: the mobile flip off base64 is genuinely a
+  one-line change (send the presigned/proxy URL). **Verdict: READY.**
+- **Tests** — new pure-unit suites (no prisma/network): `cursor.test.ts` (encode/
+  decode round-trip, garbage/opaque handling, `clampLimit` bounds),
+  `timingSafeEqual.test.ts` (equal / unequal / length-mismatch / non-string /
+  multibyte), `age.test.ts` (ISO + DD/MM/YYYY parse, unreached-birthday, null
+  cases). Gates: `npm run typecheck` **0 errors**, `npm test` **10 suites / 69
+  tests green**. (`npm run lint` is a pre-existing no-op — the repo ships no
+  ESLint config; unrelated to this change.)
+
 ## [2026-08-20] — SMS abuse guard-stack + logout access-token revocation (H4)
 
 **Why**: the platform's #1 financial risk plus an auth-containment gap.

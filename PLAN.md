@@ -215,7 +215,7 @@ id, phone, otpHash, expiresAt, attempts, createdAt
 ### Chat (`/chats`)
 | Method | Path | Auth | Description |
 |---|---|---|---|
-| GET | `/chats/private/:matchId` | ✅ | Get private chat messages |
+| GET | `/chats/private/:matchId` | ✅ | Get private chat messages — **cursor-paginated**, see below |
 | GET | `/chats/group/:communityId` | ✅ | Get group chat messages |
 | POST | `/chats/private/:matchId` | ✅ | Send private message |
 | POST | `/chats/group/:communityId` | ✅ | Send group message |
@@ -223,11 +223,43 @@ id, phone, otpHash, expiresAt, attempts, createdAt
 ### Us space (`/us`)
 > The wider `/us` surface (feelings, planned dates, fridge notes, cycle, game
 > state) predates this reference and is not yet tabulated — see
-> `src/routes/us.routes.ts`. New endpoints are documented as they land:
+> `src/routes/us.routes.ts`. All of it now lives behind `src/services/us.service.ts`
+> (the route file is a thin HTTP layer). New/changed endpoints documented here:
 
 | Method | Path | Auth | Description |
 |---|---|---|---|
 | GET | `/us/mood-history` | ✅ | Couple's last 30 days of mood events `{ userId, mood, at }` (both partners, newest first), read from the `us_mood` Notification rows |
+| GET | `/us/planned-dates` | ✅ | Planned dates (earliest first) — **cursor-paginated**, see below |
+| GET | `/us/fridge-notes` | ✅ | Sticky notes (newest first) — **cursor-paginated**, see below |
+
+### Cursor pagination (v2, additive / backward-compatible)
+
+Three previously-unbounded (or fixed-`take`) list reads gained **keyset (cursor)
+pagination**. All are **additive** — no existing field moved — so the current
+mobile build keeps working untouched; the new `cursor`/`limit` params and
+`nextCursor` field are opt-in for the follow-up.
+
+- **Query params (all optional):** `?limit=<1..100>` (per-endpoint default when
+  omitted) and `?cursor=<opaque>`. Send no params for the first page; pass the
+  previous response's `nextCursor` to fetch the next page. A `nextCursor` of
+  `null` means no more pages. The cursor is an opaque base64url token
+  (`src/utils/cursor.ts`) — never parse it client-side.
+- `GET /chats/private/:matchId` → `data: { matchId, messages, nextCursor }`.
+  `messages` stays exactly where it was (oldest→newest). **Default `limit` 50**
+  (was a fixed `take: 100`). Paging walks **backwards in time** (older history) —
+  the mobile follow-up wires "load older messages on scroll-up" using
+  `nextCursor`.
+- `GET /us/planned-dates` → `data: [...]` (unchanged array, earliest `rawDate`
+  first) **plus a sibling** `nextCursor`. Default `limit` **100** (was
+  unbounded).
+- `GET /us/fridge-notes` → `data: [...]` (unchanged array, newest first) **plus a
+  sibling** `nextCursor`. Default `limit` **30** (the collection is hard-capped
+  at 30 on write, so `nextCursor` is effectively always `null` today; the
+  mechanism is in place for consistency).
+
+**Mobile follow-up (not yet done):** read `nextCursor`; on chat, adopt the
+`cursor`/`limit` params to restore or extend history depth (the default dropped
+100→50) and to load older messages on demand.
 
 ---
 

@@ -5,6 +5,8 @@ import {
   PutObjectCommand,
   GetObjectCommand,
   DeleteObjectCommand,
+  ListObjectsV2Command,
+  DeleteObjectsCommand,
 } from '@aws-sdk/client-s3';
 import { getSignedUrl } from '@aws-sdk/s3-request-presigner';
 import { env } from '../config/env';
@@ -293,4 +295,49 @@ export async function deleteObjectByUrlOrKey(urlOrKey: string): Promise<void> {
   } catch (err) {
     logger.warn('[storage] deleteObject failed (ignored):', err);
   }
+}
+
+/**
+ * Best-effort delete of EVERY object under a key prefix (paginated list +
+ * batched delete, 1000/req). Never throws — used by account deletion to reclaim
+ * a couple's media once their DB rows are gone. Returns quietly when storage is
+ * unconfigured so nothing breaks in dev.
+ */
+export async function deleteByPrefix(prefix: string, bucket?: string): Promise<void> {
+  try {
+    if (!isStorageConfigured() || !prefix) return;
+    const client = getClient();
+    const Bucket = bucket || env.S3_BUCKET;
+    let ContinuationToken: string | undefined;
+    do {
+      const listed = await client.send(
+        new ListObjectsV2Command({ Bucket, Prefix: prefix, ContinuationToken }),
+      );
+      const objects = (listed.Contents ?? [])
+        .map((o) => o.Key)
+        .filter((k): k is string => Boolean(k))
+        .map((Key) => ({ Key }));
+      if (objects.length) {
+        await client.send(
+          new DeleteObjectsCommand({ Bucket, Delete: { Objects: objects, Quiet: true } }),
+        );
+      }
+      ContinuationToken = listed.IsTruncated ? listed.NextContinuationToken : undefined;
+    } while (ContinuationToken);
+  } catch (err) {
+    logger.warn(`[storage] deleteByPrefix(${prefix}) failed (ignored):`, err);
+  }
+}
+
+/**
+ * Delete all of a couple's stored media — profile photos (`image/<couple>/`) and
+ * chat voice notes (`voice/<couple>/`) — each from its own bucket (they may be
+ * split; by default both resolve to S3_BUCKET). The couple-folder sanitization
+ * mirrors the key builder in createPresignedUpload/uploadBuffer. Best-effort.
+ */
+export async function deleteCoupleMedia(coupleId: string): Promise<void> {
+  const safe = (coupleId || '').replace(/[^a-zA-Z0-9_-]/g, '');
+  if (!safe) return;
+  await deleteByPrefix(`image/${safe}/`, env.S3_IMAGE_BUCKET || env.S3_BUCKET);
+  await deleteByPrefix(`voice/${safe}/`, env.S3_BUCKET);
 }
