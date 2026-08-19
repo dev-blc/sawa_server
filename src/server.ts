@@ -33,9 +33,13 @@ const start = async (): Promise<void> => {
   const io = createSocketServer(httpServer);
   (global as any).io = io;
 
-  // 4b. Cycle nudges for the primary partner — one worker only.
+  // 4b. Background jobs — one worker only.
   if (!process.env.pm_id || process.env.pm_id === '0') {
-    startCycleNotifier();
+    // Cycle nudges parked as a later feature (Arfam, 2026-08-20) — off until
+    // CYCLE_NOTIFIER_ENABLED; code retained. Pairs with mobile CYCLE_ENABLED.
+    if (env.CYCLE_NOTIFIER_ENABLED) {
+      startCycleNotifier();
+    }
     startSubscriptionNotifier();
     startEventReminderNotifier();
     startCelebrationNotifier();

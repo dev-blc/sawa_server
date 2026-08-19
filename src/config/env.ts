@@ -89,6 +89,11 @@ const envSchema = z.object({
   // Master switch. Keep 'false' until a WhatsApp sender + template are approved,
   // otherwise every notification attempts a (failing) WhatsApp send.
   WHATSAPP_NOTIFICATIONS_ENABLED: z.string().default('false').transform((v) => v === 'true'),
+  // Cycle nudges are parked as a later feature (Arfam, 2026-08-20): default OFF
+  // until the copy is rewritten to be inclusive. The notifier code is retained;
+  // flip to 'true' to re-enable. The mobile cycle surface is gated in step
+  // behind CYCLE_ENABLED in sawa/src/Utils/featureFlags.ts.
+  CYCLE_NOTIFIER_ENABLED: z.string().default('false').transform((v) => v === 'true'),
   // The WhatsApp-enabled sender in Twilio, e.g. 'whatsapp:+14155238886' (sandbox)
   // or 'whatsapp:+<your approved business number>'.
   TWILIO_WHATSAPP_FROM: z.string().optional(),

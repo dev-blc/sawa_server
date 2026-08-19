@@ -177,9 +177,10 @@
   list. The app refuses to boot if required vars are missing; **never invent
   or stub values to force a boot.**
 - **Never commit `.env`**, `node_modules/`, or `dist/`.
-- There is **no `.env.example` yet** (known workspace blocker). Creating one —
-  keys only, no values, generated from `env.ts` — is an open task; until then,
-  `env.ts` is the setup reference.
+- **`.env.example`** (repo root) lists every var — keys + comments, no values,
+  generated 1:1 from `env.ts`. Copy it to `.env` to set up. When you add or
+  remove an env var in `env.ts`, update `.env.example` in the same commit;
+  `env.ts` remains the authoritative validated list.
 
 ## 10. Documentation rules
 
