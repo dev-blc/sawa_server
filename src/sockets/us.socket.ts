@@ -3,6 +3,7 @@ import { prisma } from '../lib/prisma';
 import { logger } from '../utils/logger';
 import { pushToUser } from '../services/push.service';
 import { clearGameChallengeNotification } from '../services/notification.service';
+import { SOCKET_EVENTS } from '../constants/socketEvents';
 import { i18nData, renderNotif, NotifParams } from '../i18n/notif';
 import { invalidateNotifUnreadCount, cacheSet, cacheGet } from '../lib/cache';
 
@@ -548,7 +549,7 @@ export const registerUsHandlers = (io: SocketIOServer, socket: Socket): void => 
   // from their notification tray.
 
   // ── us:game:challenge — invite the partner to a match ──────────────────
-  socket.on('us:game:challenge', async (payload: { gameId: string; gameType?: GameType; state?: string }) => {
+  socket.on(SOCKET_EVENTS.US_GAME_CHALLENGE, async (payload: { gameId: string; gameType?: GameType; state?: string }) => {
     if (!userId || !coupleId || !payload?.gameId) return;
     const senderName = firstName(userName || 'Your partner');
     const gameType: GameType = payload.gameType || gameTypeOf(payload.gameId);
@@ -591,7 +592,7 @@ export const registerUsHandlers = (io: SocketIOServer, socket: Socket): void => 
 
     // 1. Instant relay so an online partner sees the invite immediately. The
     //    board `state` is included so state-based games render the shared layout.
-    io.to(`couple:${coupleId}`).except(socket.id).emit('us:game:challenge', {
+    io.to(`couple:${coupleId}`).except(socket.id).emit(SOCKET_EVENTS.US_GAME_CHALLENGE, {
       gameId: payload.gameId,
       gameType,
       state: isStateGame(gameType) ? emptyBoard : undefined,
@@ -639,11 +640,15 @@ export const registerUsHandlers = (io: SocketIOServer, socket: Socket): void => 
     const gameType = gameTypeOf(payload.gameId);
     // Flip the shared session to ACTIVE so a rejoining partner resumes the match.
     let board: string | null = null;
+    // Fail open on a DB error (start still emitted, as before); only a POSITIVE
+    // zero-row match suppresses the start.
+    let sessionLive = true;
     try {
-      await prisma.coupleUsState.updateMany({
+      const updated = await prisma.coupleUsState.updateMany({
         where: { coupleId, gameSessionId: payload.gameId },
         data: { gameSessionStatus: 'active', gameSessionAt: new Date() },
       });
+      if (updated.count === 0) sessionLive = false;
       const st = await prisma.coupleUsState.findUnique({ where: { coupleId } });
       if (st?.gameSessionId === payload.gameId) board = st.gameBoard || null;
     } catch (err: any) {
@@ -653,7 +658,13 @@ export const registerUsHandlers = (io: SocketIOServer, socket: Socket): void => 
     // a stale invite can't outlive the session and dead-end a later tap.
     await clearGameChallengeNotification(coupleId, payload.gameId);
     io.to(`couple:${coupleId}`).emit('notification:new', { type: 'us_game_challenge_cleared' });
-    io.to(`couple:${coupleId}`).emit('us:game:start', {
+    if (!sessionLive) {
+      // Accepting a dead session (quit/expired/superseded) used to emit
+      // us:game:start anyway — both clients then believed a game was live
+      // while the server row was empty and every move silently no-oped.
+      return;
+    }
+    io.to(`couple:${coupleId}`).emit(SOCKET_EVENTS.US_GAME_START, {
       gameId: payload.gameId,
       gameType,
       // Share the stored board so state-based games start from the same layout.
@@ -670,7 +681,7 @@ export const registerUsHandlers = (io: SocketIOServer, socket: Socket): void => 
   // mirroring how TTT win detection lives on the client). The server relays the
   // move verbatim and persists the resulting board for resume.
   socket.on(
-    'us:game:move',
+    SOCKET_EVENTS.US_GAME_MOVE,
     async (payload: {
       gameId: string;
       cell?: number;
@@ -683,7 +694,7 @@ export const registerUsHandlers = (io: SocketIOServer, socket: Socket): void => 
       const gameType = gameTypeOf(payload.gameId);
 
       // Relay first (fast path), then persist the board so both can resume.
-      io.to(`couple:${coupleId}`).except(socket.id).emit('us:game:move', {
+      io.to(`couple:${coupleId}`).except(socket.id).emit(SOCKET_EVENTS.US_GAME_MOVE, {
         gameId: payload.gameId,
         gameType,
         cell: payload.cell,
@@ -733,10 +744,32 @@ export const registerUsHandlers = (io: SocketIOServer, socket: Socket): void => 
     },
   );
 
-  // ── us:game:quit — one player leaves mid-game ──────────────────────────
-  socket.on('us:game:quit', async (payload: { gameId: string }) => {
+  // ── us:game:leave — SOFT exit: board closed, session kept ──────────────
+  // Blur/background during a live game lands here (the client used to send
+  // quit, which nulled the shared session the moment the FIRST partner
+  // backgrounded — the "we can't resume our game" bug). Stamp activity so the
+  // idle expiry counts from the walk-away, and tell the partner quietly.
+  socket.on(SOCKET_EVENTS.US_GAME_LEAVE, async (payload: { gameId: string }) => {
     if (!userId || !coupleId || !payload?.gameId) return;
-    io.to(`couple:${coupleId}`).except(socket.id).emit('us:game:quit', {
+    io.to(`couple:${coupleId}`).except(socket.id).emit(SOCKET_EVENTS.US_GAME_PARTNER_LEFT, {
+      gameId: payload.gameId,
+      byUserId: userId,
+      byName: firstName(userName || ''),
+    });
+    try {
+      await prisma.coupleUsState.updateMany({
+        where: { coupleId, gameSessionId: payload.gameId },
+        data: { gameSessionAt: new Date() },
+      });
+    } catch (err: any) {
+      logger.warn(`[UsSocket] stamp leave failed: ${err.message}`);
+    }
+  });
+
+  // ── us:game:quit — HARD exit: one player abandons; the session dies ────
+  socket.on(SOCKET_EVENTS.US_GAME_QUIT, async (payload: { gameId: string }) => {
+    if (!userId || !coupleId || !payload?.gameId) return;
+    io.to(`couple:${coupleId}`).except(socket.id).emit(SOCKET_EVENTS.US_GAME_QUIT, {
       gameId: payload.gameId,
       byUserId: userId,
       byName: firstName(userName || ''),
@@ -752,7 +785,7 @@ export const registerUsHandlers = (io: SocketIOServer, socket: Socket): void => 
   });
 
   // ── us:game:result — winner's client reports; server scores it once ────
-  socket.on('us:game:result', async (payload: { gameId: string; winnerUserId?: string; draw?: boolean }) => {
+  socket.on(SOCKET_EVENTS.US_GAME_RESULT, async (payload: { gameId: string; winnerUserId?: string; draw?: boolean }) => {
     if (!userId || !coupleId || !payload?.gameId) return;
     try {
       // The round is over — always clear the shared session (win, loss, or draw)
@@ -798,7 +831,7 @@ export const registerUsHandlers = (io: SocketIOServer, socket: Socket): void => 
         for (const s of scores) pts[s.userId] = s.wins;
         const streak = { userId: winnerId, count: nextCount };
 
-        io.to(`couple:${coupleId}`).emit('us:game:points', { points: pts, streak });
+        io.to(`couple:${coupleId}`).emit(SOCKET_EVENTS.US_GAME_POINTS, { points: pts, streak });
       }
 
       // ── Close the loop: tell the partner who did NOT report the result ────

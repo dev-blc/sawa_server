@@ -4,6 +4,33 @@
 
 ---
 
+## [2026-08-20] — Games: soft leave vs hard quit — a paused game survives both partners leaving
+
+**Why:** Arfam's game workstream — "if both partners quit the app mid-game, they can't resume."
+The resume machinery (persisted `CoupleUsState` row, `GET /us/game/active`, client
+rehydration) already existed and works; what killed it was the CLIENT treating blur/background
+as a quit, and `us:game:quit` nulling the whole session row the moment the FIRST partner
+backgrounded. Plus a 3h idle expiry that killed a game paused over an evening.
+
+**What:**
+
+- **New `us:game:leave`** (soft exit): relays `us:game:partner-left` `{gameId, byUserId,
+  byName}` to the partner and only stamps `gameSessionAt` — the session survives, either
+  partner resumes via the existing Resume button. `us:game:quit` keeps its destructive meaning,
+  now reached only from deliberate actions (Quit button, decline, cancel). Mobile half on
+  `sawa` `arfam-fix`.
+- **Idle expiry 3h → 24h** (`us.service.getActiveGame`) — a paused game is now a feature.
+- **Accept-race guard**: `us:game:accept` on a dead/superseded session used to emit
+  `us:game:start` even when `updateMany` matched 0 rows — both clients then believed a game was
+  live while every move silently no-oped. Now a positive zero-row match suppresses the start
+  (DB errors still fail open, as before).
+- **`us:game:*` event names moved into `src/constants/socketEvents.ts`** (RULES §6 was a
+  documented violation for the whole game block).
+
+**Gates:** tsc 0, 12/12 suites (81 tests).
+
+---
+
 ## [2026-08-20] — Signup OTP: peek both codes before consuming either
 
 **Why:** Arfam's OTP workstream. `verifyOtp` consumed both partners' codes inside the check

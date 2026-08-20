@@ -673,8 +673,10 @@ type ActiveGame = {
 
 /**
  * The couple's current shared game session so a partner who left the screen can
- * (re)join. Auto-expires sessions idle for >3h so a forgotten challenge can
- * never block new games forever.
+ * (re)join. Auto-expires sessions idle for >24h so a forgotten challenge can
+ * never block new games forever — a full day, because a paused game is now a
+ * feature (us:game:leave keeps the session so both partners can quit the app
+ * and pick the round back up; 3h killed a game paused over an evening).
  */
 export async function getActiveGame(coupleId: string): Promise<ActiveGame> {
   const st = await prisma.coupleUsState.findUnique({ where: { coupleId } });
@@ -682,7 +684,7 @@ export async function getActiveGame(coupleId: string): Promise<ActiveGame> {
     return { session: null };
   }
   const ageMs = st.gameSessionAt ? Date.now() - new Date(st.gameSessionAt).getTime() : Number.MAX_SAFE_INTEGER;
-  if (ageMs > 3 * 60 * 60 * 1000) {
+  if (ageMs > 24 * 60 * 60 * 1000) {
     await prisma.coupleUsState.update({
       where: { coupleId },
       data: {
