@@ -3,7 +3,7 @@ import { SOCKET_EVENTS } from '../constants/socketEvents';
 import { logger } from '../utils/logger';
 import { prisma } from '../lib/prisma';
 import { i18nData } from '../i18n/notif';
-import { invalidateNotifUnreadCount } from '../lib/cache';
+import { invalidateNotifUnreadCount, cacheSetNX, cacheSet, cacheGet, cacheInvalidate } from '../lib/cache';
 import { getCoupleCommunityColor } from '../utils/communityColors';
 // NOTE: chat push/realtime is handled via upsertGroupedNotification() in
 // notification.service (which internally calls emitRealtimeNotification →
@@ -71,6 +71,54 @@ export const registerChatHandlers = (io: SocketIOServer, socket: Socket): void =
         const timestamp = new Date().toISOString();
         const clientMessageId = data.clientMessageId || `srv-${Date.now()}`;
 
+        // ── Idempotency on clientMessageId ────────────────────────────────────
+        // socket.io-client BUFFERS emits made while disconnected and replays all
+        // of them on reconnect, and the app's ack-timeout retry re-emits the
+        // same payload — before this guard each copy became a fresh DB row and
+        // the other couple received the same message N times, invisibly to the
+        // sender (whose UI dedupes locally). Claim the id before inserting; a
+        // duplicate re-sends the WINNER's saved row to the sender's socket so a
+        // bubble stuck on "failed" (its first echo lost mid-reconnect) still
+        // reconciles, and then stops. Scoped by sender couple so two clients'
+        // ids can never collide. Fail-open: with the cache unavailable this
+        // degrades to the old behavior rather than dropping messages.
+        const dedupeKey = data.clientMessageId
+          ? `chat:cmsg:${socket.coupleId}:${data.clientMessageId}`
+          : null;
+        if (dedupeKey) {
+          const claimed = await cacheSetNX(dedupeKey, 'pending', 24 * 60 * 60).catch(() => true);
+          if (!claimed) {
+            const existingId = await cacheGet(dedupeKey).catch(() => null);
+            if (existingId && existingId !== 'pending') {
+              const existing = await prisma.message.findUnique({ where: { id: existingId } });
+              if (existing) {
+                socket.emit(SOCKET_EVENTS.CHAT_MESSAGE, {
+                  _id: existing.id,
+                  clientMessageId,
+                  chatId,
+                  chatType,
+                  senderCoupleId: socket.coupleId,
+                  senderUserId: socket.userId,
+                  senderName: existing.senderName,
+                  senderIndividualName: existing.senderIndividualName,
+                  senderRole: socket.userRole,
+                  accent: getCoupleCommunityColor(socket.coupleId),
+                  content: existing.content,
+                  contentType: existing.contentType,
+                  audioDuration: existing.audioDuration,
+                  timestamp: existing.createdAt.toISOString(),
+                  repliedToId: existing.repliedToId,
+                  repliedToText: existing.repliedToText,
+                  repliedToName: existing.repliedToName,
+                });
+                socket.emit('chat:messageId', { clientMessageId, realMessageId: existing.id });
+              }
+            }
+            logger.info(`[Socket] Duplicate CHAT_MESSAGE suppressed (${clientMessageId})`);
+            return;
+          }
+        }
+
         const PLACEHOLDER_NAMES = new Set(['User', 'Me', 'Unknown', '']);
         const clientName =
           (!PLACEHOLDER_NAMES.has(data.senderIndividualName || '') && data.senderIndividualName) ||
@@ -112,6 +160,8 @@ export const registerChatHandlers = (io: SocketIOServer, socket: Socket): void =
           });
         } catch (persistErr) {
           logger.error('[Socket] Message persist failed — notifying sender:', persistErr);
+          // Release the idempotency claim so the client's retry can insert.
+          if (dedupeKey) await cacheInvalidate(dedupeKey).catch(() => {});
           socket.emit('chat:messageFailed', { clientMessageId, chatId });
           return;
         }
@@ -160,6 +210,10 @@ export const registerChatHandlers = (io: SocketIOServer, socket: Socket): void =
             }
           })();
         }
+
+        // Record the saved id against the idempotency claim so a later
+        // duplicate can re-send THIS row instead of creating another.
+        if (dedupeKey) await cacheSet(dedupeKey, savedMessage.id, 24 * 60 * 60).catch(() => {});
 
         // Sync the real DB id back to the sender so edit/delete work immediately
         // (kept for clients that reconcile via chat:messageId rather than the
