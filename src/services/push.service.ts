@@ -1,5 +1,6 @@
 import admin from 'firebase-admin';
 import { prisma } from '../lib/prisma';
+import { Prisma } from '@prisma/client';
 import { logger } from '../utils/logger';
 import { renderNotif, hasNotifKey, NotifParams } from '../i18n/notif';
 import { mirrorToWhatsAppCouple, mirrorToWhatsAppUser } from './whatsapp.service';
@@ -18,7 +19,12 @@ const badgeCountFor = async (coupleId: string | null | undefined, userId: string
         recipientId: coupleId,
         read: false,
         clearedAt: null,
-        NOT: { data: { path: ['senderUserId'], equals: userId } },
+        // Null-safe (see notification.controller notSelfSent): rows without a
+        // senderUserId key must COUNT, not vanish into SQL NULL semantics.
+        OR: [
+          { data: { path: ['senderUserId'], equals: Prisma.AnyNull } },
+          { NOT: { data: { path: ['senderUserId'], equals: userId } } },
+        ],
       } as any,
     });
     // The push this badge rides on has usually just landed its row, so 0 here

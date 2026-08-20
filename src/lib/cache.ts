@@ -183,8 +183,15 @@ export async function cacheInvalidatePattern(pattern: string): Promise<void> {
   const redis = getRedis();
   if (!redis) { localDelPattern(pattern); return; }
   try {
-    const keys = await redis.keys(pattern);
-    if (keys.length > 0) await redis.del(...keys);
+    // SCAN, never KEYS: KEYS is O(total keyspace) and blocks Redis's single
+    // thread — and this runs on hot paths (26 call sites incl. every
+    // notification write). SCAN walks in bounded steps without blocking.
+    let cursor = '0';
+    do {
+      const [next, keys] = await redis.scan(cursor, 'MATCH', pattern, 'COUNT', 200);
+      cursor = next;
+      if (keys.length > 0) await redis.del(...keys);
+    } while (cursor !== '0');
   } catch { localDelPattern(pattern); }
 }
 

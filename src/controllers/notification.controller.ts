@@ -1,6 +1,7 @@
 import { Request, Response } from 'express';
 import { z } from 'zod';
 import { prisma } from '../lib/prisma';
+import { Prisma } from '@prisma/client';
 import { sendSuccess } from '../utils/response';
 import { AppError } from '../utils/AppError';
 import {
@@ -28,8 +29,16 @@ export const validateNotificationIdParams = validate(notificationIdParams, 'para
  * sender's identity lives only in data.senderUserId. Without this filter a
  * partner's own hugs inflate their own bell count.
  */
+// "Not sent by me" — null-safe. A row whose data has NO senderUserId key
+// extracts to SQL NULL, and NOT(NULL = x) is NULL, which silently DROPS the
+// row (match/community/subscription notifications never set senderUserId).
+// The OR rescues absent/null keys so only genuinely-self-sent rows are hidden.
+// Verified against a real Postgres (SAWA_LEGACY_VS_NOW §6.1, fix A).
 const notSelfSent = (userId: string) => ({
-  NOT: { data: { path: ['senderUserId'], equals: userId } },
+  OR: [
+    { data: { path: ['senderUserId'], equals: Prisma.AnyNull } },
+    { NOT: { data: { path: ['senderUserId'], equals: userId } } },
+  ],
 });
 
 export const getNotifications = async (req: Request, res: Response): Promise<void> => {

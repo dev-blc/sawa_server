@@ -2,6 +2,23 @@ import fs from 'fs';
 import path from 'path';
 import dotenv from 'dotenv';
 
+// ─── Destructive-operation guard (mirrors POST /admin/flush-database) ────────
+// This script TRUNCATEs every table of whatever DATABASE_URL it discovers —
+// on a production host that is the production database. Refuse unless the
+// operator explicitly confirms, and refuse outright in production without the
+// same env opt-in the HTTP endpoint requires.
+const CONFIRM_PHRASE = 'FLUSH-ENTIRE-SAWA-DATABASE';
+if (process.env.NODE_ENV === 'production' && process.env.ALLOW_PROD_DB_FLUSH !== 'true') {
+  console.error('[flushDB] REFUSED: NODE_ENV=production and ALLOW_PROD_DB_FLUSH is not true.');
+  process.exit(1);
+}
+if (process.env.FLUSH_DB_CONFIRM !== CONFIRM_PHRASE && process.argv[2] !== CONFIRM_PHRASE) {
+  console.error('[flushDB] REFUSED: pass the confirmation phrase to proceed:');
+  console.error(`  npm run db:flush -- ${CONFIRM_PHRASE}`);
+  console.error(`  (or set FLUSH_DB_CONFIRM=${CONFIRM_PHRASE})`);
+  process.exit(1);
+}
+
 /**
  * Load DATABASE_URL by directly reading and parsing candidate .env files.
  * Uses manual parsing so it works regardless of dotenv caching or module load order.

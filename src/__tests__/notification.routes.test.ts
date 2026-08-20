@@ -70,7 +70,12 @@ describe('notification routes', () => {
       const where = (prisma.notification.findMany as jest.Mock).mock.calls[0][0].where;
       expect(where.recipientId).toBe('couple-1');
       expect(where.clearedAt).toBeNull();
-      expect(where.NOT).toEqual({ data: { path: ['senderUserId'], equals: 'user-1' } });
+      // Null-safe self-sent filter (SAWA_LEGACY_VS_NOW §6.1, verified on prod data):
+      // rows WITHOUT a senderUserId key must be rescued by the OR, not dropped.
+      expect(where.OR).toEqual([
+        { data: { path: ['senderUserId'], equals: expect.anything() } },
+        { NOT: { data: { path: ['senderUserId'], equals: 'user-1' } } },
+      ]);
     });
   });
 
@@ -129,7 +134,12 @@ describe('notification routes', () => {
       expect(res.body.data.count).toBe(3);
       const where = (prisma.notification.count as jest.Mock).mock.calls[0][0].where;
       expect(where).toMatchObject({ recipientId: 'couple-1', read: false, clearedAt: null });
-      expect(where.NOT).toEqual({ data: { path: ['senderUserId'], equals: 'user-1' } });
+      // Null-safe self-sent filter (SAWA_LEGACY_VS_NOW §6.1, verified on prod data):
+      // rows WITHOUT a senderUserId key must be rescued by the OR, not dropped.
+      expect(where.OR).toEqual([
+        { data: { path: ['senderUserId'], equals: expect.anything() } },
+        { NOT: { data: { path: ['senderUserId'], equals: 'user-1' } } },
+      ]);
       expect(setCachedNotifUnreadCount).toHaveBeenCalledWith('couple-1', 'user-1', 3);
     });
 
