@@ -94,6 +94,11 @@ const envSchema = z.object({
   // flip to 'true' to re-enable. The mobile cycle surface is gated in step
   // behind CYCLE_ENABLED in sawa/src/Utils/featureFlags.ts.
   CYCLE_NOTIFIER_ENABLED: z.string().default('false').transform((v) => v === 'true'),
+  // The subscription/trial notifier solicits a Prime purchase the app cannot
+  // make (IAP surface removed for App Store 3.1.1) — OFF until Prime ships as
+  // compliant IAP. Residual subscription rows from rejected-era builds would
+  // otherwise trigger 'Subscribe to Sawa Prime' pushes on iPhones.
+  SUBSCRIPTION_NOTIFIER_ENABLED: z.string().default('false').transform((v) => v === 'true'),
   // The WhatsApp-enabled sender in Twilio, e.g. 'whatsapp:+14155238886' (sandbox)
   // or 'whatsapp:+<your approved business number>'.
   TWILIO_WHATSAPP_FROM: z.string().optional(),

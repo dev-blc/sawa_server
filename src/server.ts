@@ -40,7 +40,11 @@ const start = async (): Promise<void> => {
     if (env.CYCLE_NOTIFIER_ENABLED) {
       startCycleNotifier();
     }
-    startSubscriptionNotifier();
+    // Gated: this job's only function is soliciting a Prime purchase the app
+    // cannot make (3.1.1). Off until Prime returns as compliant IAP.
+    if (env.SUBSCRIPTION_NOTIFIER_ENABLED) {
+      startSubscriptionNotifier();
+    }
     startEventReminderNotifier();
     startCelebrationNotifier();
     // One-time backfill of Us-space data from Redis into Postgres.
