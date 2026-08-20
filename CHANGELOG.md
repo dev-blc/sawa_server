@@ -4,6 +4,25 @@
 
 ---
 
+## [2026-08-20] — Fix: private-chat history regression (50-message truncation)
+
+**Why**: the cursor-pagination refactor (3114c9d) changed `GET /chats/private/:matchId` in two
+ways at once — added keyset pagination (good) and dropped the cursor-less default from 100 to
+50 (regression). The mobile client was never taught the cursor, so users saw only the newest
+50 messages with no way to reach older conversation. One contract, two halves, one shipped.
+
+**Changed**
+- `chat.controller.ts`: `PRIVATE_MESSAGES_DEFAULT_LIMIT` 50 → 100 — exact parity with the
+  pre-pagination `take: 100` for clients that send no params (the shipped store build).
+  Paginating clients request `limit=50` explicitly and walk older pages via `cursor`.
+- `RULES.md` §5 corrected ("no endpoint paginates" was false) and now documents the keyset
+  convention plus the paired-halves rule: a paginated response ships with the client's
+  load-more path in the same change, or waits.
+- Mobile counterpart (sawa `arfam-fix`): chat adopts the cursor — 50 on first paint,
+  infinite scroll-back via inverted-list onEndReached, reconnect re-pull merges instead of
+  replacing state (was silently discarding loaded older pages), paged-in history never
+  replays entrance animations.
+
 ## [2026-08-20] — Games: soft leave vs hard quit — a paused game survives both partners leaving
 
 **Why:** Arfam's game workstream — "if both partners quit the app mid-game, they can't resume."

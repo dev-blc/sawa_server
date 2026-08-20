@@ -1,7 +1,7 @@
 # SAWA Backend — Rules & Conventions
 
 > **Always read this file before making any changes to the backend.**
-> Last verified: 2026-08-20 (evening) against `arfam-fix`. **Living document**:
+> Last verified: 2026-08-20 (night) against `arfam-fix`. **Living document**:
 > any commit that makes a line here false must update that line in the same
 > commit and bump this stamp.
 >
@@ -132,10 +132,16 @@
 
 - All routes prefixed `/api/v1/`.
 - Envelope per §1, via `src/utils/response.ts`.
-- **Pagination convention for new list endpoints** (no current endpoint
-  paginates — that is the baseline): `page` + `limit` query params, `limit`
-  capped at 100, response `{ data, total, page, limit }`. Any new or touched
-  list endpoint that can grow unbounded adopts this.
+- **Pagination convention: keyset cursors, not page/offset** — the opaque
+  compound cursor in `src/utils/cursor.ts` (sort key + id tie-break; malformed
+  cursors fall back to page one, never 500). Live today on private chat
+  messages (`GET /chats/private/:matchId` — `?cursor=&limit=`, `nextCursor` in
+  the response, default limit 100 for cursor-less legacy clients, cap 100) and
+  the us-space history endpoints. Any new or touched list endpoint that can
+  grow unbounded adopts this. **A paginated response is half a contract: the
+  client's load-more path ships in the same change, or the change waits** —
+  shipping the server half alone silently truncated chat history to one page
+  (2026-08-20 regression).
 
 ## 6. Real-time (Socket.io) rules
 

@@ -14,7 +14,12 @@ import {
 
 // Default chat history page size when the client sends no `?limit=`. Cursor
 // pagination lets the app load older messages on demand (RULES §5).
-const PRIVATE_MESSAGES_DEFAULT_LIMIT = 50;
+// Default when the client sends no limit param. 100 = exact parity with the
+// pre-pagination behavior (`take: 100`), because the shipped store build sends
+// no params and cannot ask for older pages — halving its window was a
+// regression. Paginating clients request `limit=50` explicitly for a faster
+// first paint and walk older history via `cursor`.
+const PRIVATE_MESSAGES_DEFAULT_LIMIT = 100;
 
 /**
  * Allowed upload content types per kind (v3 M6). The presigned PUT streams
