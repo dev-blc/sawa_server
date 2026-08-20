@@ -302,6 +302,42 @@ export async function getPlannedDates(args: {
   return { items: page.map(serializePlan), nextCursor };
 }
 
+/**
+ * Update an existing planned date — deliberately update-only, never upsert:
+ * a date REQUEST the partner has not accepted yet exists only on the
+ * creator's device, and an edit must not create the server row (that would
+ * sidestep acceptance). Missing row → 404, foreign row → 403.
+ */
+export async function updatePlannedDate(args: {
+  coupleId: string;
+  id: string;
+  activity?: string;
+  date?: string;
+  rawDate?: string;
+  time?: string;
+  note?: string;
+}): Promise<ReturnType<typeof serializePlan>> {
+  const { coupleId, id, activity, date, rawDate, time, note } = args;
+  const existing = await prisma.plannedDate.findUnique({
+    where: { id },
+    select: { coupleId: true },
+  });
+  if (!existing) throw new AppError('Plan not found', 404);
+  if (existing.coupleId !== coupleId) throw new AppError('Not allowed', 403);
+
+  const row = await prisma.plannedDate.update({
+    where: { id },
+    data: {
+      ...(activity ? { activity } : {}),
+      ...(rawDate ? { rawDate, dateLabel: date ?? rawDate } : {}),
+      // Empty string clears; undefined leaves untouched.
+      ...(time !== undefined ? { time: time || null } : {}),
+      ...(note !== undefined ? { note: note || null } : {}),
+    },
+  });
+  return serializePlan(row);
+}
+
 export async function deletePlannedDate(coupleId: string, id: string): Promise<void> {
   await prisma.plannedDate.deleteMany({
     where: { coupleId, OR: [{ id }, { rawDate: id }] },

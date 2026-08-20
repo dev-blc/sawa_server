@@ -31,6 +31,7 @@ import {
   sendAskFeeling,
   savePlannedDate,
   getPlannedDates,
+  updatePlannedDate,
   deletePlannedDate,
   getFridgeNotes,
   createFridgeNote,
@@ -135,6 +136,26 @@ router.post('/planned-dates', authenticate, idempotency, async (req: Request, re
     res.status(500).json({ success: false, error: 'Failed to save planned date' });
   }
 });
+
+/**
+ * PATCH /api/v1/us/planned-dates/:id
+ * Edit an existing planned date. Update-only — a request the partner has not
+ * accepted has no server row and must stay creator-local, so a missing row is
+ * a 404 (the app sends the PATCH fire-and-forget and treats that as fine).
+ * Body: { activity?, date?, rawDate?, time?, note? }
+ */
+router.patch('/planned-dates/:id', authenticate, idempotency, asyncHandler(async (req: Request, res: Response): Promise<void> => {
+  const coupleId = req.user?.coupleId;
+  const { id } = req.params;
+  if (!coupleId || !id) throw new AppError('Missing couple context', 400);
+
+  const { activity, date, rawDate, time, note } = req.body as Record<string, string | undefined>;
+  if (rawDate !== undefined && !/^\d{4}-\d{2}-\d{2}$/.test(rawDate)) {
+    throw new AppError('rawDate must be YYYY-MM-DD', 400);
+  }
+  const plan = await updatePlannedDate({ coupleId, id, activity, date, rawDate, time, note });
+  sendSuccess({ res, data: plan });
+}));
 
 /**
  * GET /api/v1/us/planned-dates?cursor=&limit=

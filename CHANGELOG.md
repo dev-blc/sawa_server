@@ -4,6 +4,32 @@
 
 ---
 
+## [2026-08-20] — Planned dates become editable (PATCH + date_edit/date_delete relay copy)
+
+**Why:** Arfam's calendar workstream — a created plan had no edit path anywhere (no route, no
+service function, no UI), and a deleted plan never reached the partner in real time (no relay,
+and the mobile merge was additive-only so ghosts persisted forever). Mobile half lands on
+`sawa` `arfam-fix` (`c33abe51`).
+
+**What:**
+
+- **`PATCH /us/planned-dates/:id`** (`us.routes.ts`, `authenticate` + `idempotency` +
+  `asyncHandler`) → new `updatePlannedDate` in `us.service.ts`. **Update-only, deliberately
+  never upsert**: a date request the partner hasn't accepted exists only on the creator's
+  device, and an edit must not create the server row (that would sidestep acceptance) — missing
+  row 404, foreign couple 403 (same ownership guard as `savePlannedDate`). `rawDate` validated
+  `YYYY-MM-DD`; `time`/`note` clear on empty string, untouched when absent. Standard envelope.
+- **`us:nudge` copy branches** (`us.socket.ts`): `date_edit` gets a real notification row +
+  localized push (`us.date.edit` added to `i18n/notif.ts`, 4 locales) instead of falling
+  through to the generic "sent you a nudge" push; `date_delete` is relay-only by design —
+  housekeeping, not a moment: no row, no badge poke, no push (the partner's next focus fetch
+  reconciles offline devices).
+- PLAN.md API table updated.
+
+**Gates:** tsc 0 errors, 12/12 suites (79 tests) green.
+
+---
+
 ## [2026-08-20] — Push contract unified + notification lifecycle (game invites can finally land)
 
 **Why:** the tap-routing contract was split three ways and the app could not honor it. A game

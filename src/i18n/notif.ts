@@ -376,6 +376,20 @@ const T: Record<string, Entry> = {
       mr: 'ते कॅलेंडरवर आहे 🗓️',
     },
   },
+  'us.date.edit': {
+    title: {
+      en: '{name} updated {actLabel} ✏️',
+      hi: '{name} ने {actLabel} अपडेट किया ✏️',
+      kn: '{name} {actLabel} ನವೀಕರಿಸಿದ್ದಾರೆ ✏️',
+      mr: '{name} ने {actLabel} अपडेट केले ✏️',
+    },
+    body: {
+      en: 'Tap to see the update',
+      hi: 'अपडेट देखने के लिए टैप करें',
+      kn: 'ನವೀಕರಣ ನೋಡಲು ಟ್ಯಾಪ್ ಮಾಡಿ',
+      mr: 'अपडेट पाहण्यासाठी टॅप करा',
+    },
+  },
   'us.date.reject': {
     title: {
       en: "{name} couldn't make it this time",

@@ -311,6 +311,26 @@ export const registerUsHandlers = (io: SocketIOServer, socket: Socket): void => 
         });
         pushTitle = `${senderName} couldn't make it this time`;
 
+      } else if (payload.kind === 'date_edit') {
+        const actLabel = payload.activity ? payload.activity : 'the plan';
+        const timeLabel = payload.time ? ` at ${payload.time}` : '';
+        i18nKey = 'us.date.edit'; i18nParams = { name: senderName, actLabel };
+        await saveUsNotification({
+          coupleId,
+          senderUserId: userId,
+          subtype: 'us_date_plan',
+          title: `${senderName} updated ${actLabel}`,
+          message: payload.date ? `Now on ${payload.date}${timeLabel}` : 'Tap to see the update',
+          extraData: { id: payload.id, date: payload.date, rawDate: payload.rawDate, activity: payload.activity, time: payload.time, note: payload.note, kind: 'date_edit', planBy: payload.planBy || senderName, ...i18nData(i18nKey, i18nParams) },
+        });
+        pushTitle = `${senderName} updated ${actLabel} ✏️`;
+
+      } else if (payload.kind === 'date_delete') {
+        // Deletion is housekeeping, not a moment: the real-time relay (step 1,
+        // already emitted) is all the partner needs — no notification row, no
+        // badge poke, no push.
+        return;
+
       } else if (payload.kind === 'date_plan') {
         // Legacy fallback
         i18nKey = 'us.nudge.generic'; i18nParams = { name: senderName };

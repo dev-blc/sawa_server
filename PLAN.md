@@ -230,6 +230,7 @@ id, phone, otpHash, expiresAt, attempts, createdAt
 |---|---|---|---|
 | GET | `/us/mood-history` | ✅ | Couple's last 30 days of mood events `{ userId, mood, at }` (both partners, newest first), read from the `us_mood` Notification rows |
 | GET | `/us/planned-dates` | ✅ | Planned dates (earliest first) — **cursor-paginated**, see below |
+| PATCH | `/us/planned-dates/:id` | ✅ | Edit a planned date (`activity?/date?/rawDate?/time?/note?`). **Update-only, never upsert** — an unaccepted date request has no server row and must stay creator-local, so missing → 404, foreign couple → 403. Idempotency-Key honored (offline-queue replay safe). Returns the updated plan in the standard envelope |
 | GET | `/us/fridge-notes` | ✅ | Sticky notes (newest first) — **cursor-paginated**, see below |
 
 ### Cursor pagination (v2, additive / backward-compatible)
