@@ -207,7 +207,7 @@ export async function runCheck(): Promise<void> {
         pushToUser(primary.id, {
           title: 'A gentle update in your space',
           body: 'Open Sawa to see it',
-          data: { type: 'us_cycle', navigate: 'Notifications', ...i18nData('cycle.neutral') },
+          data: { type: 'us_cycle', subtype: 'us_cycle', navigate: 'UsSpace', ...i18nData('cycle.neutral') },
           collapseKey: 'us_cycle',
         }).catch(() => null);
 

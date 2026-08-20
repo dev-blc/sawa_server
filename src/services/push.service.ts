@@ -5,6 +5,31 @@ import { renderNotif, hasNotifKey, NotifParams } from '../i18n/notif';
 import { mirrorToWhatsAppCouple, mirrorToWhatsAppUser } from './whatsapp.service';
 
 /**
+ * The recipient's real unread count for the iOS APNs badge. Mirrors the
+ * unread-count endpoint's filter exactly (uncleared + not self-sent), because
+ * a badge that disagrees with the in-app bell reads as a bug. Falls back to 1
+ * on any error — a wrong-but-present badge beats a crashed push.
+ */
+const badgeCountFor = async (coupleId: string | null | undefined, userId: string): Promise<number> => {
+  if (!coupleId) return 1;
+  try {
+    const count = await prisma.notification.count({
+      where: {
+        recipientId: coupleId,
+        read: false,
+        clearedAt: null,
+        NOT: { data: { path: ['senderUserId'], equals: userId } },
+      } as any,
+    });
+    // The push this badge rides on has usually just landed its row, so 0 here
+    // means a raced read — never badge 0 alongside a visible alert.
+    return Math.max(1, count);
+  } catch {
+    return 1;
+  }
+};
+
+/**
  * Build a per-recipient localized copy of a push payload.
  *
  * When the caller attached `data.i18nKey` (+ optional `data.i18nParams`), we
@@ -218,6 +243,12 @@ export const pushToCouple = async (
     select: { id: true, pushToken: true, pushPlatform: true, preferredLocale: true },
   });
 
+  // Per-recipient badge (partners can differ — own sends don't badge).
+  const badges = new Map<string, number>();
+  await Promise.all(
+    users.map(async (u) => badges.set(u.id, await badgeCountFor(coupleId, u.id))),
+  );
+
   const targets = users.filter((u): u is typeof u & { pushToken: string } => !!u.pushToken && u.pushToken.length > 0);
 
   if (targets.length === 0) {
@@ -242,7 +273,7 @@ export const pushToCouple = async (
           // NO notification field → pure data message on Android (notifee renders).
           data,
           android: { priority: 'high', collapseKey: payload.collapseKey },
-          apns: { payload: { aps: { alert: { title, body }, sound: 'default', badge: 1 } } },
+          apns: { payload: { aps: { alert: { title, body }, sound: 'default', badge: badges.get(u.id) ?? 1 } } },
         });
         sent += 1;
       } catch (err: any) {
@@ -300,7 +331,7 @@ export const pushToUser = async (
   // pushToken: { not: null } are not valid there. Check null after fetch.
   const user = await prisma.user.findUnique({
     where: { id: userId },
-    select: { id: true, pushToken: true, preferredLocale: true },
+    select: { id: true, coupleId: true, pushToken: true, preferredLocale: true },
   });
 
   const token = user?.pushToken ?? null;
@@ -324,7 +355,7 @@ export const pushToUser = async (
         collapseKey: payload.collapseKey,
       },
       apns: {
-        payload: { aps: { alert: { title, body }, sound: 'default', badge: 1 } },
+        payload: { aps: { alert: { title, body }, sound: 'default', badge: await badgeCountFor(user?.coupleId, userId) } },
       },
     });
     logger.info(`[Push] Sent to user ${userId}: ${response}`);

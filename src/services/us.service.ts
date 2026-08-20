@@ -203,7 +203,7 @@ export async function sendAskFeeling(args: {
     pushToUser(partnerId, {
       title: `${senderName} is asking how you feel 💭`,
       body: `Let ${senderName} know how your day is going`,
-      data: { type: 'us_ask_feeling', navigate: 'UsSpace', ...i18nData('us.askFeeling', { name: senderName }) },
+      data: { type: 'us_ask_feeling', subtype: 'us_ask_feeling', navigate: 'UsSpace', ...i18nData('us.askFeeling', { name: senderName }) },
       collapseKey: 'us_ask_feeling',
     }).catch(() => null);
   }
@@ -427,7 +427,7 @@ export async function createFridgeNote(args: {
     pushToUser(partnerId, {
       title: `${senderName} left a note on the fridge 📌`,
       body: text.length > 80 ? `${text.slice(0, 77)}…` : text,
-      data: { type: 'us_fridge_note', navigate: 'UsSpace', ...i18nData('us.fridgeNote', { name: senderName, note: text.length > 80 ? `${text.slice(0, 77)}…` : text }) },
+      data: { type: 'us_fridge_note', subtype: 'us_fridge_note', noteId: note.id, navigate: 'UsSpace', ...i18nData('us.fridgeNote', { name: senderName, note: text.length > 80 ? `${text.slice(0, 77)}…` : text }) },
       collapseKey: 'us_fridge_note',
     }).catch(() => null);
   }
@@ -484,7 +484,7 @@ export async function ackFridgeNote(args: {
   pushToUser(authorId, {
     title: `${senderName} acknowledged your note ✓`,
     body: note.text.length > 80 ? `${note.text.slice(0, 77)}…` : note.text,
-    data: { type: 'us_fridge_ack', navigate: 'UsSpace', ...i18nData('us.fridgeAck', { name: senderName, note: note.text.length > 80 ? `${note.text.slice(0, 77)}…` : note.text }) },
+    data: { type: 'us_fridge_ack', subtype: 'us_fridge_ack', noteId: id, navigate: 'UsSpace', ...i18nData('us.fridgeAck', { name: senderName, note: note.text.length > 80 ? `${note.text.slice(0, 77)}…` : note.text }) },
     collapseKey: 'us_fridge_ack',
   }).catch(() => null);
 
@@ -590,7 +590,10 @@ export async function saveCycle(args: {
     pushToUser(partnerId, {
       title: 'A gentle update in your space',
       body: 'Open Sawa to see it',
-      data: { type: 'us_cycle', navigate: 'Notifications', ...i18nData('cycle.neutral') },
+      // subtype lets the app's tap router open the cycle calendar directly;
+      // the push COPY stays neutral (privacy, v3 M5) — only the destination
+      // on the recipient's own unlocked phone is specific.
+      data: { type: 'us_cycle', subtype: 'us_cycle', navigate: 'UsSpace', ...i18nData('cycle.neutral') },
       collapseKey: 'us_cycle',
     }).catch(() => null);
   }

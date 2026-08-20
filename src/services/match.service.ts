@@ -6,6 +6,7 @@ import { i18nData } from '../i18n/notif';
 import {
   upsertMatchConnectedNotification,
   upsertMatchPendingNotification,
+  clearNotificationsForMatch,
 } from './notification.service';
 import { distanceLabelBetween } from '../utils/geo';
 import { evaluateMatch, Q3_TITLES } from './matchScore';
@@ -785,12 +786,19 @@ export class MatchService {
     });
     if (!target) throw new AppError('Target profile not found', 404);
 
-    await prisma.match.deleteMany({
-      where: {
-        OR: [{ couple1Id: me.coupleId, couple2Id: target.coupleId }, { couple1Id: target.coupleId, couple2Id: me.coupleId }],
-        status: 'pending'
-      }
-    });
+    const rejectWhere = {
+      OR: [{ couple1Id: me.coupleId, couple2Id: target.coupleId }, { couple1Id: target.coupleId, couple2Id: me.coupleId }],
+      status: 'pending' as const,
+    };
+    // Capture the ids first: the deleted matches' notifications must die with
+    // them. A surviving "New Connection Request!" row for a deleted match is a
+    // trap — tapping it later falls through acceptMatch → sayHello and silently
+    // re-sends a hello to the couple that was just rejected.
+    const rejectedMatches = await prisma.match.findMany({ where: rejectWhere, select: { id: true } });
+    await prisma.match.deleteMany({ where: rejectWhere });
+    for (const m of rejectedMatches) {
+      await clearNotificationsForMatch(m.id).catch(() => {});
+    }
 
     const notification = await prisma.notification.create({
         data: {
@@ -886,6 +894,11 @@ export class MatchService {
       prisma.message.deleteMany({ where: { matchId: { in: blockedMatchIds } } }),
       prisma.match.deleteMany({ where: blockWhere }),
     ]);
+    // Retire both sides' match/message notifications for the dead matches —
+    // they point at rows that no longer exist and would dead-end any tap.
+    for (const mid of blockedMatchIds) {
+      await clearNotificationsForMatch(mid).catch(() => {});
+    }
 
     // 3. Emit event to trigger UI refresh for blocker
     const io = (global as any).io;
@@ -927,6 +940,10 @@ export class MatchService {
       prisma.message.deleteMany({ where: { matchId: { in: unfriendMatchIds } } }),
       prisma.match.deleteMany({ where: unfriendWhere }),
     ]);
+    // Same cleanup as block: no notification may outlive its match.
+    for (const mid of unfriendMatchIds) {
+      await clearNotificationsForMatch(mid).catch(() => {});
+    }
 
     // Notify both sides so UI updates immediately
     const io = (global as any).io;

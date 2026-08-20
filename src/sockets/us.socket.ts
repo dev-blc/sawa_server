@@ -2,8 +2,28 @@ import { Server as SocketIOServer, Socket } from 'socket.io';
 import { prisma } from '../lib/prisma';
 import { logger } from '../utils/logger';
 import { pushToUser } from '../services/push.service';
+import { clearGameChallengeNotification } from '../services/notification.service';
 import { i18nData, renderNotif, NotifParams } from '../i18n/notif';
 import { invalidateNotifUnreadCount, cacheSet, cacheGet } from '../lib/cache';
+
+/**
+ * The push data's `subtype` mirrors the DB row's data.subtype so the app's tap
+ * router can key on ONE vocabulary for both a push payload and a stored row.
+ * (`type` stays for older clients that switch on it.)
+ */
+const NUDGE_SUBTYPE_BY_KIND: Record<string, string> = {
+  hug: 'us_hug',
+  kiss: 'us_kiss',
+  date_request: 'us_date_plan',
+  date_accept: 'us_date_plan',
+  date_reject: 'us_date_plan',
+  date_plan: 'us_date_plan',
+  thinking: 'us_thinking',
+  missyou: 'us_missyou',
+  cheerup: 'us_cheerup',
+  here: 'us_here',
+  appreciate: 'us_appreciate',
+};
 
 /** Redis key for a user's last shared feeling. TTL 7 days. */
 const feelingKey = (coupleId: string, userId: string) =>
@@ -380,6 +400,7 @@ export const registerUsHandlers = (io: SocketIOServer, socket: Socket): void => 
           body: payload.message,
           data: {
             type: 'us_nudge',
+            subtype: NUDGE_SUBTYPE_BY_KIND[payload.kind] || 'us_nudge',
             kind: payload.kind,
             navigate: 'Notifications',
             ...(senderPhoto ? { senderPhoto } : {}),  // couple profile photo for largeIcon
@@ -424,7 +445,7 @@ export const registerUsHandlers = (io: SocketIOServer, socket: Socket): void => 
       pushToUser(lovePartnerId, {
         title: `${senderName} sent you love ❤️`,
         body: 'Tap to see it',
-        data: { type: 'us_love', navigate: 'Notifications', ...(loveSenderPhoto ? { senderPhoto: loveSenderPhoto } : {}), ...i18nData('us.nudge.love', { name: senderName }) },
+        data: { type: 'us_love', subtype: 'us_love', navigate: 'Notifications', ...(loveSenderPhoto ? { senderPhoto: loveSenderPhoto } : {}), ...i18nData('us.nudge.love', { name: senderName }) },
         collapseKey: 'us_love',
       }).catch(() => null);
     }
@@ -486,8 +507,11 @@ export const registerUsHandlers = (io: SocketIOServer, socket: Socket): void => 
             : `${p.Be} feeling ${feelingLabel} right now`,
           data: {
             type: 'us_feeling',
+            // The row's subtype is us_mood while this push always said
+            // us_feeling — third name for the same event. subtype unifies it.
+            subtype: 'us_mood',
             feeling: payload.feeling,
-            navigate: 'Notifications',
+            navigate: 'UsSpace',
             ...(feelSenderPhoto ? { senderPhoto: feelSenderPhoto } : {}),
             ...i18nData('us.mood', { name: senderFirstName, feeling: feelingLabel, g }),
           },
@@ -575,9 +599,12 @@ export const registerUsHandlers = (io: SocketIOServer, socket: Socket): void => 
         body: `${gameName}! Tap to accept and play`,
         data: {
           type: 'us_game_challenge',
+          subtype: 'us_game_challenge',
           gameId: payload.gameId,
           gameType,
-          navigate: 'Notifications',
+          // The whole point of this push is the game — land the tap on the Us
+          // space so the accept sheet opens, not on the notification list.
+          navigate: 'UsSpace',
           ...(senderPhoto ? { senderPhoto } : {}),
           ...i18nData('us.game.challenge', { name: senderName, game: gameName }),
         },
@@ -602,6 +629,10 @@ export const registerUsHandlers = (io: SocketIOServer, socket: Socket): void => 
     } catch (err: any) {
       logger.warn(`[UsSocket] persist accept failed: ${err.message}`);
     }
+    // The challenge is answered — retire its "Tap to accept and play!" row so
+    // a stale invite can't outlive the session and dead-end a later tap.
+    await clearGameChallengeNotification(coupleId, payload.gameId);
+    io.to(`couple:${coupleId}`).emit('notification:new', { type: 'us_game_challenge_cleared' });
     io.to(`couple:${coupleId}`).emit('us:game:start', {
       gameId: payload.gameId,
       gameType,
@@ -695,6 +726,9 @@ export const registerUsHandlers = (io: SocketIOServer, socket: Socket): void => 
     } catch (err: any) {
       logger.warn(`[UsSocket] clear session on quit failed: ${err.message}`);
     }
+    // A quit round's invite is dead too — clear it and nudge open lists to refresh.
+    await clearGameChallengeNotification(coupleId, payload.gameId);
+    io.to(`couple:${coupleId}`).emit('notification:new', { type: 'us_game_challenge_cleared' });
   });
 
   // ── us:game:result — winner's client reports; server scores it once ────
@@ -797,9 +831,10 @@ export const registerUsHandlers = (io: SocketIOServer, socket: Socket): void => 
           body: resultBody,
           data: {
             type: 'us_game_result',
+            subtype: 'us_game_result',
             gameId: payload.gameId,
             gameType,
-            navigate: 'Notifications',
+            navigate: 'UsSpace',
             ...(senderPhoto ? { senderPhoto } : {}),
             ...i18nData(resultKey, resultParams),
           },

@@ -45,7 +45,7 @@ async function notifyCouple(coupleId: string, key: string): Promise<void> {
     pushToCouple(coupleId, {
       title,
       body,
-      data: { type: 'subscription', navigate: 'Subscription', ...i18nData(key) },
+      data: { type: 'subscription', subtype: 'subscription', navigate: 'Subscription', ...i18nData(key) },
       collapseKey: 'subscription',
     }).catch(() => null);
   } catch (err: any) {

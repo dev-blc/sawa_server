@@ -125,7 +125,7 @@ async function sendCelebration(opts: {
   const payload = {
     title,
     body,
-    data: { type: subtype, navigate: 'Notifications', ...i18nData(i18nKey, params) },
+    data: { type: subtype, subtype, navigate: 'Notifications', ...i18nData(i18nKey, params) },
     collapseKey,
   };
   if ('couple' in push) {

@@ -4,6 +4,39 @@
 
 ---
 
+## [2026-08-20] — Push contract unified + notification lifecycle (game invites can finally land)
+
+**Why:** the tap-routing contract was split three ways and the app could not honor it. A game
+challenge's DB row said `navigate:'UsSpace'` while its push said `navigate:'Notifications'`;
+the mood event had three names (`us_mood` row / `us_mood` socket / `us_feeling` push); fridge
+pushes dropped the `noteId` the row carried; and resolved interactions (accepted game
+challenges, rejected/blocked/unfriended matches) left their notification rows behind as dead
+taps — the direct cause of Arfam's "game invite opens a blank screen" report, together with the
+app-side routing fixes landing on mobile `arfam-fix`.
+
+**What:**
+
+- **One vocabulary on the wire**: every Us-space/job push now carries `subtype` mirroring the
+  DB row's `data.subtype` (`us.socket.ts` nudge/love/mood/game blocks, `us.service.ts`
+  ask/fridge/cycle, all four jobs). `type` stays for older clients. Fridge pushes now include
+  `noteId`; game pushes and mood/cycle/date-reminder pushes now say `navigate:'UsSpace'` (old
+  clients fall back to the Notifications list exactly as before — additive, no breakage).
+- **Challenge rows die with their session**: `us:game:accept` and `us:game:quit` call
+  `clearGameChallengeNotification` (subtype+gameId scoped, result rows survive) and emit
+  `notification:new` so an open list refreshes. A stale "Tap to accept and play!" can no longer
+  outlive its game.
+- **Match cleanup**: `rejectMatch` now clears the deleted matches' notifications (previously a
+  rejected request's row survived and a later tap silently re-sent a hello via the
+  acceptMatch→sayHello fallthrough); `blockCouple`/`unfriendCouple` clear match/message rows for
+  the removed matches (the dead `clearNotificationsForMatch` helper is finally wired).
+- **Honest iOS badge**: APNs `badge` was hardcoded `1` forever; now it is the recipient's real
+  unread count (same filter as the unread endpoint, floor 1, per-partner).
+- **CHAT_READ badge staleness**: marking a thread read now busts the unread cache (was serving
+  a stale count for up to the 10 s TTL).
+- Suite: 81/81 green; tsc clean.
+
+---
+
 ## [2026-08-20] — Notifications: clear endpoints, self-sent exclusion, per-user badge counts
 
 **Why:** the notification surface had no way to clear anything (no DELETE routes existed), and

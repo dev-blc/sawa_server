@@ -3,6 +3,7 @@ import { SOCKET_EVENTS } from '../constants/socketEvents';
 import { logger } from '../utils/logger';
 import { prisma } from '../lib/prisma';
 import { i18nData } from '../i18n/notif';
+import { invalidateNotifUnreadCount } from '../lib/cache';
 import { getCoupleCommunityColor } from '../utils/communityColors';
 // NOTE: chat push/realtime is handled via upsertGroupedNotification() in
 // notification.service (which internally calls emitRealtimeNotification →
@@ -277,6 +278,9 @@ export const registerChatHandlers = (io: SocketIOServer, socket: Socket): void =
         },
         data: { read: true }
       });
+      // The rows just flipped read — without this the bell badge serves the
+      // stale cached count for up to its 10 s TTL.
+      await invalidateNotifUnreadCount(coupleId);
 
     } catch (err) {
       logger.error('Failed to handle CHAT_READ socket event:', err);
