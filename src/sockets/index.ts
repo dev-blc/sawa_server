@@ -87,6 +87,11 @@ export const createSocketServer = (httpServer: HTTPServer): SocketIOServer => {
 
       socket.userId = payload.userId;
       socket.coupleId = payload.coupleId;
+      // Mirrored onto socket.data because custom properties do NOT survive
+      // fetchSockets(): a RemoteSocket from another PM2 worker exposes only
+      // data/rooms/handshake. Cluster-correct presence checks read these.
+      socket.data.userId = payload.userId;
+      socket.data.coupleId = payload.coupleId;
 
       // Mirror the HTTP `authenticate` middleware: banned or deleted couples must
       // not be able to open a WebSocket (chat, US-space, games) either.

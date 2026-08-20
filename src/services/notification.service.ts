@@ -278,6 +278,34 @@ export async function clearGameChallengeNotification(coupleId: string, gameId: s
   }
 }
 
+/**
+ * Retire a planned-date REQUEST row once the plan is deleted by its creator.
+ * Without this, cancelling your own date request left the partner's
+ * notification (with its Accept button) live — accepting a cancelled plan
+ * recreated it on both calendars.
+ */
+export async function clearDateRequestNotification(coupleId: string, planId: string): Promise<void> {
+  try {
+    const res = await prisma.notification.updateMany({
+      where: {
+        recipientId: coupleId,
+        type: 'system',
+        clearedAt: null,
+        AND: [
+          { data: { path: ['subtype'], equals: 'us_date_plan' } },
+          { data: { path: ['id'], equals: planId } },
+        ],
+      } as any,
+      data: { clearedAt: new Date(), read: true },
+    });
+    if (res.count > 0) {
+      invalidateNotifUnreadCount(coupleId).catch(() => {});
+    }
+  } catch {
+    // Best-effort cleanup — never let it break the delete flow.
+  }
+}
+
 /** One pending connection request per matchId (per recipient). */
 export async function upsertMatchPendingNotification(params: {
   recipientId: string;

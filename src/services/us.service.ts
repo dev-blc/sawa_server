@@ -79,8 +79,11 @@ export async function saveMyFeeling(args: {
     select: { name: true, role: true },
   });
 
-  // Derive first name: prefer user.name, else first half of "Name & Partner"
-  let senderName = user?.name?.trim() || '';
+  // Derive first name: prefer user.name, else first half of "Name & Partner".
+  // FIRST name only — the socket path stores firstName() under the same Redis
+  // key, and this REST write racing it made the partner-mood headline flip
+  // between "Sid" and "Sid Sharma" depending on which landed last.
+  let senderName = user?.name?.trim().split(/\s+/)[0] || '';
   if (!senderName && couple?.profileName) {
     const parts = couple.profileName.split(/\s*&\s*/);
     senderName = (user?.role === 'partner' ? parts[1] : parts[0])?.trim() || '';

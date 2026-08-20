@@ -2,7 +2,7 @@ import { Server as SocketIOServer, Socket } from 'socket.io';
 import { prisma } from '../lib/prisma';
 import { logger } from '../utils/logger';
 import { pushToUser } from '../services/push.service';
-import { clearGameChallengeNotification } from '../services/notification.service';
+import { clearGameChallengeNotification, clearDateRequestNotification } from '../services/notification.service';
 import { SOCKET_EVENTS } from '../constants/socketEvents';
 import { i18nData, renderNotif, NotifParams } from '../i18n/notif';
 import { invalidateNotifUnreadCount, cacheSet, cacheGet } from '../lib/cache';
@@ -230,6 +230,7 @@ export const registerUsHandlers = (io: SocketIOServer, socket: Socket): void => 
         message: payload.message,
         at: payload.at,
         from: senderName,
+        senderUserId: userId,
         // Unique id survives the relay so both partners converge on the same entry
         // (enables multiple plans per day + independent delete).
         id: payload.id,
@@ -328,9 +329,14 @@ export const registerUsHandlers = (io: SocketIOServer, socket: Socket): void => 
         pushTitle = `${senderName} updated ${actLabel} ✏️`;
 
       } else if (payload.kind === 'date_delete') {
-        // Deletion is housekeeping, not a moment: the real-time relay (step 1,
-        // already emitted) is all the partner needs — no notification row, no
-        // badge poke, no push.
+        // Deletion is housekeeping, not a moment: no new notification row and
+        // no push — but the ORIGINAL request row must die with the plan, or the
+        // partner's Accept button outlives the cancellation and accepting it
+        // resurrects the deleted date on both calendars.
+        if (payload.id) {
+          await clearDateRequestNotification(coupleId, payload.id);
+          io.to(`couple:${coupleId}`).emit('notification:new', { type: 'us_date_plan_cleared' });
+        }
         return;
 
       } else if (payload.kind === 'date_plan') {
@@ -445,6 +451,7 @@ export const registerUsHandlers = (io: SocketIOServer, socket: Socket): void => 
     io.to(`couple:${coupleId}`).except(socket.id).emit('us:love', {
       from: senderName,
       at: payload.at,
+      senderUserId: userId,
     });
 
     // Save in-app notification (partner sees it; sender is filtered client-side).
@@ -488,6 +495,10 @@ export const registerUsHandlers = (io: SocketIOServer, socket: Socket): void => 
         note: payload.note,
         at: payload.at,
         from: senderFirstName,
+        // Lets the sender's OTHER devices ignore the echo — .except(socket.id)
+        // only excludes the emitting socket, not the same user's second device,
+        // which used to render your own mood as your partner's.
+        senderUserId: userId,
       };
 
       // Persist so the partner can fetch it on any fresh login (7-day TTL)
@@ -542,6 +553,32 @@ export const registerUsHandlers = (io: SocketIOServer, socket: Socket): void => 
       }
     },
   );
+
+  // ── us:presence:sync — on-demand partner presence snapshot ───────────────
+  // The connection-time broadcast only fires on TRANSITIONS, so the partner who
+  // connects (or refocuses the Us tab) second was never told the first is
+  // online — the presence glow was effectively unreachable. The client emits
+  // this on Us-tab focus; the reply reuses US_PARTNER_PRESENCE, which the
+  // client already consumes (and ignores for its own userId).
+  // fetchSockets() goes through the Redis adapter, so it sees every PM2
+  // worker; RemoteSocket exposes only `data`, hence the handshake mirror.
+  socket.on('us:presence:sync', async () => {
+    if (!userId || !coupleId) return;
+    try {
+      const sockets = await io.in(`couple:${coupleId}`).fetchSockets();
+      const partnerSocket = sockets.find(
+        (s) => s.data?.userId && s.data.userId !== userId,
+      );
+      if (partnerSocket) {
+        socket.emit(SOCKET_EVENTS.US_PARTNER_PRESENCE, {
+          userId: partnerSocket.data.userId,
+          online: true,
+        });
+      }
+    } catch (err: any) {
+      logger.warn(`[UsSocket] presence sync failed: ${err.message}`);
+    }
+  });
 
   // ═══ Tic-Tac-Toe — real-time couple game ═════════════════════════════════
   // The server is a thin, fast relay: moves are forwarded to the partner's

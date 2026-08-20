@@ -66,6 +66,14 @@ export const registerChatHandlers = (io: SocketIOServer, socket: Socket): void =
         // chat it isn't part of (IDOR). One indexed lookup — negligible latency.
         if (!(await socketCanAccessChat(chatId, socket.coupleId))) {
           logger.warn(`🚫 [Socket] ${socket.coupleId} denied CHAT_MESSAGE to chat:${chatId}`);
+          // Tell the sender: a removed member's messages used to vanish with
+          // no signal at all — they rendered locally, delivered to nobody, and
+          // evaporated on reload.
+          socket.emit('chat:messageFailed', {
+            clientMessageId: data.clientMessageId,
+            chatId,
+            reason: 'not_member',
+          });
           return;
         }
         const timestamp = new Date().toISOString();

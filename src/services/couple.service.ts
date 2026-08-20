@@ -166,9 +166,17 @@ export class CoupleService {
       primaryPhotoBase64?: string; 
       secondaryPhotosBase64?: string[]; 
       keepSecondaryPhotoUrls?: string[];
+      removePrimaryPhoto?: boolean;
     }
   ) {
     const updateData: any = {};
+
+    // Deletion has to be explicit: an absent primaryPhotoBase64 means "keep",
+    // so removing the photo client-side and saving used to change nothing
+    // while the UI said "Profile updated".
+    if (data.removePrimaryPhoto && !data.primaryPhotoBase64) {
+      updateData.primaryPhoto = null;
+    }
 
     if (data.primaryPhotoBase64 && data.primaryPhotoBase64.length > 10) {
       // materializeImageLoose handles raw base64, data: URIs AND already-hosted
@@ -399,6 +407,7 @@ export class CoupleService {
     await prisma.couple.update({ where: { coupleId }, data: updateData });
 
     // 4. Update individual Users
+    let emailConflict = false;
     if (myId && (data.yourName || data.yourDob || data.yourEmail)) {
       try {
         await prisma.user.update({
@@ -412,10 +421,15 @@ export class CoupleService {
       } catch (err: any) {
         if (err.code === 'P2002' && err.meta?.target?.includes('email')) {
              logger.warn(`[CoupleService.updateProfile] Email conflict for myId ${myId}, skipping email update.`);
+             emailConflict = true;
              await prisma.user.update({
                 where: { id: myId },
                 data: { name: data.yourName || undefined, dob: data.yourDob || undefined }
              });
+        } else {
+             // Anything else must SURFACE — this catch used to swallow every
+             // failure here and the endpoint still answered "Profile updated".
+             throw err;
         }
       }
     }
@@ -433,16 +447,19 @@ export class CoupleService {
       } catch (err: any) {
         if (err.code === 'P2002' && err.meta?.target?.includes('email')) {
              logger.warn(`[CoupleService.updateProfile] Email conflict for partnerId ${partnerId}, skipping email update.`);
+             emailConflict = true;
              await prisma.user.update({
                 where: { id: partnerId },
                 data: { name: data.partnerName || undefined, dob: data.partnerDob || undefined }
              });
+        } else {
+             throw err;
         }
       }
     }
 
     const updated = await prisma.couple.findUnique({ where: { coupleId }, include: { partner1: true, partner2: true } });
-    return this._formatCouple(updated);
+    return { couple: this._formatCouple(updated), emailConflict };
   }
 
   // Fields on the User model that must NEVER be serialized to a client.
@@ -714,6 +731,41 @@ export class CoupleService {
       select: { id: true },
     });
     const matchIds = myMatches.map((m) => m.id);
+
+    // Hand over (or tear down) every community this couple administers BEFORE
+    // the row deletes below. leaveCommunity does this correctly; this path just
+    // dropped the admin rows, leaving zombie groups — publicly listed, joinable,
+    // with a request queue nobody could ever answer.
+    const myAdminRows = await prisma.communityAdmin.findMany({
+      where: { coupleId },
+      select: { communityId: true },
+    });
+    for (const { communityId } of myAdminRows) {
+      const [otherAdmins, otherMembers] = await Promise.all([
+        prisma.communityAdmin.count({ where: { communityId, NOT: { coupleId } } }),
+        prisma.communityMember.findMany({
+          where: { communityId, NOT: { coupleId } },
+          select: { coupleId: true },
+          take: 1,
+        }),
+      ]);
+      if (otherAdmins > 0) continue; // group keeps a working admin
+      if (otherMembers.length > 0) {
+        // Promote the longest-standing remaining member, like leaveCommunity.
+        await prisma.communityAdmin.create({
+          data: { communityId, coupleId: otherMembers[0].coupleId },
+        });
+      } else {
+        // Sole member AND sole admin — the group dies with the account.
+        await prisma.$transaction([
+          prisma.message.deleteMany({ where: { communityId } }),
+          prisma.communityAdmin.deleteMany({ where: { communityId } }),
+          prisma.communityMember.deleteMany({ where: { communityId } }),
+          prisma.communityJoinRequest.deleteMany({ where: { communityId } }),
+          prisma.community.delete({ where: { id: communityId } }),
+        ]);
+      }
+    }
 
     // Run the whole deletion in ONE transaction so a mid-way failure can never
     // leave a half-deleted account (privacy/GDPR: no dangling personal data).

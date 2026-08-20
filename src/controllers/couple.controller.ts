@@ -88,6 +88,9 @@ const UploadPhotosSchema = z.object({
   primaryPhotoBase64: z.string().optional(),
   secondaryPhotosBase64: z.array(z.string()).max(3).optional(),
   keepSecondaryPhotoUrls: z.array(z.string()).optional(),
+  // Explicit removal — an ABSENT primaryPhotoBase64 means "keep", so the
+  // client's ✕-then-save used to be a silent no-op reported as success.
+  removePrimaryPhoto: z.boolean().optional(),
 });
 
 const SubmitAnswersSchema = z.object({
@@ -342,13 +345,21 @@ export const updateMyCouple = async (req: Request, res: Response) => {
   const { coupleId, userId } = req.user!;
   const data = req.body as any;
 
-  const couple = await coupleService.updateProfile(coupleId!, data, userId);
+  const { couple, emailConflict } = await coupleService.updateProfile(coupleId!, data, userId);
 
   // Update cache immediately so next GET returns fresh data.
   if (couple) await setCachedCoupleProfile(coupleId!, couple);
   else await invalidateCoupleProfile(coupleId!);
 
-  sendSuccess({ res, statusCode: 200, message: 'Profile updated successfully', data: { couple } });
+  // emailConflict: the profile saved but a requested email was already taken
+  // and kept unchanged. The client shows this — a silent skip behind
+  // "Profile updated successfully" was invisible data loss.
+  sendSuccess({
+    res,
+    statusCode: 200,
+    message: 'Profile updated successfully',
+    data: { couple, ...(emailConflict ? { emailConflict: true } : {}) },
+  });
 };
 
 export const invitePartner = async (_req: Request, _res: Response) => {
