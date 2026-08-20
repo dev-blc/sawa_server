@@ -4,6 +4,24 @@
 
 ---
 
+## [2026-08-20] — Signup OTP: peek both codes before consuming either
+
+**Why:** Arfam's OTP workstream. `verifyOtp` consumed both partners' codes inside the check
+itself (`otpService.verify` deletes the phone's tokens before the caller reads `.valid`), so a
+wrong PARTNER code destroyed the user's CORRECT code. The correct code then survived only via
+the 90s replay marker — take longer than that to fix the partner digits and it starts failing
+too, with no way to see why.
+
+**What:** `otpService.verify` gains `opts.consume` (default true — login path unchanged).
+Signup peeks both codes with `consume: false`, throws on either failure, then consumes both
+(which also writes the replay markers that keep a duplicate submit succeeding). Mobile half of
+the OTP workstream (narrowed verify try, transport retry, Keychain guard) lands on `sawa`
+`arfam-fix`.
+
+**Gates:** tsc 0, 12/12 suites (81 tests).
+
+---
+
 ## [2026-08-20] — Planned dates become editable (PATCH + date_edit/date_delete relay copy)
 
 **Why:** Arfam's calendar workstream — a created plan had no edit path anywhere (no route, no

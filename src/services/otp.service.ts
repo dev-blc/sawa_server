@@ -135,8 +135,19 @@ export class OtpService {
 
   /**
    * Verify OTP — strictly checks the stored code. No bypass allowed.
+   *
+   * `consume` (default true) controls whether a successful match deletes the
+   * phone's tokens and writes the replay marker. Pass `consume: false` to PEEK
+   * — signup must check BOTH partners' codes before consuming EITHER, or a
+   * wrong partner code destroys the user's correct one (which then survives
+   * only for the 90s replay window). Call again without the flag to consume.
    */
-  async verify(phone: string, enteredCode: string): Promise<{ valid: boolean; coupleId: string | null }> {
+  async verify(
+    phone: string,
+    enteredCode: string,
+    opts?: { consume?: boolean },
+  ): Promise<{ valid: boolean; coupleId: string | null }> {
+    const consume = opts?.consume !== false;
     logger.debug(`[OtpService] Verifying OTP for ${phone}`);
 
     const code = (enteredCode ?? '').trim();
@@ -167,13 +178,15 @@ export class OtpService {
 
     if (token) {
       const coupleId = token.coupleId;
-      // Consume the matched code + purge any other now-stale codes for this phone.
-      await prisma.otpToken.deleteMany({ where: { phone } });
-      // Remember this success briefly so a duplicate verify with the same code
-      // (double-submit / retry / lost response) still succeeds.
-      try { await cacheSet(otpOkKey(phone, code), coupleId ?? '', OTP_REPLAY_TTL_SECONDS); } catch { /* best-effort */ }
-      // Reset the failed-attempt counter on the first correct code.
-      try { await cacheInvalidate(otpFailKey(phone)); } catch { /* best-effort */ }
+      if (consume) {
+        // Consume the matched code + purge any other now-stale codes for this phone.
+        await prisma.otpToken.deleteMany({ where: { phone } });
+        // Remember this success briefly so a duplicate verify with the same code
+        // (double-submit / retry / lost response) still succeeds.
+        try { await cacheSet(otpOkKey(phone, code), coupleId ?? '', OTP_REPLAY_TTL_SECONDS); } catch { /* best-effort */ }
+        // Reset the failed-attempt counter on the first correct code.
+        try { await cacheInvalidate(otpFailKey(phone)); } catch { /* best-effort */ }
+      }
       return { valid: true, coupleId };
     }
 

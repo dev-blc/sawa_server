@@ -142,10 +142,13 @@ export class AuthService {
       role: string;
     };
   }> {
-    // Verify OTPs and fetch existing user records in one parallel shot.
+    // PEEK both OTPs (consume: false) and fetch existing user records in one
+    // parallel shot. Consuming inside this check burned the user's CORRECT
+    // code whenever the partner's code was wrong — after the 90s replay window
+    // the correct code then failed too, with no way to know why.
     const [yourResult, partnerResult, existingYours, existingPartner] = await Promise.all([
-      otpService.verify(yourPhone, yourOtp),
-      otpService.verify(partnerPhone, partnerOtp),
+      otpService.verify(yourPhone, yourOtp, { consume: false }),
+      otpService.verify(partnerPhone, partnerOtp, { consume: false }),
       userRepository.findByPhone(yourPhone),
       userRepository.findByPhone(partnerPhone),
     ]);
@@ -156,6 +159,13 @@ export class AuthService {
     if (!partnerResult.valid) {
       throw new AppError("Partner's OTP is invalid or expired", 400, 'INVALID_PARTNER_OTP');
     }
+
+    // Both codes are good — consume them now (writes the replay markers that
+    // keep a duplicate submit of the same pair succeeding).
+    await Promise.all([
+      otpService.verify(yourPhone, yourOtp),
+      otpService.verify(partnerPhone, partnerOtp),
+    ]);
 
     const coupleId = yourResult.coupleId!;
 
