@@ -230,6 +230,12 @@ model Notification {
   message     String
   data        Json?
   read        Boolean          @default(false)
+  // Soft-clear stamp. Cleared rows disappear from the list/unread endpoints but
+  // are NEVER hard-deleted here: us_mood Notification rows double as the durable
+  // mood-history source (us.service.ts getMoodHistory), and deleting them would
+  // silently erase that record. A future reaper may purge old cleared rows
+  // except us_mood.
+  clearedAt   DateTime?
   createdAt   DateTime         @default(now())
   updatedAt   DateTime         @updatedAt
   recipient   Couple           @relation("Notification_recipient", fields: [recipientId], references: [coupleId])
@@ -237,6 +243,8 @@ model Notification {
 
   @@index([recipientId, read])
   @@index([recipientId, type])
+  // List + unread endpoints filter on clearedAt IS NULL per recipient.
+  @@index([recipientId, clearedAt])
   @@index([createdAt])
   // Speeds up upsertMatchPending/Connected queries that filter by senderId+type.
   @@index([senderId, type])

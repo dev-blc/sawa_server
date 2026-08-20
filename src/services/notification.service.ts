@@ -148,6 +148,11 @@ export async function upsertGroupedNotification(params: {
           message: params.message,
           data,
           read: false,
+          // A re-notify must surface: the list orders by createdAt desc, so a
+          // grouped row keeping its original stamp would sink under newer rows
+          // exactly when it has fresh content. Un-clear it for the same reason.
+          createdAt: new Date(),
+          clearedAt: null,
         },
       })
     : await db.notification.create({
@@ -209,6 +214,67 @@ export async function clearNotificationsForMatch(matchId: string, options?: {
 
   if (idsToDelete.length > 0) {
     await prisma.notification.deleteMany({ where: { id: { in: idsToDelete } } });
+    // Bust every affected couple's badge cache — these rows may be unread.
+    const recipients = new Set(rows.map((r) => r.recipientId));
+    recipients.forEach((rid) => invalidateNotifUnreadCount(rid).catch(() => {}));
+  }
+}
+
+/**
+ * Soft-clear a single notification for the caller's couple. Cleared rows leave
+ * the list/unread endpoints but stay in the table (see schema note: us_mood
+ * rows back mood history). Idempotent — clearing an already-cleared or unknown
+ * id is a no-op, scoped by recipientId so one couple can never clear another's.
+ */
+export async function clearNotification(coupleId: string, notificationId: string): Promise<number> {
+  const res = await prisma.notification.updateMany({
+    where: { id: notificationId, recipientId: coupleId, clearedAt: null },
+    data: { clearedAt: new Date(), read: true },
+  });
+  if (res.count > 0) {
+    invalidateNotifUnreadCount(coupleId).catch(() => {});
+  }
+  return res.count;
+}
+
+/** Soft-clear every visible notification for the caller's couple. */
+export async function clearAllNotifications(coupleId: string): Promise<number> {
+  const res = await prisma.notification.updateMany({
+    where: { recipientId: coupleId, clearedAt: null },
+    data: { clearedAt: new Date(), read: true },
+  });
+  if (res.count > 0) {
+    invalidateNotifUnreadCount(coupleId).catch(() => {});
+  }
+  return res.count;
+}
+
+/**
+ * Soft-clear the couple's game-challenge notification for one gameId. Called
+ * when the challenge resolves (accepted) or dies (quit) so a stale "Tap to
+ * accept and play!" row can't outlive its session and dead-end the tap.
+ */
+export async function clearGameChallengeNotification(coupleId: string, gameId: string): Promise<void> {
+  try {
+    const res = await prisma.notification.updateMany({
+      where: {
+        recipientId: coupleId,
+        type: 'system',
+        clearedAt: null,
+        // Two JSON-path conditions must AND explicitly — a game RESULT row
+        // carries the same gameId and must survive this clear.
+        AND: [
+          { data: { path: ['subtype'], equals: 'us_game_challenge' } },
+          { data: { path: ['gameId'], equals: gameId } },
+        ],
+      } as any,
+      data: { clearedAt: new Date(), read: true },
+    });
+    if (res.count > 0) {
+      invalidateNotifUnreadCount(coupleId).catch(() => {});
+    }
+  } catch {
+    // Best-effort cleanup — never let it break the game flow.
   }
 }
 

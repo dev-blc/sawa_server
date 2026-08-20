@@ -4,6 +4,45 @@
 
 ---
 
+## [2026-08-20] — Notifications: clear endpoints, self-sent exclusion, per-user badge counts
+
+**Why:** the notification surface had no way to clear anything (no DELETE routes existed), and
+the badge math was wrong in two ways Arfam hit directly: a partner's own hugs/moods counted
+toward their own unread badge (rows are couple-scoped; the sender's identity lives only in
+`data.senderUserId`, and neither the list nor the count excluded it), and opened notifications
+stayed in the list forever.
+
+**What:**
+
+- **Soft-clear, not delete** — new `clearedAt DateTime?` on `Notification`
+  (+ `@@index([recipientId, clearedAt])`). Cleared rows leave the list/unread endpoints but stay
+  in the table, because `us_mood` Notification rows double as the durable mood-history source
+  (`us.service.ts getMoodHistory`) and a hard delete would silently erase that record. Schema is
+  additive — `prisma db push` applies it with no data risk.
+- **New routes** (both `authenticate`-scoped to the caller's couple, idempotent):
+  `DELETE /api/v1/notifications/:id` (clear one) and `DELETE /api/v1/notifications` (clear all),
+  via new `clearNotification` / `clearAllNotifications` in `notification.service.ts`. Clearing
+  also marks read and busts the badge cache.
+- **zod on the touched controller** (RULES §7 debt): `:id` params validated
+  (`validateNotificationIdParams`) on both the new DELETE and the existing `PATCH /:id/read`.
+  Notification controller removed from the §7 baseline-debt list.
+- **Self-sent exclusion**: `GET /notifications` and `GET /notifications/unread-count` now filter
+  `NOT data.senderUserId = <caller>` — your own sends can no longer inflate your own badge or
+  appear in your list (the app was already client-filtering the list; now the server agrees).
+- **Per-user unread cache**: cache key becomes `sawa:notif:unread:{coupleId}:{userId}` (partners
+  legitimately see different counts now); `invalidateNotifUnreadCount(coupleId)` keeps its
+  signature and pattern-deletes both partners' keys.
+- `upsertGroupedNotification` now bumps `createdAt` and un-clears on update — a re-notified
+  grouped row (new message in an old thread, a fresh hug) surfaces at the top instead of sinking
+  under its original timestamp. `clearNotificationsForMatch` now busts affected badge caches.
+- New `clearGameChallengeNotification(coupleId, gameId)` — wired in the game lifecycle commit.
+- Tests: `src/__tests__/notification.routes.test.ts` (7) — IDOR scoping, idempotency, zod 400,
+  self-sent/cleared exclusions, per-user caching. Suite: 81/81 green.
+- RULES.md: corrected the brand-palette line (§1 carried the sister project's palette — now the
+  real SAWA palette + the white-on-avocado ban) and the §7 zod debt list.
+
+---
+
 ## [2026-08-20] — Idempotency middleware for the couple's core writes (offline-lite server half)
 
 **Why:** the mobile app is gaining an offline queue that replays writes on reconnect. Without

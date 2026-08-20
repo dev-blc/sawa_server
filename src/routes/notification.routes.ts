@@ -1,7 +1,15 @@
 import { Router } from 'express';
 import { authenticate } from '../middleware/authenticate';
 import { asyncHandler } from '../utils/asyncHandler';
-import { getNotifications, markAsRead, markAllAsRead, getUnreadCount } from '../controllers/notification.controller';
+import {
+  getNotifications,
+  markAsRead,
+  markAllAsRead,
+  getUnreadCount,
+  clearOne,
+  clearAll,
+  validateNotificationIdParams,
+} from '../controllers/notification.controller';
 
 const router = Router();
 
@@ -17,6 +25,12 @@ router.get('/unread-count', asyncHandler(getUnreadCount));
 router.patch('/read-all', asyncHandler(markAllAsRead));
 
 // PATCH /api/v1/notifications/:id/read
-router.patch('/:id/read', asyncHandler(markAsRead));
+router.patch('/:id/read', validateNotificationIdParams, asyncHandler(markAsRead));
+
+// DELETE /api/v1/notifications — soft-clear every visible notification
+router.delete('/', asyncHandler(clearAll));
+
+// DELETE /api/v1/notifications/:id — soft-clear one notification (idempotent)
+router.delete('/:id', validateNotificationIdParams, asyncHandler(clearOne));
 
 export default router;

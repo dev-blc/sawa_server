@@ -1,7 +1,7 @@
 # SAWA Backend — Rules & Conventions
 
 > **Always read this file before making any changes to the backend.**
-> Last verified: 2026-08-20 against `arfam-fix`. **Living document**:
+> Last verified: 2026-08-20 (evening) against `arfam-fix`. **Living document**:
 > any commit that makes a line here false must update that line in the same
 > commit and bump this stamp.
 >
@@ -20,10 +20,13 @@
   per couple plus couple-to-couple discovery. The taste test applies to
   everything user-visible the server produces (API messages, push, email):
   *a quiet gift between two people, never an app shouting at a user.*
-- Brand palette for email/push templates: Dark Teal `#1E5559`, Gin Fizz
-  `#FFF8E2`, Hickory Gold `#D09B64`, Sweet Orange `#F7C3A6`. Do not alter the
-  brand name, colors, or tone in any API response or notification. Warm,
-  inclusive, pair-focused; no urgency mechanics, no guilt copy.
+- Brand palette for email/push templates (SAWA_Master_Reference §3.2 — the
+  previous revision carried the sister project's palette here by mistake):
+  Pastel Avocado `#BAC687`, Finch `#666048`, Porcelain `#EDEBE3`, Olive
+  `#787A6D`, Ink `#2B2927`. On Pastel Avocado, foreground text is Ink or
+  Finch, **never white** (1.8:1 — fails WCAG). Do not alter the brand name,
+  colors, or tone in any API response or notification. Warm, inclusive,
+  pair-focused; no urgency mechanics, no guilt copy.
 - **The API contract is a design surface.** Every response goes through the
   helpers in `src/utils/response.ts` — shape `{ success: true, data, message }`
   on success, `{ success: false, error, code }` on failure. Never hand-roll a
@@ -149,9 +152,10 @@
 - **TypeScript only** — zero `.js` files in `src/` (verified). Exported
   functions in new code carry explicit return types.
 - **zod validation** through `src/middleware/validate.ts` for request bodies
-  and query params. Wired on auth, chat, community, match, and couple.
-  **Baseline debt:** admin, notification, subscription, and user controllers
-  predate it — any endpoint you touch there gets zod in the same change.
+  and query params. Wired on auth, chat, community, match, couple, and
+  notification (`:id` params). **Baseline debt:** admin, subscription, and
+  user controllers predate it — any endpoint you touch there gets zod in the
+  same change.
 - **`asyncHandler`** (`src/utils/asyncHandler.ts`) wraps controllers at the
   route layer. Wired in 8 of 13 route files; `admin`, `prompt`, `report`, and
   `us` routes are baseline debt — wrap when touched.

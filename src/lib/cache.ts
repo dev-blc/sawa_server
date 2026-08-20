@@ -194,7 +194,7 @@ export async function cacheInvalidatePattern(pattern: string): Promise<void> {
 
 export const CACHE_KEYS = {
   coupleProfile: (coupleId: string) => `sawa:couple:profile:${coupleId}`,
-  notifUnreadCount: (coupleId: string) => `sawa:notif:unread:${coupleId}`,
+  notifUnreadCount: (coupleId: string, userId: string) => `sawa:notif:unread:${coupleId}:${userId}`,
 };
 
 const TTL = {
@@ -215,15 +215,19 @@ export async function invalidateCoupleProfile(coupleId: string): Promise<void> {
   await cacheInvalidate(CACHE_KEYS.coupleProfile(coupleId));
 }
 
-export async function getCachedNotifUnreadCount(coupleId: string): Promise<number | null> {
-  const raw = await cacheGet(CACHE_KEYS.notifUnreadCount(coupleId));
+// Unread counts are cached PER USER (not per couple): a partner's own sent
+// nudges are excluded from their badge, so the two partners legitimately see
+// different numbers. Invalidation stays couple-scoped (any notification write
+// affects at most the couple's two keys) via a pattern delete.
+export async function getCachedNotifUnreadCount(coupleId: string, userId: string): Promise<number | null> {
+  const raw = await cacheGet(CACHE_KEYS.notifUnreadCount(coupleId, userId));
   return raw !== null ? Number(raw) : null;
 }
 
-export async function setCachedNotifUnreadCount(coupleId: string, count: number): Promise<void> {
-  await cacheSet(CACHE_KEYS.notifUnreadCount(coupleId), String(count), TTL.notifUnreadCount);
+export async function setCachedNotifUnreadCount(coupleId: string, userId: string, count: number): Promise<void> {
+  await cacheSet(CACHE_KEYS.notifUnreadCount(coupleId, userId), String(count), TTL.notifUnreadCount);
 }
 
 export async function invalidateNotifUnreadCount(coupleId: string): Promise<void> {
-  await cacheInvalidate(CACHE_KEYS.notifUnreadCount(coupleId));
+  await cacheInvalidatePattern(`sawa:notif:unread:${coupleId}:*`);
 }
