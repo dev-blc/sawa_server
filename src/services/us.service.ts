@@ -15,6 +15,7 @@ import {
   invalidateNotifUnreadCount,
 } from '../lib/cache';
 import { pushToUser } from './push.service';
+import { clearGameChallengeNotification } from './notification.service';
 import { i18nData } from '../i18n/notif';
 import { type CycleSettings } from '../jobs/cycleNotifier';
 import { encodeCursor, decodeCursor } from '../utils/cursor';
@@ -692,6 +693,9 @@ export async function getActiveGame(coupleId: string): Promise<ActiveGame> {
         gameBoard: null, gameTurn: null, gameSessionAt: null,
       },
     });
+    // The invite dies with the session — a "Tap to accept and play!" row for
+    // an expired round would dead-end (app-side it now shows "round ended").
+    await clearGameChallengeNotification(coupleId, st.gameSessionId);
     return { session: null };
   }
   // Game type is encoded in the gameId prefix. Dots & Boxes and Memory Match

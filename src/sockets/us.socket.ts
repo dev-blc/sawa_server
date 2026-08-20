@@ -18,6 +18,7 @@ const NUDGE_SUBTYPE_BY_KIND: Record<string, string> = {
   date_request: 'us_date_plan',
   date_accept: 'us_date_plan',
   date_reject: 'us_date_plan',
+  date_edit: 'us_date_plan',
   date_plan: 'us_date_plan',
   thinking: 'us_thinking',
   missyou: 'us_missyou',
