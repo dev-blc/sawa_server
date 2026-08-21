@@ -4,6 +4,34 @@
 
 ---
 
+## [2026-08-21] — Fix: couple-game session fork ("both players are X")
+
+**Why**: a real two-phone test corrupted every game: both partners played as X,
+Memory Match froze after one pair (turn passed to a symbol nobody held), Dots &
+Boxes initials disagreed between phones. Proven root cause: `us:game:challenge`
+upserted unconditionally, so crossed invites forked the couple into two parallel
+sessions with each partner the challenger (X) of their own; and role assignment
+lived client-side on raced start events.
+
+**Changed** (`src/sockets/us.socket.ts`)
+- Single-session lock: a challenge colliding with a live round (<3h, not the
+  sender's own pending re-invite, not a same-gameId retry) is refused; the sender
+  gets the live session back on new event **`us:game:busy`** (shape identical to
+  `GET /us/game/active`'s `session`) so the client joins instead of forking.
+  DB errors fail open.
+- **`us:game:start` now carries `challengerId`** from the stored session — the
+  authoritative role fact; clients stop guessing from `accepterUserId`.
+- Accepting a dead session while a newer round is live also replies
+  `us:game:busy` with the live round (stale invite popups self-heal). Clients
+  without the handler ignore the event.
+- New helper `sessionSnapshotOf()` — one source for the session payload shape.
+
+Gates: tsc clean, jest 81/81. Mobile counterpart in the same day's `sawa` commit
+(server-authoritative symbols + pre-flight join). Old clients are protected by
+the lock alone; no schema change, no endpoint change.
+
+---
+
 ## [2026-08-20] — Fix: private-chat history regression (50-message truncation)
 
 **Why**: the cursor-pagination refactor (3114c9d) changed `GET /chats/private/:matchId` in two

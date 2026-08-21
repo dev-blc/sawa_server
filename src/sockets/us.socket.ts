@@ -66,6 +66,32 @@ const emptyBoardFor = (type: GameType): string =>
 /** Whether the client owns the serialized board (state-based games). */
 const isStateGame = (type: GameType): boolean => type === 'dab' || type === 'mem';
 
+/** The stored session in the same shape GET /us/game/active returns, so a
+ *  `us:game:busy` reply can be opened by the client exactly like a resume. */
+const sessionSnapshotOf = (st: {
+  gameSessionId: string | null;
+  gameSessionStatus: string | null;
+  gameChallengerId: string | null;
+  gameBoard: string | null;
+  gameTurn: string | null;
+}) => {
+  const liveType = gameTypeOf(st.gameSessionId || '');
+  return {
+    gameId: st.gameSessionId,
+    gameType: liveType,
+    status: st.gameSessionStatus,
+    challengerId: st.gameChallengerId,
+    board:
+      liveType === 'ttt'
+        ? (st.gameBoard || '_________')
+            .split('')
+            .map((c) => (c === 'X' ? 'X' : c === 'O' ? 'O' : null))
+        : null,
+    state: liveType === 'ttt' ? null : st.gameBoard || null,
+    turn: st.gameTurn || 'X',
+  };
+};
+
 /** Human-readable game name for notifications. */
 const gameNameFor = (type: GameType): string =>
   type === 'dab' ? 'Dots & Boxes' : type === 'mem' ? 'Memory Match' : 'Tic-Tac-Toe';
@@ -646,7 +672,38 @@ export const registerUsHandlers = (io: SocketIOServer, socket: Socket): void => 
         : emptyBoardFor(gameType);
     logger.info(`[UsSocket] game challenge ${payload.gameId} (${gameType}) from ${userId} in couple ${coupleId}`);
 
-    // 0. Persist a shared PENDING session so both partners can (re)join the same
+    // 0a. Single-session lock. The couple has exactly ONE shared game session;
+    //     letting a second challenge overwrite a live one is how the "both
+    //     players are X" corruption happened: two crossed challenges forked
+    //     the phones into parallel sessions, each partner the challenger of
+    //     their own. A challenge that collides with a live round is refused
+    //     and the sender gets the live session back (`us:game:busy`) so their
+    //     client can join it instead — the crossing becomes an accept.
+    //     Re-issuing MY OWN pending invite (or retrying the same gameId after
+    //     a reconnect) stays allowed; a DB error fails open like before.
+    try {
+      const existing = await prisma.coupleUsState.findUnique({ where: { coupleId } });
+      const ageMs = existing?.gameSessionAt
+        ? Date.now() - new Date(existing.gameSessionAt).getTime()
+        : Number.MAX_SAFE_INTEGER;
+      const live =
+        !!existing?.gameSessionId &&
+        !!existing.gameSessionStatus &&
+        ageMs < 3 * 60 * 60 * 1000;
+      const sameGame = live && existing!.gameSessionId === payload.gameId;
+      const myPendingReinvite =
+        live &&
+        existing!.gameSessionStatus === 'pending' &&
+        existing!.gameChallengerId === userId;
+      if (live && !sameGame && !myPendingReinvite) {
+        socket.emit('us:game:busy', { session: sessionSnapshotOf(existing!) });
+        return;
+      }
+    } catch (err: any) {
+      logger.warn(`[UsSocket] session lock check failed (open): ${err.message}`);
+    }
+
+    // 0b. Persist a shared PENDING session so both partners can (re)join the same
     //    challenge even after leaving the screen — this is what prevents the
     //    "stale challenge" where the requester left and the partner got stuck.
     try {
@@ -727,6 +784,7 @@ export const registerUsHandlers = (io: SocketIOServer, socket: Socket): void => 
     // Fail open on a DB error (start still emitted, as before); only a POSITIVE
     // zero-row match suppresses the start.
     let sessionLive = true;
+    let challengerIdForStart: string | null = null;
     try {
       const updated = await prisma.coupleUsState.updateMany({
         where: { coupleId, gameSessionId: payload.gameId },
@@ -734,7 +792,10 @@ export const registerUsHandlers = (io: SocketIOServer, socket: Socket): void => 
       });
       if (updated.count === 0) sessionLive = false;
       const st = await prisma.coupleUsState.findUnique({ where: { coupleId } });
-      if (st?.gameSessionId === payload.gameId) board = st.gameBoard || null;
+      if (st?.gameSessionId === payload.gameId) {
+        board = st.gameBoard || null;
+        challengerIdForStart = st.gameChallengerId || null;
+      }
     } catch (err: any) {
       logger.warn(`[UsSocket] persist accept failed: ${err.message}`);
     }
@@ -746,6 +807,15 @@ export const registerUsHandlers = (io: SocketIOServer, socket: Socket): void => 
       // Accepting a dead session (quit/expired/superseded) used to emit
       // us:game:start anyway — both clients then believed a game was live
       // while the server row was empty and every move silently no-oped.
+      // If a NEWER round is live, hand it back (`us:game:busy`) so a client
+      // holding a stale invite popup joins the real round instead of hanging;
+      // clients without the handler simply ignore the event.
+      try {
+        const cur = await prisma.coupleUsState.findUnique({ where: { coupleId } });
+        if (cur?.gameSessionId && cur.gameSessionStatus) {
+          socket.emit('us:game:busy', { session: sessionSnapshotOf(cur) });
+        }
+      } catch {}
       return;
     }
     io.to(`couple:${coupleId}`).emit(SOCKET_EVENTS.US_GAME_START, {
@@ -754,6 +824,10 @@ export const registerUsHandlers = (io: SocketIOServer, socket: Socket): void => 
       // Share the stored board so state-based games start from the same layout.
       state: isStateGame(gameType) ? board ?? undefined : undefined,
       accepterUserId: userId,
+      // Authoritative role assignment. Clients that key X/O off "did *I* send
+      // the accept" desync whenever starts race or arrive out of order across
+      // workers — the stored challenger is the one fact both phones agree on.
+      challengerId: challengerIdForStart,
       accepterName: firstName(userName || ''),
       at: new Date().toISOString(),
     });
