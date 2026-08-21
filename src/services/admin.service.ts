@@ -858,19 +858,31 @@ export class AdminService {
       type: 'admin' as any,
       title,
       message,
+      // subtype keys the app's tap router; without data the row was un-routable.
+      data: { subtype: 'admin' },
     }));
 
-    const result = await prisma.notification.createMany({ data, skipDuplicates: true });
+    // createManyAndReturn (Prisma 6) so each couple's push can carry ITS row's
+    // id — the app deep-links the tap straight onto that update's detail sheet.
+    // The old createMany returned no ids, so admin pushes were dead taps.
+    const rows = await prisma.notification.createManyAndReturn({
+      data,
+      select: { id: true, recipientId: true },
+      skipDuplicates: true,
+    });
+    const idByCouple = new Map(rows.map((r) => [r.recipientId, r.id]));
 
     // Real-time fan-out: in-app socket + OS push (FCM) per recipient.
     for (const coupleId of validCoupleIds) {
       emitRealtimeNotification(coupleId, {
+        notificationId: idByCouple.get(coupleId),
         type: 'admin',
         title,
         message,
+        data: { subtype: 'admin' },
       });
     }
 
-    return result;
+    return { count: rows.length };
   }
 }

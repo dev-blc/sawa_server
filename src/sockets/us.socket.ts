@@ -160,10 +160,10 @@ async function saveUsNotification(params: {
   title: string;
   message: string;
   extraData?: Record<string, unknown>;
-}): Promise<void> {
+}): Promise<string | null> {
   try {
     const { coupleId, senderUserId, subtype, title, message, extraData } = params;
-    await prisma.notification.create({
+    const row = await prisma.notification.create({
       data: {
         recipientId: coupleId,
         senderId: coupleId,
@@ -176,8 +176,12 @@ async function saveUsNotification(params: {
     });
     // Bust cached unread count so the bell badge updates immediately.
     await invalidateNotifUnreadCount(coupleId);
+    // The id lets a push deep-link straight to THIS row (e.g. a date request
+    // opening its own detail sheet on the Notifications screen).
+    return row.id;
   } catch (err: any) {
     logger.warn(`[UsSocket] saveUsNotification failed: ${err.message}`);
+    return null;
   }
 }
 
@@ -297,6 +301,9 @@ export const registerUsHandlers = (io: SocketIOServer, socket: Socket): void => 
       // i18n key/params used for BOTH the in-app row (client re-renders) and push.
       let i18nKey = 'us.nudge.generic';
       let i18nParams: NotifParams = { name: senderName };
+      // Set by branches whose PUSH should deep-link to its own row (a date
+      // request opens its detail sheet on the Notifications screen by id).
+      let savedNotifId: string | null = null;
 
       if (payload.kind === 'hug') {
         i18nKey = 'us.nudge.hug'; i18nParams = { name: senderName };
@@ -327,7 +334,7 @@ export const registerUsHandlers = (io: SocketIOServer, socket: Socket): void => 
         const timeLabel = payload.time ? ` at ${payload.time}` : '';
         const dateMsg = payload.date ? `Want to go out on ${payload.date}${timeLabel} ✨` : 'Want to plan something special ✨';
         i18nKey = 'us.date.request'; i18nParams = { name: senderName, actLabel };
-        await saveUsNotification({
+        savedNotifId = await saveUsNotification({
           coupleId,
           senderUserId: userId,
           subtype: 'us_date_plan',
@@ -503,6 +510,7 @@ export const registerUsHandlers = (io: SocketIOServer, socket: Socket): void => 
             subtype: NUDGE_SUBTYPE_BY_KIND[payload.kind] || 'us_nudge',
             kind: payload.kind,
             navigate: 'Notifications',
+            ...(savedNotifId ? { notificationId: savedNotifId } : {}),
             ...(senderPhoto ? { senderPhoto } : {}),  // couple profile photo for largeIcon
             ...i18nData(i18nKey, i18nParams),
           },
