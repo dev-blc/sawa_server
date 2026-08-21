@@ -4,6 +4,32 @@
 
 ---
 
+## [2026-08-21] — Feature: the partner thread ("Just us two")
+
+**Why**: Arfam — "create a screen where we can talk with our partner, a
+private space." The couple had moods, notes, plans and games but no words.
+
+**Changed**
+- **Schema (db:push)**: `ChatType` gains `partner`; partner messages are
+  ordinary `Message` rows with `senderId = the couple's own coupleId` and no
+  match/community — the couple IS the room. New index
+  `(senderId, chatType, createdAt)` for thread history.
+- **Socket** (`us.socket.ts`, events in `socketEvents.ts` per RULES §6):
+  `us:chat:send` {clientMessageId, text ≤1000} — idempotent per
+  clientMessageId (SETNX, replays re-emit the saved id), persists, emits
+  `us:chat:message` room-wide (the sender's echo IS the delivery ack),
+  `us:chat:failed` on persist failure. Offline partner gets ONE collapsing
+  push (presence-gated, collapseKey us_partner_chat, localized
+  `us.chat.message`); no bell rows — it's a chat, not an announcement.
+- **History** (RULES §4 layering + §5 pagination): `listPartnerMessages` in
+  `us.service.ts`, `GET /us/partner-chat` (?cursor&limit, cap 100,
+  nextCursor walks older) — the mobile load-more ships in the same change
+  (PartnerChatScreen).
+
+Gates: tsc 0, jest 85/85.
+
+---
+
 ## [2026-08-21] — Copy: share-page OG title to sentence case
 
 **Why**: Arfam fixed the primary tagline casing — "Everything, built around
