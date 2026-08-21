@@ -4,6 +4,14 @@
 
 ---
 
+## [2026-08-21] — Copy: share-page OG title to sentence case
+
+**Why**: Arfam fixed the primary tagline casing — "Everything, built around
+couples." (capital E only). One-line change in `app.ts` OG meta; the mobile
+lockups changed in the same pass (sawa `1a77d06c`).
+
+---
+
 ## [2026-08-21] — Feature: sent-hello history + connections summary
 
 **Why**: a sent "say hello" vanished — no endpoint listed pending requests BY
