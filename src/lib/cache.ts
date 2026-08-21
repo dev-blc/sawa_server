@@ -102,6 +102,61 @@ export async function cacheSet(key: string, value: string, ttlSeconds: number): 
   }
 }
 
+/**
+ * Atomic counter with a TTL set on first increment — the primitive behind the
+ * Redis-backed rate-limit store (per-IP counters shared across PM2 workers).
+ * Returns null when Redis is unavailable so callers can fall back explicitly;
+ * the local Map is NOT used here because a non-atomic fallback would just
+ * recreate the per-process-counter problem this exists to solve.
+ */
+export async function cacheIncrExpire(
+  key: string,
+  ttlSeconds: number,
+): Promise<{ count: number; ttlMs: number } | null> {
+  const redis = getRedis();
+  if (!redis) return null;
+  try {
+    const result = await redis.multi().incr(key).pttl(key).exec();
+    if (!result) return null;
+    const count = Number(result[0][1]);
+    let ttlMs = Number(result[1][1]);
+    if (ttlMs < 0) {
+      // First hit in this window (or a key that lost its TTL): start the window.
+      ttlMs = ttlSeconds * 1000;
+      await redis.pexpire(key, ttlMs);
+    }
+    return { count, ttlMs };
+  } catch (err: any) {
+    logger.warn(`[cache] incr(${key}) failed:`, err?.message);
+    return null;
+  }
+}
+
+/**
+ * Set a key only if it does not exist (SET NX EX) — returns true when THIS call
+ * created the key. Used as a once-per-window flag (e.g. the abuse guard's
+ * first-trip-of-the-day alert). Falls back to the local map when Redis is
+ * unavailable: the flag then dedupes per process instead of per cluster, which
+ * for alerting means "at most one per worker" rather than silence.
+ */
+export async function cacheSetNX(key: string, value: string, ttlSeconds: number): Promise<boolean> {
+  const redis = getRedis();
+  if (!redis) {
+    if (localGet(key) !== null) return false;
+    localSet(key, value, ttlSeconds);
+    return true;
+  }
+  try {
+    const res = await redis.set(key, value, 'EX', ttlSeconds, 'NX');
+    return res === 'OK';
+  } catch (err: any) {
+    logger.warn(`[cache] setnx(${key}) failed:`, err?.message);
+    if (localGet(key) !== null) return false;
+    localSet(key, value, ttlSeconds);
+    return true;
+  }
+}
+
 export async function cacheInvalidate(key: string): Promise<void> {
   const redis = getRedis();
   if (!redis) { localDel(key); return; }
@@ -128,8 +183,15 @@ export async function cacheInvalidatePattern(pattern: string): Promise<void> {
   const redis = getRedis();
   if (!redis) { localDelPattern(pattern); return; }
   try {
-    const keys = await redis.keys(pattern);
-    if (keys.length > 0) await redis.del(...keys);
+    // SCAN, never KEYS: KEYS is O(total keyspace) and blocks Redis's single
+    // thread — and this runs on hot paths (26 call sites incl. every
+    // notification write). SCAN walks in bounded steps without blocking.
+    let cursor = '0';
+    do {
+      const [next, keys] = await redis.scan(cursor, 'MATCH', pattern, 'COUNT', 200);
+      cursor = next;
+      if (keys.length > 0) await redis.del(...keys);
+    } while (cursor !== '0');
   } catch { localDelPattern(pattern); }
 }
 
@@ -139,7 +201,7 @@ export async function cacheInvalidatePattern(pattern: string): Promise<void> {
 
 export const CACHE_KEYS = {
   coupleProfile: (coupleId: string) => `sawa:couple:profile:${coupleId}`,
-  notifUnreadCount: (coupleId: string) => `sawa:notif:unread:${coupleId}`,
+  notifUnreadCount: (coupleId: string, userId: string) => `sawa:notif:unread:${coupleId}:${userId}`,
 };
 
 const TTL = {
@@ -160,15 +222,19 @@ export async function invalidateCoupleProfile(coupleId: string): Promise<void> {
   await cacheInvalidate(CACHE_KEYS.coupleProfile(coupleId));
 }
 
-export async function getCachedNotifUnreadCount(coupleId: string): Promise<number | null> {
-  const raw = await cacheGet(CACHE_KEYS.notifUnreadCount(coupleId));
+// Unread counts are cached PER USER (not per couple): a partner's own sent
+// nudges are excluded from their badge, so the two partners legitimately see
+// different numbers. Invalidation stays couple-scoped (any notification write
+// affects at most the couple's two keys) via a pattern delete.
+export async function getCachedNotifUnreadCount(coupleId: string, userId: string): Promise<number | null> {
+  const raw = await cacheGet(CACHE_KEYS.notifUnreadCount(coupleId, userId));
   return raw !== null ? Number(raw) : null;
 }
 
-export async function setCachedNotifUnreadCount(coupleId: string, count: number): Promise<void> {
-  await cacheSet(CACHE_KEYS.notifUnreadCount(coupleId), String(count), TTL.notifUnreadCount);
+export async function setCachedNotifUnreadCount(coupleId: string, userId: string, count: number): Promise<void> {
+  await cacheSet(CACHE_KEYS.notifUnreadCount(coupleId, userId), String(count), TTL.notifUnreadCount);
 }
 
 export async function invalidateNotifUnreadCount(coupleId: string): Promise<void> {
-  await cacheInvalidate(CACHE_KEYS.notifUnreadCount(coupleId));
+  await cacheInvalidatePattern(`sawa:notif:unread:${coupleId}:*`);
 }

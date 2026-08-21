@@ -72,6 +72,18 @@ export const getIncomingRequests = async (req: Request, res: Response): Promise<
   sendSuccess({ res, statusCode: 200, data: { requests } });
 };
 
+export const getSentRequests = async (req: Request, res: Response): Promise<void> => {
+  const { coupleId, coupleMongoId } = req.user!;
+  const requests = await matchService.getSentRequests(coupleId!, coupleMongoId);
+  sendSuccess({ res, statusCode: 200, data: { requests } });
+};
+
+export const getConnectionsSummary = async (req: Request, res: Response): Promise<void> => {
+  const { coupleId, coupleMongoId } = req.user!;
+  const summary = await matchService.getConnectionsSummary(coupleId!, coupleMongoId);
+  sendSuccess({ res, statusCode: 200, data: { summary } });
+};
+
 export const acceptMatch = async (req: Request, res: Response): Promise<void> => {
   const { coupleId, coupleMongoId } = req.user!;
   const { targetCoupleId, matchId } = req.body as z.infer<typeof MatchActionSchema>;

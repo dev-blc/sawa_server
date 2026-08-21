@@ -110,7 +110,20 @@ export async function runCheck(): Promise<void> {
 
   try {
     // Source of truth is Postgres: every couple that has set a cycle.
-    const states = await prisma.coupleUsState.findMany({
+    // Cursor-batched so a large table streams through in fixed-size pages
+    // instead of materializing every row in memory at once.
+    const BATCH_SIZE = 500;
+    let cursor: string | undefined;
+    for (;;) {
+    const states: Array<{
+      coupleId: string;
+      cycleLastPeriodStart: unknown;
+      cyclePeriodLength: number | null;
+      cycleCycleLength: number | null;
+      cycleUpdatedBy: string | null;
+      cycleUpdatedByName: string | null;
+      cycleUpdatedAt: Date | null;
+    }> = await prisma.coupleUsState.findMany({
       where: { cycleLastPeriodStart: { not: null } },
       select: {
         coupleId: true,
@@ -121,8 +134,11 @@ export async function runCheck(): Promise<void> {
         cycleUpdatedByName: true,
         cycleUpdatedAt: true,
       },
+      orderBy: { coupleId: 'asc' },
+      take: BATCH_SIZE,
+      ...(cursor ? { cursor: { coupleId: cursor }, skip: 1 } : {}),
     });
-    if (!states.length) return;
+    if (!states.length) break;
 
     for (const st of states) {
       try {
@@ -180,17 +196,31 @@ export async function runCheck(): Promise<void> {
         const io = (global as any).io;
         if (io) io.to(`couple:${coupleId}`).emit('notification:new', { type: 'us_cycle' });
 
+        // Privacy (v3 M5 / India DPDP): the OUTBOUND push transits Google/Apple/
+        // Twilio and shows on a lock screen, so it must not name the cycle phase
+        // or prediction. Send a neutral line and drop `milestone` + the
+        // `cycle.<phase>` i18n key from the push payload (either would re-render
+        // / expose the phase client-side). The specific phase content lives only
+        // in the in-app Notification row (created above) and the socket emit,
+        // both behind auth. `localizeFor` re-renders `cycle.neutral` in each
+        // recipient's locale (and the WhatsApp mirror does the same).
         pushToUser(primary.id, {
-          title,
-          body,
-          data: { type: 'us_cycle', navigate: 'Notifications', milestone, ...i18nData(`cycle.${milestone}`, { girl, boy }) },
+          title: 'A gentle update in your space',
+          body: 'Open Sawa to see it',
+          data: { type: 'us_cycle', subtype: 'us_cycle', navigate: 'UsSpace', ...i18nData('cycle.neutral') },
           collapseKey: 'us_cycle',
         }).catch(() => null);
 
-        logger.info(`[CycleNotifier] sent ${milestone} nudge for couple ${coupleId} (day ${day})`);
+        // Privacy: do not log the cycle phase/day against a coupleId — that is
+        // menstrual-health data landing in Winston (and any log aggregator).
+        logger.info(`[CycleNotifier] sent nudge for couple ${coupleId}`);
       } catch (err: any) {
         logger.warn(`[CycleNotifier] couple ${st.coupleId} failed: ${err.message}`);
       }
+    }
+
+    if (states.length < BATCH_SIZE) break;
+    cursor = states[states.length - 1].coupleId;
     }
   } catch (err: any) {
     logger.warn(`[CycleNotifier] run failed: ${err.message}`);

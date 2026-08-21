@@ -6,8 +6,39 @@ import { signAccessToken, verifyAccessToken } from '../utils/jwt';
 import { logger } from '../utils/logger';
 import { materializeImageLoose } from '../lib/storage';
 import { env } from '../config/env';
+import { sendSuccess, sendError } from '../utils/response';
+
+/**
+ * Admin error responses go through the shared envelope, plus the transition
+ * `message` mirror: this controller hand-rolled `{ success:false, message }`
+ * for years and the DEPLOYED admin panel may predate the migration, so both
+ * `error` (canonical) and `message` (legacy) carry the human text for now.
+ * The repo's AdminDataProvider reads only `res.ok` / `success` / `data`.
+ */
+const adminError = (res: Response, error: string, statusCode: number, code: string): void =>
+  sendError({ res, error, statusCode, code, message: error });
+
+/**
+ * Log the real error server-side, return a generic 500. Raw driver/Prisma
+ * messages disclose schema and internals; even admin-only responses end up
+ * in browser consoles, proxies, and screenshots.
+ */
+const failInternal = (res: Response, context: string, err: any): void => {
+  logger.error(`❌ Admin ${context} failed:`, err?.message || err);
+  adminError(res, 'Internal server error', 500, 'INTERNAL_ERROR');
+};
 
 const adminService = new AdminService();
+
+/**
+ * Typed-confirmation phrase required to run POST /admin/flush-database. The
+ * caller must pass it verbatim as `?confirm=<phrase>`. In production the flush
+ * ALSO requires env `ALLOW_PROD_DB_FLUSH=true`; default posture is REFUSE.
+ * A leaked admin token or a fat-finger cannot wipe the database without this
+ * exact string (and, in prod, the deploy-level flag). URL-safe on purpose
+ * (no spaces) so it needs no encoding.
+ */
+const FLUSH_CONFIRM_PHRASE = 'FLUSH-ENTIRE-SAWA-DATABASE';
 
 function hostOf(u?: string | null): string | null {
   if (!u) return null;
@@ -55,26 +86,26 @@ export class AdminController {
       });
       
       if (!user || !user.password) {
-        return res.status(401).json({ success: false, message: 'Invalid credentials or not an admin' });
+        return adminError(res, 'Invalid credentials or not an admin', 401, 'INVALID_CREDENTIALS');
       }
 
       const isMatch = await bcrypt.compare(password, user.password);
       if (!isMatch) {
-        return res.status(401).json({ success: false, message: 'Invalid credentials' });
+        return adminError(res, 'Invalid credentials', 401, 'INVALID_CREDENTIALS');
       }
 
-      const token = signAccessToken({ 
-        userId: user.id, 
+      const token = signAccessToken({
+        userId: user.id,
         coupleId: user.coupleId || undefined
       });
 
-      res.status(200).json({ 
-        success: true, 
-        data: { token, user: { id: user.id, _id: user.id, name: user.name, role: user.role } } 
+      sendSuccess({
+        res,
+        data: { token, user: { id: user.id, _id: user.id, name: user.name, role: user.role } },
       });
     } catch (err: any) {
       logger.error('❌ Admin Login Error:', err.message);
-      res.status(500).json({ success: false, message: 'Internal server error' });
+      adminError(res, 'Internal server error', 500, 'INTERNAL_ERROR');
     }
   }
 
@@ -82,6 +113,10 @@ export class AdminController {
    * Lazily serve a couple photo / community cover image. Authenticated via a
    * `?token=` query param (an <img> tag cannot send an Authorization header).
    * Keeps the big /admin/data payload free of multi-MB base64 blobs.
+   *
+   * NOT a JSON endpoint: responses are image bytes / redirects, and error
+   * paths are plain-text statuses for <img> loaders that never parse a body —
+   * deliberately outside the JSON envelope.
    */
   async getMedia(req: Request, res: Response) {
     try {
@@ -155,8 +190,8 @@ export class AdminController {
         adminService.getCityDistribution(),
       ]);
 
-      res.status(200).json({
-        success: true,
+      sendSuccess({
+        res,
         data: {
           stats,
           users,
@@ -174,7 +209,7 @@ export class AdminController {
       });
     } catch (err: any) {
       logger.error('❌ Admin Fetch Error:', err.message);
-      res.status(500).json({ success: false, message: 'Internal server error' });
+      adminError(res, 'Internal server error', 500, 'INTERNAL_ERROR');
     }
   }
 
@@ -182,9 +217,9 @@ export class AdminController {
     try {
       const { id } = req.params;
       await adminService.deleteCouple(id);
-      res.status(200).json({ success: true, message: 'Couple and associated users deleted' });
+      sendSuccess({ res, message: 'Couple and associated users deleted' });
     } catch (err: any) {
-      res.status(500).json({ success: false, message: err.message });
+      failInternal(res, req.path, err);
     }
   }
 
@@ -192,9 +227,9 @@ export class AdminController {
     try {
       const data = req.body;
       const c = await adminService.createCommunity(data);
-      res.status(201).json({ success: true, data: c });
+      sendSuccess({ res, statusCode: 201, data: c });
     } catch (err: any) {
-      res.status(500).json({ success: false, message: err.message });
+      failInternal(res, req.path, err);
     }
   }
 
@@ -213,9 +248,9 @@ export class AdminController {
         updateData.coverImageUrl = await materializeImageLoose(coverImageUrl);
       }
       const c = await prisma.community.update({ where: { id }, data: updateData });
-      res.status(200).json({ success: true, data: c });
+      sendSuccess({ res, data: c });
     } catch (err: any) {
-      res.status(500).json({ success: false, message: err.message });
+      failInternal(res, req.path, err);
     }
   }
 
@@ -224,9 +259,9 @@ export class AdminController {
       const { id } = req.params;
       const { reason } = req.body || {};
       const couple = await adminService.banCouple(id, reason);
-      res.status(200).json({ success: true, data: couple });
+      sendSuccess({ res, data: couple });
     } catch (err: any) {
-      res.status(500).json({ success: false, message: err.message });
+      failInternal(res, req.path, err);
     }
   }
 
@@ -234,9 +269,9 @@ export class AdminController {
     try {
       const { id } = req.params;
       const couple = await adminService.unbanCouple(id);
-      res.status(200).json({ success: true, data: couple });
+      sendSuccess({ res, data: couple });
     } catch (err: any) {
-      res.status(500).json({ success: false, message: err.message });
+      failInternal(res, req.path, err);
     }
   }
 
@@ -244,16 +279,16 @@ export class AdminController {
     try {
       const { communityId, requestId, decision } = req.params;
       if (decision !== 'accept' && decision !== 'reject') {
-        return res.status(400).json({ success: false, message: 'Invalid decision' });
+        return adminError(res, 'Invalid decision', 400, 'INVALID_DECISION');
       }
       const result = await adminService.processJoinRequestAsAdmin(
         communityId,
         requestId,
         decision as 'accept' | 'reject',
       );
-      res.status(200).json({ success: true, data: result });
+      sendSuccess({ res, data: result });
     } catch (err: any) {
-      res.status(500).json({ success: false, message: err.message });
+      failInternal(res, req.path, err);
     }
   }
 
@@ -261,9 +296,9 @@ export class AdminController {
     try {
       const { title, category } = req.body;
       const p = await adminService.addPrompt(title, category);
-      res.status(201).json({ success: true, data: p });
+      sendSuccess({ res, statusCode: 201, data: p });
     } catch (err: any) {
-      res.status(500).json({ success: false, message: err.message });
+      failInternal(res, req.path, err);
     }
   }
 
@@ -271,9 +306,9 @@ export class AdminController {
     try {
       const { id } = req.params;
       const p = await adminService.togglePrompt(id);
-      res.status(200).json({ success: true, data: p });
+      sendSuccess({ res, data: p });
     } catch (err: any) {
-      res.status(500).json({ success: false, message: err.message });
+      failInternal(res, req.path, err);
     }
   }
 
@@ -282,12 +317,12 @@ export class AdminController {
       const { id } = req.params;
       const { title } = req.body;
       if (!title || !title.trim()) {
-        return res.status(400).json({ success: false, message: 'title is required' });
+        return adminError(res, 'title is required', 400, 'TITLE_REQUIRED');
       }
       const p = await adminService.editPrompt(id, title.trim());
-      res.status(200).json({ success: true, data: p });
+      sendSuccess({ res, data: p });
     } catch (err: any) {
-      res.status(500).json({ success: false, message: err.message });
+      failInternal(res, req.path, err);
     }
   }
 
@@ -295,12 +330,12 @@ export class AdminController {
     try {
       const { ids } = req.body;
       if (!Array.isArray(ids) || ids.length === 0) {
-        return res.status(400).json({ success: false, message: 'ids array is required' });
+        return adminError(res, 'ids array is required', 400, 'IDS_REQUIRED');
       }
       await adminService.reorderPrompts(ids);
-      res.status(200).json({ success: true });
+      sendSuccess({ res });
     } catch (err: any) {
-      res.status(500).json({ success: false, message: err.message });
+      failInternal(res, req.path, err);
     }
   }
 
@@ -313,7 +348,7 @@ export class AdminController {
         where: { id },
         select: { id: true, coupleId: true },
       });
-      if (!user) return res.status(404).json({ success: false, message: 'User not found' });
+      if (!user) return adminError(res, 'User not found', 404, 'USER_NOT_FOUND');
 
       if (user.coupleId) {
         // Deleting a user who belongs to a couple: wipe the entire couple and both partners
@@ -328,10 +363,10 @@ export class AdminController {
         });
       }
 
-      res.status(200).json({ success: true, message: 'User and all associated data deleted' });
+      sendSuccess({ res, message: 'User and all associated data deleted' });
     } catch (err: any) {
       logger.error('❌ Admin deleteUser Error:', err.message);
-      res.status(500).json({ success: false, message: err.message });
+      failInternal(res, req.path, err);
     }
   }
 
@@ -346,9 +381,9 @@ export class AdminController {
         prisma.communityJoinRequest.deleteMany({ where: { communityId: id } }),
         prisma.community.delete({ where: { id } }),
       ]);
-      res.status(200).json({ success: true, message: 'Community deleted' });
+      sendSuccess({ res, message: 'Community deleted' });
     } catch (err: any) {
-      res.status(500).json({ success: false, message: err.message });
+      failInternal(res, req.path, err);
     }
   }
 
@@ -356,9 +391,9 @@ export class AdminController {
     try {
       const { id } = req.params;
       await adminService.deletePrompt(id);
-      res.status(200).json({ success: true, message: 'Prompt deleted' });
+      sendSuccess({ res, message: 'Prompt deleted' });
     } catch (err: any) {
-      res.status(500).json({ success: false, message: err.message });
+      failInternal(res, req.path, err);
     }
   }
 
@@ -366,13 +401,58 @@ export class AdminController {
     try {
       const { title, message, recipientIds } = req.body;
       const result = await adminService.sendNotification(title, message, recipientIds);
-      res.status(200).json({ success: true, data: result });
+      sendSuccess({ res, data: result });
     } catch (err: any) {
-      res.status(500).json({ success: false, message: err.message });
+      failInternal(res, req.path, err);
     }
   }
 
   async flushDatabase(req: Request, res: Response) {
+    // ── Destructive-operation guard (v3 B3/H2) ───────────────────────────────
+    // This TRUNCATEs every table. Before touching the DB we require a typed
+    // ?confirm=<phrase>; in production we additionally hard-refuse unless the
+    // deploy-level ALLOW_PROD_DB_FLUSH flag is set. Default posture: REFUSE.
+    const adminId = req.user?.userId ?? 'unknown';
+    const confirm = String(req.query.confirm ?? '');
+    const confirmed = confirm === FLUSH_CONFIRM_PHRASE;
+
+    if (env.NODE_ENV === 'production') {
+      if (!env.ALLOW_PROD_DB_FLUSH) {
+        logger.error('ADMIN: flush-database REFUSED in production (ALLOW_PROD_DB_FLUSH not set)', {
+          adminId,
+        });
+        return adminError(
+          res,
+          'Database flush is disabled in production',
+          403,
+          'FLUSH_DISABLED_IN_PROD',
+        );
+      }
+      if (!confirmed) {
+        logger.error(
+          'ADMIN: flush-database REFUSED in production (missing/incorrect confirmation phrase)',
+          { adminId },
+        );
+        return adminError(
+          res,
+          'Confirmation phrase required to flush the production database',
+          403,
+          'FLUSH_CONFIRM_REQUIRED',
+        );
+      }
+    } else if (!confirmed) {
+      logger.error('ADMIN: flush-database refused (missing/incorrect confirmation phrase)', {
+        adminId,
+        env: env.NODE_ENV,
+      });
+      return adminError(
+        res,
+        'Confirmation phrase required to flush the database',
+        403,
+        'FLUSH_CONFIRM_REQUIRED',
+      );
+    }
+
     try {
       const tables = [
         'onboarding_answers',
@@ -395,24 +475,27 @@ export class AdminController {
         `TRUNCATE TABLE ${list} RESTART IDENTITY CASCADE;`,
       );
 
-      logger.warn('ADMIN: Full database flush', { tables: [...tables] });
-      res.status(200).json({
-        success: true,
-        message: 'Database flushed successfully',
-        cleared: [...tables],
+      logger.warn('ADMIN: Full database flush EXECUTED', {
+        adminId,
+        env: env.NODE_ENV,
+        tables: [...tables],
       });
+      // `cleared` moved from the response top level into `data` for the shared
+      // envelope. Verified consumer-free: nothing in the admin panel calls
+      // flush-database (manual/curl-only endpoint).
+      sendSuccess({ res, data: { cleared: [...tables] }, message: 'Database flushed successfully' });
     } catch (err: any) {
       logger.error('ADMIN: Database flush failed', { error: err.message });
-      res.status(500).json({ success: false, message: err.message });
+      failInternal(res, req.path, err);
     }
   }
 
   async getBlocks(req: Request, res: Response) {
     try {
       const blocks = await adminService.getBlocks();
-      res.status(200).json({ success: true, data: { blocks } });
+      sendSuccess({ res, data: { blocks } });
     } catch (err: any) {
-      res.status(500).json({ success: false, message: err.message });
+      failInternal(res, req.path, err);
     }
   }
 
@@ -420,19 +503,19 @@ export class AdminController {
     try {
       const { blockerCoupleId, targetId } = req.body;
       if (!blockerCoupleId || !targetId) {
-        return res.status(400).json({ success: false, message: 'blockerCoupleId and targetId are required' });
+        return adminError(res, 'blockerCoupleId and targetId are required', 400, 'MISSING_FIELDS');
       }
       // Find the blocker couple by coupleId (UUID)
       const blocker = await prisma.couple.findFirst({ where: { coupleId: blockerCoupleId } });
-      if (!blocker) return res.status(404).json({ success: false, message: 'Blocker couple not found' });
+      if (!blocker) return adminError(res, 'Blocker couple not found', 404, 'BLOCKER_NOT_FOUND');
       const newBlocked = blocker.blocked.filter((id: string) => id !== targetId);
       await prisma.couple.update({
         where: { id: blocker.id },
         data: { blocked: { set: newBlocked } },
       });
-      res.status(200).json({ success: true, message: 'Unblocked successfully' });
+      sendSuccess({ res, message: 'Unblocked successfully' });
     } catch (err: any) {
-      res.status(500).json({ success: false, message: err.message });
+      failInternal(res, req.path, err);
     }
   }
 
@@ -441,15 +524,15 @@ export class AdminController {
       const { id } = req.params;
       const { status } = req.body; // 'resolved' | 'dismissed'
       if (!['resolved', 'dismissed'].includes(status)) {
-        return res.status(400).json({ success: false, message: 'status must be resolved or dismissed' });
+        return adminError(res, 'status must be resolved or dismissed', 400, 'INVALID_STATUS');
       }
       const report = await prisma.report.update({
         where: { id },
         data: { status },
       });
-      res.status(200).json({ success: true, data: report });
+      sendSuccess({ res, data: report });
     } catch (err: any) {
-      res.status(500).json({ success: false, message: err.message });
+      failInternal(res, req.path, err);
     }
   }
 }

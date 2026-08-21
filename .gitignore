@@ -31,3 +31,6 @@ coverage/
 uploads/
 
 /src/generated/prisma
+
+# Build output — rebuilt by postinstall (tsc) on deploy; never track it (RULES.md §8).
+dist/

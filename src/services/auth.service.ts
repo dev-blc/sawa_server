@@ -1,7 +1,9 @@
 import crypto from 'crypto';
-import { otpService } from './otp.service';
+import { otpService, formatPhoneE164 } from './otp.service';
+import { precheckSmsSendAllowed, maskPhone } from './abuseGuard';
+import { revokeUserAccessTokens } from './tokenDenylist';
 import { userRepository, normalizePhone } from '../repositories/user.repository';
-import { signAccessToken, signRefreshToken, verifyRefreshToken } from '../utils/jwt';
+import { signAccessToken, signRefreshToken, verifyRefreshToken, denylistAccessToken } from '../utils/jwt';
 import { AppError } from '../utils/AppError';
 import { prisma } from '../lib/prisma';
 import { logger } from '../utils/logger';
@@ -52,19 +54,39 @@ export class AuthService {
   /**
    * STEP 1 — Send OTP
    */
-  async sendOtp(yourPhone: string, partnerPhone: string): Promise<{ coupleId: string }> {
+  async sendOtp(yourPhone: string, partnerPhone: string, ip?: string | null): Promise<{ coupleId: string }> {
     if (yourPhone === partnerPhone) {
       throw new AppError('Your number and partner number cannot be the same', 400, 'SAME_NUMBER');
     }
 
+    // SMS abuse preflight (read-only) — this endpoint is unauthenticated and
+    // sends TWO SMS per call, so refuse disallowed/over-budget requests BEFORE
+    // any couple/user rows are created and before the first of the two sends.
+    // The counting guard inside otpService.generateAndStore stays authoritative.
+    await precheckSmsSendAllowed([formatPhoneE164(yourPhone), formatPhoneE164(partnerPhone)], ip);
+
     const existingYours = await userRepository.findByPhone(yourPhone);
     const existingPartner = await userRepository.findByPhone(partnerPhone);
 
-    if (existingYours && existingYours.isPhoneVerified) {
-      throw new AppError('This number is already registered. Please Sign In instead.', 400, 'USER_EXISTS');
-    }
-    if (existingPartner && existingPartner.isPhoneVerified) {
-      throw new AppError('Partner number is already registered to another account.', 400, 'PARTNER_EXISTS');
+    // Account-enumeration hardening (M3): distinct "your number" vs "partner
+    // number" messages + distinct codes let a caller probe WHICH specific number
+    // is already registered (submit the target as one field, a throwaway as the
+    // other, read the code). Collapse both into ONE generic code + message so the
+    // response no longer reveals which of the two is taken. Residual: it still
+    // signals that at least one is registered — inherent to signup UX (a real new
+    // user must proceed to OTP, an existing one must be told to sign in) and
+    // rate-limited by authRateLimiter + the SMS abuse caps; fully closing it needs
+    // a coordinated client change (documented in CHANGELOG). Contract-safe: the
+    // mobile SignupScreen only toasts `error` and never branches on the code.
+    if (
+      (existingYours && existingYours.isPhoneVerified) ||
+      (existingPartner && existingPartner.isPhoneVerified)
+    ) {
+      throw new AppError(
+        'An account already exists for one of these numbers. Please sign in instead.',
+        400,
+        'ACCOUNT_EXISTS',
+      );
     }
 
     // If either phone belongs to a partially-registered banned couple, block reuse.
@@ -94,8 +116,8 @@ export class AuthService {
     // still-valid code from the FIRST SMS keeps working, so the user never sees a
     // spurious "Invalid or expired OTP" for a code they only generated once.
     await Promise.all([
-      otpService.generateAndStore(yourPhone, coupleId, undefined, true),
-      otpService.generateAndStore(partnerPhone, coupleId, partnerCodeMsg, true),
+      otpService.generateAndStore(yourPhone, coupleId, undefined, true, ip),
+      otpService.generateAndStore(partnerPhone, coupleId, partnerCodeMsg, true, ip),
     ]);
 
     logger.info(`[AuthService] OTPs issued for entity: ${coupleId}`);
@@ -120,10 +142,13 @@ export class AuthService {
       role: string;
     };
   }> {
-    // Verify OTPs and fetch existing user records in one parallel shot.
+    // PEEK both OTPs (consume: false) and fetch existing user records in one
+    // parallel shot. Consuming inside this check burned the user's CORRECT
+    // code whenever the partner's code was wrong — after the 90s replay window
+    // the correct code then failed too, with no way to know why.
     const [yourResult, partnerResult, existingYours, existingPartner] = await Promise.all([
-      otpService.verify(yourPhone, yourOtp),
-      otpService.verify(partnerPhone, partnerOtp),
+      otpService.verify(yourPhone, yourOtp, { consume: false }),
+      otpService.verify(partnerPhone, partnerOtp, { consume: false }),
       userRepository.findByPhone(yourPhone),
       userRepository.findByPhone(partnerPhone),
     ]);
@@ -134,6 +159,13 @@ export class AuthService {
     if (!partnerResult.valid) {
       throw new AppError("Partner's OTP is invalid or expired", 400, 'INVALID_PARTNER_OTP');
     }
+
+    // Both codes are good — consume them now (writes the replay markers that
+    // keep a duplicate submit of the same pair succeeding).
+    await Promise.all([
+      otpService.verify(yourPhone, yourOtp),
+      otpService.verify(partnerPhone, partnerOtp),
+    ]);
 
     const coupleId = yourResult.coupleId!;
 
@@ -238,10 +270,25 @@ export class AuthService {
   }
 
   /**
-   * STEP 4 — Logout
+   * STEP 4 — Logout (with access-token containment, audit H4)
+   *
+   * Clearing the refresh hash alone left the ACCESS token valid for its full
+   * `JWT_ACCESS_EXPIRES_IN` (7d default) — a stolen token survived logout.
+   * The TTL itself deliberately stays unchanged: the admin panel authenticates
+   * with the same access tokens and has NO refresh flow, so shortening the
+   * lifetime would break admin sessions. Containment instead is Redis-side,
+   * on two axes, both enforced by `authenticate` and the socket handshake:
+   *  - jti denylist (utils/jwt.ts): kills exactly the token presented here;
+   *  - per-user watermark (services/tokenDenylist.ts): kills EVERY access
+   *    token issued to this user before this logout — including older copies
+   *    an attacker may hold from before a refresh rotation.
    */
-  async logout(userId: string): Promise<void> {
-    await userRepository.clearRefreshToken(userId);
+  async logout(userId: string, jti?: string, accessTokenExp?: number): Promise<void> {
+    await Promise.all([
+      userRepository.clearRefreshToken(userId),
+      revokeUserAccessTokens(userId),
+      denylistAccessToken(jti, accessTokenExp),
+    ]);
   }
 
   /**
@@ -249,7 +296,7 @@ export class AuthService {
    * For bypass phones: skips OTP entirely and returns access/refresh tokens immediately.
    * For normal phones: sends OTP and returns only the coupleId.
    */
-  async loginSendOtp(phone: string): Promise<{
+  async loginSendOtp(phone: string, ip?: string | null): Promise<{
     coupleId: string;
     bypass?: true;
     accessToken?: string;
@@ -266,7 +313,7 @@ export class AuthService {
 
     // ── Bypass: issue tokens immediately, no OTP needed ──────────────────────
     if (getBypassPhones().has(normalizePhone(phone))) {
-      logger.info(`[AuthService] Bypass login for ${phone}`);
+      logger.info(`[AuthService] Bypass login for ${maskPhone(phone)}`);
 
       const couple = user.coupleId
         ? await prisma.couple.upsert({
@@ -318,7 +365,7 @@ export class AuthService {
     }
     // keepValidPrevious=true — don't wipe a still-valid code the user may already
     // have received; avoids "Invalid or expired OTP" when an earlier code is used.
-    await otpService.generateAndStore(phone, resolvedCoupleId || '', undefined, true);
+    await otpService.generateAndStore(phone, resolvedCoupleId || '', undefined, true, ip);
     return { coupleId: resolvedCoupleId || '' };
   }
 
@@ -422,7 +469,7 @@ export class AuthService {
    * Reuses the existing coupleId so the other partner's OTP is NOT affected.
    * Safe to call multiple times; each call replaces only that phone's OTP.
    */
-  async resendOtp(phone: string): Promise<void> {
+  async resendOtp(phone: string, ip?: string | null): Promise<void> {
     // Find the coupleId from the existing OTP record for this phone
     const existingToken = await prisma.otpToken.findFirst({
       where: { phone },
@@ -449,17 +496,17 @@ export class AuthService {
     // Regenerate OTP for this phone only — partner's OTP is untouched.
     // keepValidPrevious=true so the previously-sent code still works if the user
     // enters it (common: they resend, then auto-fill grabs the first SMS).
-    await otpService.generateAndStore(phone, coupleId, undefined, true);
-    logger.info(`[AuthService] OTP resent for ${phone} (coupleId: ${coupleId})`);
+    await otpService.generateAndStore(phone, coupleId, undefined, true, ip);
+    logger.info(`[AuthService] OTP resent for ${maskPhone(phone)} (coupleId: ${coupleId})`);
   }
 
-  async sendPartnerInvite(partnerPhone: string): Promise<boolean> {
+  async sendPartnerInvite(partnerPhone: string, ip?: string | null): Promise<boolean> {
     // Use the server's /app page which auto-detects Android vs iOS and redirects
     // to Play Store or App Store accordingly. Falls back to sawa.living if no APP_URL.
     const appUrl = (env.APP_URL || 'https://sawa.living').replace(/\/$/, '');
     const inviteLink = `${appUrl}/app`;
     const msg = `Hi! Your partner has invited you to join them on SAWA — the app for couples. Download here: ${inviteLink}`;
-    return otpService.sendInvitation(partnerPhone, msg);
+    return otpService.sendInvitation(partnerPhone, msg, ip);
   }
 }
 

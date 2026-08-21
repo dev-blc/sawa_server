@@ -215,10 +215,52 @@ id, phone, otpHash, expiresAt, attempts, createdAt
 ### Chat (`/chats`)
 | Method | Path | Auth | Description |
 |---|---|---|---|
-| GET | `/chats/private/:matchId` | ✅ | Get private chat messages |
+| GET | `/chats/private/:matchId` | ✅ | Get private chat messages — **cursor-paginated**, see below |
 | GET | `/chats/group/:communityId` | ✅ | Get group chat messages |
 | POST | `/chats/private/:matchId` | ✅ | Send private message |
 | POST | `/chats/group/:communityId` | ✅ | Send group message |
+
+### Us space (`/us`)
+> The wider `/us` surface (feelings, planned dates, fridge notes, cycle, game
+> state) predates this reference and is not yet tabulated — see
+> `src/routes/us.routes.ts`. All of it now lives behind `src/services/us.service.ts`
+> (the route file is a thin HTTP layer). New/changed endpoints documented here:
+
+| Method | Path | Auth | Description |
+|---|---|---|---|
+| GET | `/us/mood-history` | ✅ | Couple's last 30 days of mood events `{ userId, mood, at }` (both partners, newest first), read from the `us_mood` Notification rows |
+| GET | `/us/planned-dates` | ✅ | Planned dates (earliest first) — **cursor-paginated**, see below |
+| PATCH | `/us/planned-dates/:id` | ✅ | Edit a planned date (`activity?/date?/rawDate?/time?/note?`). **Update-only, never upsert** — an unaccepted date request has no server row and must stay creator-local, so missing → 404, foreign couple → 403. Idempotency-Key honored (offline-queue replay safe). Returns the updated plan in the standard envelope |
+| GET | `/us/fridge-notes` | ✅ | Sticky notes (newest first) — **cursor-paginated**, see below |
+
+### Cursor pagination (v2, additive / backward-compatible)
+
+Three previously-unbounded (or fixed-`take`) list reads gained **keyset (cursor)
+pagination**. All are **additive** — no existing field moved — so the current
+mobile build keeps working untouched; the new `cursor`/`limit` params and
+`nextCursor` field are opt-in for the follow-up.
+
+- **Query params (all optional):** `?limit=<1..100>` (per-endpoint default when
+  omitted) and `?cursor=<opaque>`. Send no params for the first page; pass the
+  previous response's `nextCursor` to fetch the next page. A `nextCursor` of
+  `null` means no more pages. The cursor is an opaque base64url token
+  (`src/utils/cursor.ts`) — never parse it client-side.
+- `GET /chats/private/:matchId` → `data: { matchId, messages, nextCursor }`.
+  `messages` stays exactly where it was (oldest→newest). **Default `limit` 50**
+  (was a fixed `take: 100`). Paging walks **backwards in time** (older history) —
+  the mobile follow-up wires "load older messages on scroll-up" using
+  `nextCursor`.
+- `GET /us/planned-dates` → `data: [...]` (unchanged array, earliest `rawDate`
+  first) **plus a sibling** `nextCursor`. Default `limit` **100** (was
+  unbounded).
+- `GET /us/fridge-notes` → `data: [...]` (unchanged array, newest first) **plus a
+  sibling** `nextCursor`. Default `limit` **30** (the collection is hard-capped
+  at 30 on write, so `nextCursor` is effectively always `null` today; the
+  mechanism is in place for consistency).
+
+**Mobile follow-up (not yet done):** read `nextCursor`; on chat, adopt the
+`cursor`/`limit` params to restore or extend history depth (the default dropped
+100→50) and to load older messages on demand.
 
 ---
 
@@ -233,6 +275,7 @@ id, phone, otpHash, expiresAt, attempts, createdAt
 | `chat:read` | Client → Server | Mark messages as read |
 | `match:new` | Server → Client | New match notification |
 | `match:accepted` | Server → Client | Match accepted notification |
+| `us:partner:presence` | Server → Client | Ambient partner presence in the couple room: `{ userId, online }` on first-socket connect / last-socket disconnect. Socket-only — no notification, no push |
 
 ---
 
@@ -278,3 +321,35 @@ id, phone, otpHash, expiresAt, attempts, createdAt
 - [ ] Comprehensive error handling
 - [ ] Unit + integration tests
 - [ ] CI/CD pipeline
+
+## Security Decisions
+
+### 2026-08-20 — SMS abuse guard sits in the send funnel, not the route layer
+
+Every OTP/invite SMS passes `src/services/abuseGuard.ts` from inside
+`otp.service.ts` (`generateAndStore` / `sendInvitation`) — the single funnel to
+`twilioClient.messages.create` — so no current or future caller can send an
+SMS unguarded. Layers, each with its own Redis day-bucket key: corridor
+allowlist (`SMS_ALLOWED_PREFIXES`, default `+91`), per-phone daily cap,
+per-8-digit-prefix daily cap (blocks sequential-range pumping), per-IP daily
+budget (on top of the 15-min burst limiter), and a global daily kill-switch
+(`SMS_DAILY_GLOBAL_CAP`) incremented LAST so refused probes cannot drain the
+platform budget. Redis outage degrades to per-process counters (bounded at
+workers × cap), never to unbounded spend and never to a login outage. First
+trip of any layer per UTC day → `logger.error` + optional `ALERT_WEBHOOK_URL`
+POST (fire-and-forget). All knobs in `src/config/env.ts`, optional with
+defaults.
+
+### 2026-08-20 — Access-token TTL stays 7d; logout revokes via Redis (H4)
+
+`JWT_ACCESS_EXPIRES_IN` remains `7d`: the admin panel authenticates with the
+same access tokens and has NO refresh flow, so a shorter default would log
+admins out mid-session. Logout containment is Redis-side instead, on two axes
+checked in parallel by `middleware/authenticate.ts` and the Socket.io
+handshake: a per-token `jti` denylist (`utils/jwt.ts`, kills exactly the token
+presented at logout, TTL = its remaining life) and a per-user issued-before
+watermark (`services/tokenDenylist.ts`, kills EVERY access token issued before
+the logout — including older copies an attacker may hold from before a refresh
+rotation). Fail-open on Redis outage (bounded by token `exp`; refresh is
+already dead because logout clears the refresh hash). Shortening the TTL later
+requires an admin-panel refresh flow first and a PLAN.md entry (RULES §3).

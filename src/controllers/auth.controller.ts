@@ -4,6 +4,29 @@ import { authService } from '../services/auth.service';
 import { sendSuccess } from '../utils/response';
 import { AppError } from '../utils/AppError';
 import { validate } from '../middleware/validate';
+import { env } from '../config/env';
+
+// ─── Account-enumeration timing normalization (M3) ────────────────────────────
+// The two existence-revealing endpoints (send-otp, login-send-otp) take a fast
+// path when the number's registration state lets them skip Twilio — signup's
+// SAME_NUMBER / ACCOUNT_EXISTS, login's USER_NOT_FOUND — and would otherwise
+// answer markedly faster than a real send, letting a caller distinguish
+// registered from unregistered numbers by latency alone. Floor every response to
+// a fixed minimum so that side-channel is closed. A genuine send already makes a
+// Twilio call (usually > the floor), so legit users are rarely delayed. The
+// response BODY still differs by necessity of the client UX (login routes to
+// Signup on USER_NOT_FOUND; signup must send an OTP to a new number) — that
+// residual is documented; this only removes the timing leg. Off under test.
+const ENUM_TIMING_FLOOR_MS = env.NODE_ENV === 'test' ? 0 : 500;
+async function withTimingFloor<T>(fn: () => Promise<T>): Promise<T> {
+  const start = Date.now();
+  try {
+    return await fn();
+  } finally {
+    const remaining = ENUM_TIMING_FLOOR_MS - (Date.now() - start);
+    if (remaining > 0) await new Promise((resolve) => setTimeout(resolve, remaining));
+  }
+}
 
 // ─── Schemas ────────────────────────────────────────────────────────────────
 
@@ -65,7 +88,11 @@ export const validateLoginVerifyOtp = validate(LoginVerifyOtpSchema);
 export const sendOtp = async (req: Request, res: Response): Promise<void> => {
   const { yourPhone, partnerPhone } = req.body as z.infer<typeof SendOtpSchema>;
 
-  const result = await authService.sendOtp(yourPhone, partnerPhone);
+  // req.ip is the real client behind one proxy hop ('trust proxy' in app.ts);
+  // it feeds the per-IP daily SMS budget in services/abuseGuard.ts.
+  // withTimingFloor: normalize response time so signup enumeration can't be
+  // timed (M3) — see the helper at the top of this file.
+  const result = await withTimingFloor(() => authService.sendOtp(yourPhone, partnerPhone, req.ip));
 
   sendSuccess({
     res,
@@ -125,7 +152,9 @@ export const refreshToken = async (req: Request, res: Response): Promise<void> =
  */
 export const loginSendOtp = async (req: Request, res: Response): Promise<void> => {
   const { phone } = req.body as z.infer<typeof LoginSendOtpSchema>;
-  const result = await authService.loginSendOtp(phone);
+  // withTimingFloor: uniform response time so an unregistered number (fast
+  // USER_NOT_FOUND) can't be told from a registered one (OTP send) by latency (M3).
+  const result = await withTimingFloor(() => authService.loginSendOtp(phone, req.ip));
 
   // Bypass accounts: return tokens immediately so the client can skip the OTP screen
   if (result.bypass) {
@@ -184,7 +213,10 @@ export const logout = async (req: Request, res: Response): Promise<void> => {
     throw new AppError('Unauthorized', 401);
   }
 
-  await authService.logout(req.user.userId);
+  // jti + exp of the token that made THIS call (attached by `authenticate`)
+  // let the service denylist the presented token, alongside the per-user
+  // revocation watermark that kills the user's other outstanding tokens.
+  await authService.logout(req.user.userId, req.accessToken?.jti, req.accessToken?.exp);
 
   sendSuccess({ res, message: 'Logged out successfully' });
 };
@@ -201,7 +233,7 @@ export const resendOtp = async (req: Request, res: Response): Promise<void> => {
     phone: z.string().min(10).max(15).regex(/^\d+$/, 'Phone must contain only digits'),
   });
   const { phone } = schema.parse(req.body);
-  await authService.resendOtp(phone);
+  await authService.resendOtp(phone, req.ip);
   sendSuccess({ res, statusCode: 200, message: 'OTP resent' });
 };
 
@@ -222,7 +254,7 @@ export const invitePartner = async (req: Request, res: Response): Promise<void> 
   });
   const { partnerPhone } = schema.parse(req.body);
 
-  await authService.sendPartnerInvite(partnerPhone);
+  await authService.sendPartnerInvite(partnerPhone, req.ip);
 
   sendSuccess({
     res,

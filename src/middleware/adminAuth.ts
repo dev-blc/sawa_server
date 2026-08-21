@@ -1,6 +1,7 @@
 import { Request, Response, NextFunction } from 'express';
 import { prisma } from '../lib/prisma';
-import { verifyAccessToken } from '../utils/jwt';
+import { verifyAccessToken, isAccessTokenDenied } from '../utils/jwt';
+import { isAccessTokenRevoked } from '../services/tokenDenylist';
 import { AppError } from '../utils/AppError';
 
 declare global {
@@ -38,6 +39,17 @@ export const adminAuth = async (
     }
 
     const payload = verifyAccessToken(token);
+
+    // Revocation parity with `authenticate` (the admin panel shares these
+    // 7-day tokens and is the higher-privilege surface): a logged-out or
+    // denylisted token must die here too, not only on user routes.
+    const [jtiDenied, issuedBeforeLogout] = await Promise.all([
+      isAccessTokenDenied((payload as any).jti),
+      isAccessTokenRevoked(payload.userId, (payload as any).iat),
+    ]);
+    if (jtiDenied || issuedBeforeLogout) {
+      return next(new AppError('Session ended. Please sign in again.', 401, 'TOKEN_REVOKED'));
+    }
     
     // For admin actions, we MUST verify the role from the database to ensure security.
     const user = await prisma.user.findUnique({ where: { id: payload.userId } });

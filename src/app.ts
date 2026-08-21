@@ -343,7 +343,7 @@ export const createApp = (): Application => {
       res,
       renderSharePage({
         title: `${communityName} — SAWA`,
-        description: `Join ${communityName}${communityCity ? ` in ${communityCity}` : ''} on SAWA, the social circle for couples.`,
+        description: `Join ${communityName}${communityCity ? ` in ${communityCity}` : ''} on SAWA — everything, built around couples.`,
         scheme: `${APP_SCHEME}://community/${id}`,
         emoji: '🌿',
       }),
@@ -370,7 +370,7 @@ export const createApp = (): Application => {
       res,
       renderSharePage({
         title: `${coupleName} on SAWA`,
-        description: `Check out ${coupleName} on SAWA, the social circle for couples.`,
+        description: `Check out ${coupleName} on SAWA — everything, built around couples.`,
         scheme: `${APP_SCHEME}://couple/${id}`,
         emoji: '💛',
       }),
@@ -386,7 +386,7 @@ export const createApp = (): Application => {
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <title>Get SAWA</title>
-  <meta property="og:title"       content="SAWA — a social circle for couples" />
+  <meta property="og:title"       content="SAWA — Everything, Built Around Couples" />
   <meta property="og:description" content="A warm, family-friendly space for couples to connect with other couples." />
   <meta property="og:type"        content="website" />
   <meta name="apple-itunes-app"   content="app-id=${IOS_APP_ID}" />

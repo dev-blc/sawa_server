@@ -5,6 +5,7 @@ import { OTP_EXPIRES_IN_MINUTES, OTP_MAX_ATTEMPTS } from '../constants/index';
 import { logger } from '../utils/logger';
 import { AppError } from '../utils/AppError';
 import { cacheGet, cacheSet, cacheInvalidate } from '../lib/cache';
+import { assertSmsSendAllowed, maskPhone } from './abuseGuard';
 
 /**
  * How long (seconds) a just-verified code stays "replayable". A second verify
@@ -12,9 +13,11 @@ import { cacheGet, cacheSet, cacheInvalidate } from '../lib/cache';
  * with "Invalid or expired OTP". Covers the real edge cases where the token was
  * already consumed by the first request: a double auto-submit, the user tapping
  * Confirm while auto-fill also submits, or a lost/timed-out response that the
- * app (or user) retries.
+ * app (or user) retries. Those all resolve within seconds — the previous
+ * 10-minute window kept a supposedly one-time code live far longer than any
+ * legitimate retry needs (audit finding).
  */
-const OTP_REPLAY_TTL_SECONDS = 600;
+const OTP_REPLAY_TTL_SECONDS = 90;
 const otpOkKey = (phone: string, code: string) => `otp_ok:${phone}:${code}`;
 
 // Brute-force guard: after OTP_MAX_ATTEMPTS wrong codes for a phone, verification
@@ -52,7 +55,9 @@ const twilioClient = TWILIO_READY
   ? twilio(TWILIO_SID!, TWILIO_AUTH!)
   : null;
 
-function formatPhoneE164(phone: string): string {
+// Exported so the auth service and the abuse-guard preflight normalize numbers
+// EXACTLY the way the send path does — one source of truth for E.164 shaping.
+export function formatPhoneE164(phone: string): string {
   const digits = phone.replace(/\D/g, '');
   if (phone.startsWith('+')) return phone;
   if (digits.length === 12 && digits.startsWith('91')) return `+${digits}`;
@@ -70,11 +75,21 @@ export class OtpService {
     coupleId: string,
     customMessage?: string,
     keepValidPrevious = false,
+    ip?: string | null,
   ): Promise<void> {
     if (!TWILIO_READY || !twilioClient || !TWILIO_PHONE) {
       logger.error('[OtpService] Twilio is not configured. Set TWILIO_ACCOUNT_SID, TWILIO_AUTH_TOKEN and TWILIO_PHONE_NUMBER.');
       throw new AppError('SMS service is not configured. Please contact support.', 503, 'SMS_NOT_CONFIGURED');
     }
+
+    // ── SMS abuse guard ──────────────────────────────────────────────────────
+    // Every OTP SMS passes the layered checks (corridor allowlist, per-phone /
+    // per-prefix / per-IP daily caps, global kill-switch) BEFORE any DB write
+    // or Twilio call — a refused probe leaves no OTP rows behind. Throws
+    // 400/429/503 AppError on refusal; the global budget is consumed last,
+    // inside the guard, once every other layer has passed.
+    const to = formatPhoneE164(phone);
+    await assertSmsSendAllowed({ phone: to, ip, kind: 'otp' });
 
     // Clean up OTPs for this phone before issuing a new one.
     //   - keepValidPrevious=true  → only purge already-EXPIRED codes, so any
@@ -110,18 +125,29 @@ export class OtpService {
           : `[SAWA] Your verification code is: ${code}. Valid for ${OTP_EXPIRES_IN_MINUTES} minutes.`);
 
     try {
-      await twilioClient.messages.create({ body, from: TWILIO_PHONE, to: formatPhoneE164(phone) });
-      logger.info(`[OtpService] SMS sent to ${phone}`);
+      await twilioClient.messages.create({ body, from: TWILIO_PHONE, to });
+      logger.info(`[OtpService] SMS sent to ${maskPhone(to)}`);
     } catch (err) {
-      logger.error(`[OtpService] Twilio SMS failed for ${phone}:`, err);
+      logger.error(`[OtpService] Twilio SMS failed for ${maskPhone(to)}:`, err);
       throw new AppError('Failed to send OTP. Please try again.', 500, 'SMS_SEND_FAILED');
     }
   }
 
   /**
    * Verify OTP — strictly checks the stored code. No bypass allowed.
+   *
+   * `consume` (default true) controls whether a successful match deletes the
+   * phone's tokens and writes the replay marker. Pass `consume: false` to PEEK
+   * — signup must check BOTH partners' codes before consuming EITHER, or a
+   * wrong partner code destroys the user's correct one (which then survives
+   * only for the 90s replay window). Call again without the flag to consume.
    */
-  async verify(phone: string, enteredCode: string): Promise<{ valid: boolean; coupleId: string | null }> {
+  async verify(
+    phone: string,
+    enteredCode: string,
+    opts?: { consume?: boolean },
+  ): Promise<{ valid: boolean; coupleId: string | null }> {
+    const consume = opts?.consume !== false;
     logger.debug(`[OtpService] Verifying OTP for ${phone}`);
 
     const code = (enteredCode ?? '').trim();
@@ -152,13 +178,15 @@ export class OtpService {
 
     if (token) {
       const coupleId = token.coupleId;
-      // Consume the matched code + purge any other now-stale codes for this phone.
-      await prisma.otpToken.deleteMany({ where: { phone } });
-      // Remember this success briefly so a duplicate verify with the same code
-      // (double-submit / retry / lost response) still succeeds.
-      try { await cacheSet(otpOkKey(phone, code), coupleId ?? '', OTP_REPLAY_TTL_SECONDS); } catch { /* best-effort */ }
-      // Reset the failed-attempt counter on the first correct code.
-      try { await cacheInvalidate(otpFailKey(phone)); } catch { /* best-effort */ }
+      if (consume) {
+        // Consume the matched code + purge any other now-stale codes for this phone.
+        await prisma.otpToken.deleteMany({ where: { phone } });
+        // Remember this success briefly so a duplicate verify with the same code
+        // (double-submit / retry / lost response) still succeeds.
+        try { await cacheSet(otpOkKey(phone, code), coupleId ?? '', OTP_REPLAY_TTL_SECONDS); } catch { /* best-effort */ }
+        // Reset the failed-attempt counter on the first correct code.
+        try { await cacheInvalidate(otpFailKey(phone)); } catch { /* best-effort */ }
+      }
       return { valid: true, coupleId };
     }
 
@@ -192,19 +220,27 @@ export class OtpService {
   }
 
   /**
-   * Send SMS invitation via Twilio
+   * Send SMS invitation via Twilio.
+   * Returns false on Twilio config/send failures (soft, historical contract);
+   * abuse-guard refusals THROW instead — cost abuse must surface as an error,
+   * never masquerade as a soft "not sent".
    */
-  async sendInvitation(phone: string, message: string): Promise<boolean> {
+  async sendInvitation(phone: string, message: string, ip?: string | null): Promise<boolean> {
     if (!TWILIO_READY || !twilioClient || !TWILIO_PHONE) {
-      logger.warn(`[OtpService] Twilio not configured — invitation not sent to ${phone}`);
+      logger.warn(`[OtpService] Twilio not configured — invitation not sent to ${maskPhone(phone)}`);
       return false;
     }
+
+    // SMS abuse guard — same layered checks as OTP sends (see generateAndStore).
+    const to = formatPhoneE164(phone);
+    await assertSmsSendAllowed({ phone: to, ip, kind: 'invite' });
+
     try {
-      await twilioClient.messages.create({ body: message, from: TWILIO_PHONE, to: formatPhoneE164(phone) });
-      logger.info(`[OtpService] Invitation sent to ${phone}`);
+      await twilioClient.messages.create({ body: message, from: TWILIO_PHONE, to });
+      logger.info(`[OtpService] Invitation sent to ${maskPhone(to)}`);
       return true;
     } catch (err) {
-      logger.error(`[OtpService] Invitation failed for ${phone}:`, err);
+      logger.error(`[OtpService] Invitation failed for ${maskPhone(to)}:`, err);
       return false;
     }
   }

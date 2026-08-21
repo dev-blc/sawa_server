@@ -1,6 +1,7 @@
 import express from 'express';
 import { prisma } from '../lib/prisma';
 import { authenticate } from '../middleware/authenticate';
+import { communityService } from '../services/community.service';
 
 const router = express.Router();
 
@@ -38,28 +39,43 @@ router.post('/', authenticate, async (req: any, res) => {
             }
         });
 
-        // 1. Add to blocked list in Couple — only if not already present, so the
-        // array can't grow unbounded with duplicate entries on repeat reports.
+        // 1. Add to blocked list in Couple — resolved to the CANONICAL coupleId
+        // first: the raw client value could be a Mongo cuid, and the discovery
+        // filter matches coupleId only, so an unresolved entry "blocked"
+        // nothing. Only pushed if not already present so repeat reports can't
+        // grow the array unbounded.
+        const targetCouple = await prisma.couple.findFirst({
+            where: { OR: [{ id: targetId }, { coupleId: targetId }] },
+            select: { coupleId: true },
+        });
+        const blockValue = targetCouple?.coupleId ?? targetId;
         const reporter = await prisma.couple.findUnique({
             where: { coupleId: reporterId },
             select: { blocked: true },
         });
-        if (reporter && !reporter.blocked.includes(targetId)) {
+        if (reporter && !reporter.blocked.includes(blockValue)) {
             await prisma.couple.update({
                 where: { coupleId: reporterId },
-                data: { blocked: { push: targetId } },
+                data: { blocked: { push: blockValue } },
             });
         }
 
-        // 2. If it's a community, leave it automatically
+        // 2. If it's a community, leave it through the REAL pipeline. The raw
+        // member-row delete skipped everything leaveCommunity does: a co-host
+        // who reported kept their admin row (could still edit/approve/delete a
+        // group they'd left), a sole member left a publicly-listed zombie, and
+        // the list cache never invalidated.
         const isComm = await prisma.community.findUnique({ where: { id: targetId } });
         if (isComm) {
-            await prisma.communityMember.deleteMany({
-                where: {
-                    communityId: targetId,
-                    coupleId: reporterId
-                }
+            const membership = await prisma.communityMember.findFirst({
+                where: { communityId: targetId, coupleId: reporterId },
+                select: { communityId: true },
             });
+            if (membership) {
+                await communityService.leaveCommunity(reporterId, targetId).catch((e) => {
+                    console.error('[REPORT] leaveCommunity failed', e?.message);
+                });
+            }
         }
 
         res.status(201).json({ success: true, data: { ...report, _id: report.id } });

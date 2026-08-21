@@ -27,12 +27,31 @@ import {
 import { env } from '../config/env';
 import { prisma } from '../lib/prisma';
 import { tierForProduct, type SubStatus } from '../config/subscription';
+import { sendSuccess, sendError } from '../utils/response';
+import { timingSafeEqualStr } from '../utils/timingSafeEqual';
+
+/**
+ * Envelope convention for this controller (migrated from hand-rolled shapes):
+ * machine codes ('APPLE_NOT_CONFIGURED', 'TRIAL_ALREADY_USED', …) live in
+ * `code`; `error` carries human-readable copy. Status codes are unchanged.
+ * The store webhooks only ever read the HTTP status, and the current app
+ * ships with the IAP surface removed, so nothing consumes these bodies today.
+ */
+
+/** Human copy for startTrial()'s machine reason codes. */
+const TRIAL_REASON_MESSAGES: Record<string, string> = {
+  TRIAL_ALREADY_USED: 'Your free trial has already been used',
+  ALREADY_SUBSCRIBED: 'You already have an active subscription',
+};
+
+const missingCoupleContext = (res: Response): void =>
+  sendError({ res, error: 'Missing couple context', statusCode: 400, code: 'MISSING_COUPLE_CONTEXT' });
 
 /** GET /api/v1/subscriptions/me — current entitlement + usage counts. */
 export const getMySubscription = async (req: Request, res: Response): Promise<void> => {
   const coupleId = req.user?.coupleId;
   if (!coupleId) {
-    res.status(400).json({ success: false, error: 'Missing couple context' });
+    missingCoupleContext(res);
     return;
   }
   const [entitlement, connections, groups] = await Promise.all([
@@ -40,22 +59,27 @@ export const getMySubscription = async (req: Request, res: Response): Promise<vo
     connectionsUsedToday(coupleId),
     groupsJoined(coupleId),
   ]);
-  res.json({ success: true, data: { ...entitlement, usage: { connections, groups } } });
+  sendSuccess({ res, data: { ...entitlement, usage: { connections, groups } } });
 };
 
 /** POST /api/v1/subscriptions/trial — start the one-time 7-day PRIME trial. */
 export const startTrialHandler = async (req: Request, res: Response): Promise<void> => {
   const coupleId = req.user?.coupleId;
   if (!coupleId) {
-    res.status(400).json({ success: false, error: 'Missing couple context' });
+    missingCoupleContext(res);
     return;
   }
   const result = await startTrial(coupleId);
   if (!result.ok) {
-    res.status(409).json({ success: false, error: result.reason });
+    sendError({
+      res,
+      error: TRIAL_REASON_MESSAGES[result.reason] ?? 'The trial could not be started right now',
+      statusCode: 409,
+      code: result.reason,
+    });
     return;
   }
-  res.json({ success: true, data: result.entitlement });
+  sendSuccess({ res, data: result.entitlement });
 };
 
 /**
@@ -67,39 +91,54 @@ export const startTrialHandler = async (req: Request, res: Response): Promise<vo
 export const verifyApple = async (req: Request, res: Response): Promise<void> => {
   const coupleId = req.user?.coupleId;
   if (!coupleId) {
-    res.status(400).json({ success: false, error: 'Missing couple context' });
+    missingCoupleContext(res);
     return;
   }
   if (!isAppleConfigured()) {
-    res.status(503).json({ success: false, error: 'APPLE_NOT_CONFIGURED' });
+    sendError({
+      res,
+      error: 'Apple purchases are not available right now',
+      statusCode: 503,
+      code: 'APPLE_NOT_CONFIGURED',
+    });
     return;
   }
   const { transactionId } = (req.body ?? {}) as { transactionId?: string };
   if (!transactionId) {
-    res.status(400).json({ success: false, error: 'transactionId is required' });
+    sendError({ res, error: 'transactionId is required', statusCode: 400, code: 'TRANSACTION_ID_REQUIRED' });
     return;
   }
 
   const tx = await verifyTransactionById(transactionId);
   if (!tx) {
-    res.status(400).json({ success: false, error: 'VERIFICATION_FAILED' });
+    sendError({
+      res,
+      error: 'We could not verify this purchase with the App Store',
+      statusCode: 400,
+      code: 'VERIFICATION_FAILED',
+    });
     return;
   }
 
   // Reject a receipt minted in the wrong store environment (e.g. a free
   // Sandbox/TestFlight receipt replayed against the Production backend).
   if (tx.environment && tx.environment !== env.APPLE_ENVIRONMENT) {
-    res.status(400).json({ success: false, error: 'WRONG_ENVIRONMENT' });
+    sendError({
+      res,
+      error: 'This purchase was made in a different store environment',
+      statusCode: 400,
+      code: 'WRONG_ENVIRONMENT',
+    });
     return;
   }
   // Only grant entitlement for products we actually sell.
   if (!tierForProduct(tx.productId)) {
-    res.status(400).json({ success: false, error: 'UNKNOWN_PRODUCT' });
+    sendError({ res, error: 'This product is not available', statusCode: 400, code: 'UNKNOWN_PRODUCT' });
     return;
   }
 
   const entitlement = await applyAppleTransaction(coupleId, tx);
-  res.json({ success: true, data: entitlement });
+  sendSuccess({ res, data: entitlement });
 };
 
 /**
@@ -111,12 +150,13 @@ export const verifyApple = async (req: Request, res: Response): Promise<void> =>
 export const appleNotifications = async (req: Request, res: Response): Promise<void> => {
   const signedPayload = (req.body ?? {}).signedPayload as string | undefined;
   if (!signedPayload) {
-    res.status(400).json({ success: false, error: 'signedPayload required' });
+    sendError({ res, error: 'signedPayload required', statusCode: 400, code: 'SIGNED_PAYLOAD_REQUIRED' });
     return;
   }
 
   // Ack immediately; process after so a slow DB never triggers Apple retries.
-  res.status(200).json({ success: true });
+  // (Apple only reads the HTTP status — the envelope body is for our logs.)
+  sendSuccess({ res });
 
   try {
     const notif = await decodeNotification(signedPayload);
@@ -166,11 +206,16 @@ export const appleNotifications = async (req: Request, res: Response): Promise<v
 export const verifyGoogle = async (req: Request, res: Response): Promise<void> => {
   const coupleId = req.user?.coupleId;
   if (!coupleId) {
-    res.status(400).json({ success: false, error: 'Missing couple context' });
+    missingCoupleContext(res);
     return;
   }
   if (!isGoogleConfigured()) {
-    res.status(503).json({ success: false, error: 'GOOGLE_NOT_CONFIGURED' });
+    sendError({
+      res,
+      error: 'Google Play purchases are not available right now',
+      statusCode: 503,
+      code: 'GOOGLE_NOT_CONFIGURED',
+    });
     return;
   }
   const { productId, purchaseToken } = (req.body ?? {}) as {
@@ -178,17 +223,25 @@ export const verifyGoogle = async (req: Request, res: Response): Promise<void> =
     purchaseToken?: string;
   };
   if (!purchaseToken) {
-    res.status(400).json({ success: false, error: 'purchaseToken is required' });
+    sendError({ res, error: 'purchaseToken is required', statusCode: 400, code: 'PURCHASE_TOKEN_REQUIRED' });
     return;
   }
 
   const info = await getSubscriptionV2(purchaseToken);
   if (!info) {
-    res.status(400).json({ success: false, error: 'VERIFICATION_FAILED' });
+    sendError({
+      res,
+      error: 'We could not verify this purchase with Google Play',
+      statusCode: 400,
+      code: 'VERIFICATION_FAILED',
+    });
     return;
   }
 
   // Payment not yet completed (deferred / UPI mandate / slow bank). Don't grant.
+  // Deliberately NOT sendSuccess: the top-level `pending: true` flag is part of
+  // the historical contract for this one response and the helper cannot carry
+  // top-level extras — dropping it would silently change what callers see.
   if (isGooglePendingOrUnknown(info)) {
     const entitlement = await getEntitlement(coupleId);
     res.status(202).json({ success: true, pending: true, data: entitlement });
@@ -197,7 +250,7 @@ export const verifyGoogle = async (req: Request, res: Response): Promise<void> =
 
   // Only grant entitlement for products we actually sell.
   if (!tierForProduct(info.productId ?? productId)) {
-    res.status(400).json({ success: false, error: 'UNKNOWN_PRODUCT' });
+    sendError({ res, error: 'This product is not available', statusCode: 400, code: 'UNKNOWN_PRODUCT' });
     return;
   }
 
@@ -208,7 +261,12 @@ export const verifyGoogle = async (req: Request, res: Response): Promise<void> =
     select: { coupleId: true },
   });
   if (tokenOwner && tokenOwner.coupleId !== coupleId) {
-    res.status(409).json({ success: false, error: 'TOKEN_ALREADY_CLAIMED' });
+    sendError({
+      res,
+      error: 'This purchase is already linked to another couple',
+      statusCode: 409,
+      code: 'TOKEN_ALREADY_CLAIMED',
+    });
     return;
   }
 
@@ -219,7 +277,7 @@ export const verifyGoogle = async (req: Request, res: Response): Promise<void> =
   }
 
   const entitlement = await applyGooglePurchase(coupleId, purchaseToken, info);
-  res.json({ success: true, data: entitlement });
+  sendSuccess({ res, data: entitlement });
 };
 
 /**
@@ -231,18 +289,21 @@ export const googleNotifications = async (req: Request, res: Response): Promise<
   // Shared-secret gate (?secret=...) on the Pub/Sub push URL. In production the
   // secret is REQUIRED (an unset secret would otherwise accept any POST); in
   // dev it stays optional for local testing.
-  const secretMatches = !!env.GOOGLE_RTDN_SECRET && req.query.secret === env.GOOGLE_RTDN_SECRET;
+  // Constant-time compare: a plain `===` short-circuits on the first differing
+  // byte, leaking how many leading chars matched — a timing oracle for guessing
+  // the secret. timingSafeEqualStr guards length, then compares in fixed time.
+  const secretMatches = !!env.GOOGLE_RTDN_SECRET && timingSafeEqualStr(req.query.secret, env.GOOGLE_RTDN_SECRET);
   if (env.NODE_ENV === 'production') {
     if (!secretMatches) {
-      res.status(200).json({ success: true }); // ack silently, ignore
+      sendSuccess({ res }); // ack silently, ignore
       return;
     }
-  } else if (env.GOOGLE_RTDN_SECRET && req.query.secret !== env.GOOGLE_RTDN_SECRET) {
-    res.status(200).json({ success: true }); // ack silently, ignore
+  } else if (env.GOOGLE_RTDN_SECRET && !timingSafeEqualStr(req.query.secret, env.GOOGLE_RTDN_SECRET)) {
+    sendSuccess({ res }); // ack silently, ignore
     return;
   }
 
-  res.status(200).json({ success: true }); // ack immediately
+  sendSuccess({ res }); // ack immediately (Google only reads the HTTP status)
 
   try {
     const message = (req.body ?? {}).message as { data?: string } | undefined;

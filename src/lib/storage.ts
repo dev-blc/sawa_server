@@ -5,6 +5,8 @@ import {
   PutObjectCommand,
   GetObjectCommand,
   DeleteObjectCommand,
+  ListObjectsV2Command,
+  DeleteObjectsCommand,
 } from '@aws-sdk/client-s3';
 import { getSignedUrl } from '@aws-sdk/s3-request-presigner';
 import { env } from '../config/env';
@@ -132,6 +134,17 @@ export async function createPresignedUpload(opts: {
   ext?: string;
   coupleId?: string;
   expiresInSeconds?: number;
+  /**
+   * Declared upload size in bytes. When provided it is signed onto the presigned
+   * PUT as `Content-Length`, so object storage rejects a body of any other size
+   * — a hard, server-enforced size bound. The caller validates it against the
+   * per-kind cap BEFORE calling (see chat.controller.createChatUploadUrl). Omit
+   * it and the URL is unbounded: kept for the currently-shipped client, which
+   * does not declare a length (a presigned PUT cannot express a size RANGE the
+   * way a presigned POST policy can — an exact signed Content-Length is the
+   * PUT-compatible bound).
+   */
+  contentLength?: number;
 }): Promise<{ uploadUrl: string; publicUrl: string; key: string }> {
   if (!isStorageConfigured()) {
     throw new Error('Object storage is not configured');
@@ -145,6 +158,11 @@ export async function createPresignedUpload(opts: {
     Bucket: bucketForFolder(opts.folder),
     Key: key,
     ContentType: opts.contentType,
+    // Bind the upload to the declared length when present (S3 signs it as a
+    // required header). Omitted → unbounded PUT (shipped client, no size yet).
+    ...(typeof opts.contentLength === 'number' && opts.contentLength > 0
+      ? { ContentLength: opts.contentLength }
+      : {}),
   });
 
   const uploadUrl = await getSignedUrl(getClient(), command, {
@@ -236,6 +254,10 @@ export async function materializeImageLoose(
 ): Promise<string | null | undefined> {
   if (!value || typeof value !== 'string') return value;
   if (value.startsWith('http')) return value;
+  // Relative image-proxy paths (see GET /img/* in app.ts) are already hosted —
+  // never re-wrap them as base64. A real base64 payload starting with exactly
+  // "/img/" is practically impossible (~1 in 64^5).
+  if (value.startsWith('/img/')) return value;
   const dataUri = value.startsWith('data:') ? value : `data:image/jpeg;base64,${value}`;
   return (await materializeImage(dataUri, coupleId)) ?? value;
 }
@@ -273,4 +295,49 @@ export async function deleteObjectByUrlOrKey(urlOrKey: string): Promise<void> {
   } catch (err) {
     logger.warn('[storage] deleteObject failed (ignored):', err);
   }
+}
+
+/**
+ * Best-effort delete of EVERY object under a key prefix (paginated list +
+ * batched delete, 1000/req). Never throws — used by account deletion to reclaim
+ * a couple's media once their DB rows are gone. Returns quietly when storage is
+ * unconfigured so nothing breaks in dev.
+ */
+export async function deleteByPrefix(prefix: string, bucket?: string): Promise<void> {
+  try {
+    if (!isStorageConfigured() || !prefix) return;
+    const client = getClient();
+    const Bucket = bucket || env.S3_BUCKET;
+    let ContinuationToken: string | undefined;
+    do {
+      const listed = await client.send(
+        new ListObjectsV2Command({ Bucket, Prefix: prefix, ContinuationToken }),
+      );
+      const objects = (listed.Contents ?? [])
+        .map((o) => o.Key)
+        .filter((k): k is string => Boolean(k))
+        .map((Key) => ({ Key }));
+      if (objects.length) {
+        await client.send(
+          new DeleteObjectsCommand({ Bucket, Delete: { Objects: objects, Quiet: true } }),
+        );
+      }
+      ContinuationToken = listed.IsTruncated ? listed.NextContinuationToken : undefined;
+    } while (ContinuationToken);
+  } catch (err) {
+    logger.warn(`[storage] deleteByPrefix(${prefix}) failed (ignored):`, err);
+  }
+}
+
+/**
+ * Delete all of a couple's stored media — profile photos (`image/<couple>/`) and
+ * chat voice notes (`voice/<couple>/`) — each from its own bucket (they may be
+ * split; by default both resolve to S3_BUCKET). The couple-folder sanitization
+ * mirrors the key builder in createPresignedUpload/uploadBuffer. Best-effort.
+ */
+export async function deleteCoupleMedia(coupleId: string): Promise<void> {
+  const safe = (coupleId || '').replace(/[^a-zA-Z0-9_-]/g, '');
+  if (!safe) return;
+  await deleteByPrefix(`image/${safe}/`, env.S3_IMAGE_BUCKET || env.S3_BUCKET);
+  await deleteByPrefix(`voice/${safe}/`, env.S3_BUCKET);
 }

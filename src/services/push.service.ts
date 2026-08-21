@@ -1,8 +1,39 @@
 import admin from 'firebase-admin';
 import { prisma } from '../lib/prisma';
+import { Prisma } from '@prisma/client';
 import { logger } from '../utils/logger';
 import { renderNotif, hasNotifKey, NotifParams } from '../i18n/notif';
 import { mirrorToWhatsAppCouple, mirrorToWhatsAppUser } from './whatsapp.service';
+
+/**
+ * The recipient's real unread count for the iOS APNs badge. Mirrors the
+ * unread-count endpoint's filter exactly (uncleared + not self-sent), because
+ * a badge that disagrees with the in-app bell reads as a bug. Falls back to 1
+ * on any error — a wrong-but-present badge beats a crashed push.
+ */
+const badgeCountFor = async (coupleId: string | null | undefined, userId: string): Promise<number> => {
+  if (!coupleId) return 1;
+  try {
+    const count = await prisma.notification.count({
+      where: {
+        recipientId: coupleId,
+        read: false,
+        clearedAt: null,
+        // Null-safe (see notification.controller notSelfSent): rows without a
+        // senderUserId key must COUNT, not vanish into SQL NULL semantics.
+        OR: [
+          { data: { path: ['senderUserId'], equals: Prisma.AnyNull } },
+          { NOT: { data: { path: ['senderUserId'], equals: userId } } },
+        ],
+      } as any,
+    });
+    // The push this badge rides on has usually just landed its row, so 0 here
+    // means a raced read — never badge 0 alongside a visible alert.
+    return Math.max(1, count);
+  } catch {
+    return 1;
+  }
+};
 
 /**
  * Build a per-recipient localized copy of a push payload.
@@ -141,6 +172,52 @@ export interface PushPayload {
   collapseKey?: string;
 }
 
+// ─── Quiet hours (IST) for non-urgent event pushes ────────────────────────────
+// The cron jobs already keep their sends inside 08:00–21:00 IST, but
+// socket/route-driven pushes (a nudge, a mood, a game finishing at 2am) used to
+// buzz phones at any hour. Outside 08:00–22:00 IST the FCM push AND the
+// WhatsApp mirror are suppressed for the `data.type` values below. The
+// Notification row and the socket emit are written by the CALLER before it
+// pushes, so every in-app surface stays live — only the phone buzz respects
+// the night.
+//
+// Gated (non-urgent, partner-ambient): nudges (`us_nudge` also carries date
+// request/accept/reject kinds), love taps, mood shares, "how are you feeling"
+// asks, fridge notes + acks, game challenges and game results.
+// Exempt on purpose: chat messages and match events (people expect those at any
+// hour), and the job-driven types (us_cycle, us_date_reminder, us_birthday,
+// us_anniversary, subscription nudges) whose jobs already gate themselves on
+// the 08:00–21:00 IST window.
+//
+// Known gap: the window is hardcoded to IST exactly like the cron jobs —
+// per-user timezones are a future improvement, deliberately not built here.
+export const QUIET_HOURS_GATED_TYPES: ReadonlySet<string> = new Set([
+  'us_nudge',
+  'us_love',
+  'us_feeling',
+  'us_ask_feeling',
+  'us_fridge_note',
+  'us_fridge_ack',
+  'us_game_challenge',
+  'us_game_result',
+]);
+
+const IST_OFFSET_MS = 5.5 * 60 * 60 * 1000;
+/** Phone-buzz window for gated types: 08:00 (inclusive) – 22:00 (exclusive) IST. */
+const PUSH_ALLOWED_FROM_HOUR_IST = 8;
+const PUSH_ALLOWED_UNTIL_HOUR_IST = 22;
+
+const isQuietHoursIST = (): boolean => {
+  const istHour = new Date(Date.now() + IST_OFFSET_MS).getUTCHours();
+  return istHour < PUSH_ALLOWED_FROM_HOUR_IST || istHour >= PUSH_ALLOWED_UNTIL_HOUR_IST;
+};
+
+/** True when this payload's phone buzz (FCM + WhatsApp) must stay silent right now. */
+const mutedByQuietHours = (payload: PushPayload): boolean => {
+  const type = typeof payload.data?.type === 'string' ? payload.data.type : '';
+  return QUIET_HOURS_GATED_TYPES.has(type) && isQuietHoursIST();
+};
+
 /**
  * Send a push notification to every registered device of a couple.
  *
@@ -152,6 +229,15 @@ export const pushToCouple = async (
   coupleId: string,
   payload: PushPayload,
 ): Promise<{ sent: number; failed: number }> => {
+  // Quiet hours: mute the phone buzz for non-urgent types at night. The in-app
+  // Notification row + socket emit were already delivered by the caller.
+  if (mutedByQuietHours(payload)) {
+    logger.info(
+      `[Push] quiet hours (IST) — muted '${String(payload.data?.type)}' push to couple ${coupleId}.`,
+    );
+    return { sent: 0, failed: 0 };
+  }
+
   // Mirror to WhatsApp for BOTH partners (fire-and-forget, independent of FCM so
   // it still works when push is disabled or a device has no token).
   void mirrorToWhatsAppCouple(coupleId, payload);
@@ -162,6 +248,12 @@ export const pushToCouple = async (
     where: { coupleId, pushToken: { not: null } },
     select: { id: true, pushToken: true, pushPlatform: true, preferredLocale: true },
   });
+
+  // Per-recipient badge (partners can differ — own sends don't badge).
+  const badges = new Map<string, number>();
+  await Promise.all(
+    users.map(async (u) => badges.set(u.id, await badgeCountFor(coupleId, u.id))),
+  );
 
   const targets = users.filter((u): u is typeof u & { pushToken: string } => !!u.pushToken && u.pushToken.length > 0);
 
@@ -187,7 +279,7 @@ export const pushToCouple = async (
           // NO notification field → pure data message on Android (notifee renders).
           data,
           android: { priority: 'high', collapseKey: payload.collapseKey },
-          apns: { payload: { aps: { alert: { title, body }, sound: 'default', badge: 1 } } },
+          apns: { payload: { aps: { alert: { title, body }, sound: 'default', badge: badges.get(u.id) ?? 1 } } },
         });
         sent += 1;
       } catch (err: any) {
@@ -227,6 +319,15 @@ export const pushToUser = async (
   userId: string,
   payload: PushPayload,
 ): Promise<{ sent: number; failed: number }> => {
+  // Quiet hours: mute the phone buzz for non-urgent types at night. The in-app
+  // Notification row + socket emit were already delivered by the caller.
+  if (mutedByQuietHours(payload)) {
+    logger.info(
+      `[Push] quiet hours (IST) — muted '${String(payload.data?.type)}' push to user ${userId}.`,
+    );
+    return { sent: 0, failed: 0 };
+  }
+
   // Mirror to WhatsApp for this one user (fire-and-forget, independent of FCM).
   void mirrorToWhatsAppUser(userId, payload);
 
@@ -236,7 +337,7 @@ export const pushToUser = async (
   // pushToken: { not: null } are not valid there. Check null after fetch.
   const user = await prisma.user.findUnique({
     where: { id: userId },
-    select: { id: true, pushToken: true, preferredLocale: true },
+    select: { id: true, coupleId: true, pushToken: true, preferredLocale: true },
   });
 
   const token = user?.pushToken ?? null;
@@ -260,7 +361,7 @@ export const pushToUser = async (
         collapseKey: payload.collapseKey,
       },
       apns: {
-        payload: { aps: { alert: { title, body }, sound: 'default', badge: 1 } },
+        payload: { aps: { alert: { title, body }, sound: 'default', badge: await badgeCountFor(user?.coupleId, userId) } },
       },
     });
     logger.info(`[Push] Sent to user ${userId}: ${response}`);
@@ -284,19 +385,27 @@ export const pushToUser = async (
 };
 
 /**
- * Convenience: push to many couples in parallel. Returns aggregate counts.
+ * Convenience: push to many couples. Returns aggregate counts.
+ * Chunked: an admin broadcast to N couples used to open ~2N simultaneous FCM
+ * calls (each couple fans out to ≤2 devices) — enough to starve the event
+ * loop and trip FCM rate limits on a big send. 25 couples at a time keeps
+ * peak concurrency ≤50 sockets with no meaningful latency cost.
  */
+const PUSH_CHUNK_SIZE = 25;
 export const pushToCouples = async (
   coupleIds: string[],
   payload: PushPayload,
 ): Promise<{ sent: number; failed: number }> => {
-  const results = await Promise.all(
-    coupleIds.map((id) => pushToCouple(id, payload)),
-  );
-  return results.reduce(
-    (acc, r) => ({ sent: acc.sent + r.sent, failed: acc.failed + r.failed }),
-    { sent: 0, failed: 0 },
-  );
+  const acc = { sent: 0, failed: 0 };
+  for (let i = 0; i < coupleIds.length; i += PUSH_CHUNK_SIZE) {
+    const chunk = coupleIds.slice(i, i + PUSH_CHUNK_SIZE);
+    const results = await Promise.all(chunk.map((id) => pushToCouple(id, payload)));
+    for (const r of results) {
+      acc.sent += r.sent;
+      acc.failed += r.failed;
+    }
+  }
+  return acc;
 };
 
 export const isPushEnabled = (): boolean => enabled;

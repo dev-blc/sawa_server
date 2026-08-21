@@ -6,6 +6,7 @@ import { sendSuccess } from '../utils/response';
 import { validate } from '../middleware/validate';
 import { AppError } from '../utils/AppError';
 import { isEnforced } from '../config/subscription';
+import { ageFromDobString } from '../utils/age';
 import {
   getCachedCoupleProfile,
   setCachedCoupleProfile,
@@ -48,29 +49,9 @@ function deriveOnboardingStep(couple: {
 
 // ─── Validation ─────────────────────────────────────────────────────────────
 
-// Parse a DOB string to age in years, or null if unparseable. Accepts the app's
-// DD/MM/YYYY display format and ISO (YYYY-MM-DD).
-const ageFromDobString = (dob: string): number | null => {
-  const s = String(dob).trim();
-  if (!s) return null;
-  let y: number, m: number, d: number;
-  const iso = s.match(/^(\d{4})-(\d{2})-(\d{2})/);
-  if (iso) {
-    y = +iso[1]; m = +iso[2]; d = +iso[3];
-  } else {
-    const parts = s.replace(/[^0-9]/g, '/').split('/').filter(Boolean);
-    if (parts.length < 3) return null;
-    d = +parts[0]; m = +parts[1]; y = +parts[2];
-  }
-  if (!d || !m || !y || y < 1900) return null;
-  const birth = new Date(y, m - 1, d);
-  if (Number.isNaN(birth.getTime())) return null;
-  const now = new Date();
-  let age = now.getFullYear() - birth.getFullYear();
-  const md = now.getMonth() - birth.getMonth();
-  if (md < 0 || (md === 0 && now.getDate() < birth.getDate())) age--;
-  return age;
-};
+// `ageFromDobString` now lives in `src/utils/age.ts` (shared with the couple
+// service's public-card age derivation) so the DOB parsing rules can never drift
+// between the 18+ gate and the profile card (RULES §7 DRY).
 
 // Optional DOB that, WHEN present and parseable, must be >= 18 (Sawa is 18+).
 // Server-side backstop for the client age gate. Empty / absent / unparseable
@@ -107,6 +88,9 @@ const UploadPhotosSchema = z.object({
   primaryPhotoBase64: z.string().optional(),
   secondaryPhotosBase64: z.array(z.string()).max(3).optional(),
   keepSecondaryPhotoUrls: z.array(z.string()).optional(),
+  // Explicit removal — an ABSENT primaryPhotoBase64 means "keep", so the
+  // client's ✕-then-save used to be a silent no-op reported as success.
+  removePrimaryPhoto: z.boolean().optional(),
 });
 
 const SubmitAnswersSchema = z.object({
@@ -361,13 +345,21 @@ export const updateMyCouple = async (req: Request, res: Response) => {
   const { coupleId, userId } = req.user!;
   const data = req.body as any;
 
-  const couple = await coupleService.updateProfile(coupleId!, data, userId);
+  const { couple, emailConflict } = await coupleService.updateProfile(coupleId!, data, userId);
 
   // Update cache immediately so next GET returns fresh data.
   if (couple) await setCachedCoupleProfile(coupleId!, couple);
   else await invalidateCoupleProfile(coupleId!);
 
-  sendSuccess({ res, statusCode: 200, message: 'Profile updated successfully', data: { couple } });
+  // emailConflict: the profile saved but a requested email was already taken
+  // and kept unchanged. The client shows this — a silent skip behind
+  // "Profile updated successfully" was invisible data loss.
+  sendSuccess({
+    res,
+    statusCode: 200,
+    message: 'Profile updated successfully',
+    data: { couple, ...(emailConflict ? { emailConflict: true } : {}) },
+  });
 };
 
 export const invitePartner = async (_req: Request, _res: Response) => {
@@ -423,21 +415,21 @@ export const deleteMyAccount = async (req: Request, res: Response): Promise<void
  
 export const getBlockList = async (req: Request, res: Response): Promise<void> => {
    const { coupleMongoId } = req.user!;
-   const blocked = await coupleService.getBlockedCouples(coupleMongoId!);
+   const blocked = await coupleService.getBlockedCouples(coupleMongoId ?? req.user!.coupleId!);
    sendSuccess({ res, statusCode: 200, data: { blocked } });
 };
  
 export const blockCouple = async (req: Request, res: Response): Promise<void> => {
    const { coupleMongoId } = req.user!;
    const { targetCoupleId } = req.body; // target couple's MONGO _id
-   await coupleService.blockCouple(coupleMongoId!, targetCoupleId);
+   await coupleService.blockCouple(coupleMongoId ?? req.user!.coupleId!, targetCoupleId);
    sendSuccess({ res, statusCode: 200, message: 'Couple blocked' });
 };
  
 export const unblockCouple = async (req: Request, res: Response): Promise<void> => {
    const { coupleMongoId } = req.user!;
    const { targetCoupleId } = req.body; // target couple's MONGO _id
-   await coupleService.unblockCouple(coupleMongoId!, targetCoupleId);
+   await coupleService.unblockCouple(coupleMongoId ?? req.user!.coupleId!, targetCoupleId);
    sendSuccess({ res, statusCode: 200, message: 'Couple unblocked' });
 };
 

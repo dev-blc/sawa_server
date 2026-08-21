@@ -92,6 +92,7 @@ export async function runCheck(): Promise<void> {
           body,
           data: {
             type: 'us_date_reminder',
+            subtype: 'us_date_reminder',
             navigate: 'UsSpace',
             activity,
             rawDate: ev.rawDate,

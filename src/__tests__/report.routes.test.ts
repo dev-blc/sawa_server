@@ -4,7 +4,8 @@ import reportRoutes from '../routes/report.routes';
 
 jest.mock('../middleware/authenticate', () => ({
   authenticate: (req: express.Request, _res: express.Response, next: express.NextFunction) => {
-    (req as express.Request & { user: { coupleId: string } }).user = { coupleId: 'reporter-couple' };
+    // Mirror the real Request augmentation (userId is required on req.user).
+    req.user = { userId: 'reporter-user', coupleId: 'reporter-couple' };
     next();
   },
 }));
@@ -12,13 +13,22 @@ jest.mock('../middleware/authenticate', () => ({
 jest.mock('../lib/prisma', () => ({
   prisma: {
     report: { create: jest.fn() },
-    couple: { update: jest.fn() },
+    // The route resolves the target to its canonical coupleId (findFirst) and
+    // reads the reporter's blocked list before pushing to it.
+    couple: { findUnique: jest.fn(), findFirst: jest.fn(), update: jest.fn() },
     community: { findUnique: jest.fn() },
-    communityMember: { deleteMany: jest.fn() },
+    communityMember: { findFirst: jest.fn() },
   },
 }));
 
+// Community exits now route through the REAL leave pipeline (admin handover,
+// empty-group teardown, cache invalidation) instead of a raw row delete.
+jest.mock('../services/community.service', () => ({
+  communityService: { leaveCommunity: jest.fn().mockResolvedValue({ status: 'left' }) },
+}));
+
 import { prisma } from '../lib/prisma';
+import { communityService } from '../services/community.service';
 
 describe('POST /reports', () => {
   const app = express();
@@ -45,8 +55,11 @@ describe('POST /reports', () => {
       status: 'pending',
     });
     (prisma.community.findUnique as jest.Mock).mockResolvedValue({ id: 'comm-1' });
+    // Target is a community, not a couple — the canonical-coupleId resolution misses.
+    (prisma.couple.findFirst as jest.Mock).mockResolvedValue(null);
+    (prisma.couple.findUnique as jest.Mock).mockResolvedValue({ blocked: [] });
     (prisma.couple.update as jest.Mock).mockResolvedValue({});
-    (prisma.communityMember.deleteMany as jest.Mock).mockResolvedValue({ count: 1 });
+    (prisma.communityMember.findFirst as jest.Mock).mockResolvedValue({ communityId: 'comm-1' });
 
     const res = await request(app)
       .post('/reports')
@@ -58,8 +71,6 @@ describe('POST /reports', () => {
       where: { coupleId: 'reporter-couple' },
       data: { blocked: { push: 'comm-1' } },
     });
-    expect(prisma.communityMember.deleteMany).toHaveBeenCalledWith({
-      where: { communityId: 'comm-1', coupleId: 'reporter-couple' },
-    });
+    expect(communityService.leaveCommunity).toHaveBeenCalledWith('reporter-couple', 'comm-1');
   });
 });

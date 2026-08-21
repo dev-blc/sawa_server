@@ -2,8 +2,30 @@ import { Server as SocketIOServer, Socket } from 'socket.io';
 import { prisma } from '../lib/prisma';
 import { logger } from '../utils/logger';
 import { pushToUser } from '../services/push.service';
-import { i18nData, NotifParams } from '../i18n/notif';
-import { invalidateNotifUnreadCount, cacheSet, cacheGet } from '../lib/cache';
+import { clearGameChallengeNotification, clearDateRequestNotification, updateDateRequestNotificationData } from '../services/notification.service';
+import { SOCKET_EVENTS } from '../constants/socketEvents';
+import { i18nData, renderNotif, NotifParams } from '../i18n/notif';
+import { invalidateNotifUnreadCount, cacheSet, cacheGet, cacheSetNX } from '../lib/cache';
+
+/**
+ * The push data's `subtype` mirrors the DB row's data.subtype so the app's tap
+ * router can key on ONE vocabulary for both a push payload and a stored row.
+ * (`type` stays for older clients that switch on it.)
+ */
+const NUDGE_SUBTYPE_BY_KIND: Record<string, string> = {
+  hug: 'us_hug',
+  kiss: 'us_kiss',
+  date_request: 'us_date_plan',
+  date_accept: 'us_date_plan',
+  date_reject: 'us_date_plan',
+  date_edit: 'us_date_plan',
+  date_plan: 'us_date_plan',
+  thinking: 'us_thinking',
+  missyou: 'us_missyou',
+  cheerup: 'us_cheerup',
+  here: 'us_here',
+  appreciate: 'us_appreciate',
+};
 
 /** Redis key for a user's last shared feeling. TTL 7 days. */
 const feelingKey = (coupleId: string, userId: string) =>
@@ -43,6 +65,32 @@ const emptyBoardFor = (type: GameType): string =>
 
 /** Whether the client owns the serialized board (state-based games). */
 const isStateGame = (type: GameType): boolean => type === 'dab' || type === 'mem';
+
+/** The stored session in the same shape GET /us/game/active returns, so a
+ *  `us:game:busy` reply can be opened by the client exactly like a resume. */
+const sessionSnapshotOf = (st: {
+  gameSessionId: string | null;
+  gameSessionStatus: string | null;
+  gameChallengerId: string | null;
+  gameBoard: string | null;
+  gameTurn: string | null;
+}) => {
+  const liveType = gameTypeOf(st.gameSessionId || '');
+  return {
+    gameId: st.gameSessionId,
+    gameType: liveType,
+    status: st.gameSessionStatus,
+    challengerId: st.gameChallengerId,
+    board:
+      liveType === 'ttt'
+        ? (st.gameBoard || '_________')
+            .split('')
+            .map((c) => (c === 'X' ? 'X' : c === 'O' ? 'O' : null))
+        : null,
+    state: liveType === 'ttt' ? null : st.gameBoard || null,
+    turn: st.gameTurn || 'X',
+  };
+};
 
 /** Human-readable game name for notifications. */
 const gameNameFor = (type: GameType): string =>
@@ -112,10 +160,10 @@ async function saveUsNotification(params: {
   title: string;
   message: string;
   extraData?: Record<string, unknown>;
-}): Promise<void> {
+}): Promise<string | null> {
   try {
     const { coupleId, senderUserId, subtype, title, message, extraData } = params;
-    await prisma.notification.create({
+    const row = await prisma.notification.create({
       data: {
         recipientId: coupleId,
         senderId: coupleId,
@@ -128,8 +176,12 @@ async function saveUsNotification(params: {
     });
     // Bust cached unread count so the bell badge updates immediately.
     await invalidateNotifUnreadCount(coupleId);
+    // The id lets a push deep-link straight to THIS row (e.g. a date request
+    // opening its own detail sheet on the Notifications screen).
+    return row.id;
   } catch (err: any) {
     logger.warn(`[UsSocket] saveUsNotification failed: ${err.message}`);
+    return null;
   }
 }
 
@@ -184,6 +236,27 @@ async function findPartnerIdAndPhoto(
   }
 }
 
+/**
+ * Is this user holding a live socket in their couple room right now?
+ * Cluster-correct: fetchSockets() goes through the Redis adapter and sees
+ * every PM2 worker; RemoteSocket exposes only `data`, hence the handshake
+ * mirror in sockets/index.ts. Fails OPEN (reports offline) — for someone
+ * actively waiting on a game, a redundant buzz beats silence.
+ */
+async function isUserOnline(
+  io: SocketIOServer,
+  coupleId: string,
+  targetUserId: string,
+): Promise<boolean> {
+  try {
+    const sockets = await io.in(`couple:${coupleId}`).fetchSockets();
+    return sockets.some((s) => s.data?.userId === targetUserId);
+  } catch (err: any) {
+    logger.warn(`[UsSocket] presence check failed (assuming offline): ${err.message}`);
+    return false;
+  }
+}
+
 export const registerUsHandlers = (io: SocketIOServer, socket: Socket): void => {
   const { userId, coupleId, userName, userRole } = socket;
   // Pronouns for the SENDER (the socket user) — used in all "from partner" copy.
@@ -208,6 +281,7 @@ export const registerUsHandlers = (io: SocketIOServer, socket: Socket): void => 
         message: payload.message,
         at: payload.at,
         from: senderName,
+        senderUserId: userId,
         // Unique id survives the relay so both partners converge on the same entry
         // (enables multiple plans per day + independent delete).
         id: payload.id,
@@ -227,6 +301,9 @@ export const registerUsHandlers = (io: SocketIOServer, socket: Socket): void => 
       // i18n key/params used for BOTH the in-app row (client re-renders) and push.
       let i18nKey = 'us.nudge.generic';
       let i18nParams: NotifParams = { name: senderName };
+      // Set by branches whose PUSH should deep-link to its own row (a date
+      // request opens its detail sheet on the Notifications screen by id).
+      let savedNotifId: string | null = null;
 
       if (payload.kind === 'hug') {
         i18nKey = 'us.nudge.hug'; i18nParams = { name: senderName };
@@ -257,7 +334,7 @@ export const registerUsHandlers = (io: SocketIOServer, socket: Socket): void => 
         const timeLabel = payload.time ? ` at ${payload.time}` : '';
         const dateMsg = payload.date ? `Want to go out on ${payload.date}${timeLabel} ✨` : 'Want to plan something special ✨';
         i18nKey = 'us.date.request'; i18nParams = { name: senderName, actLabel };
-        await saveUsNotification({
+        savedNotifId = await saveUsNotification({
           coupleId,
           senderUserId: userId,
           subtype: 'us_date_plan',
@@ -268,6 +345,13 @@ export const registerUsHandlers = (io: SocketIOServer, socket: Socket): void => 
         pushTitle = `${senderName} wants to plan ${actLabel} 📅`;
 
       } else if (payload.kind === 'date_accept') {
+        // The request is answered — retire its row so the couple's OTHER
+        // device (or a reinstall) can't accept it again and resurrect a
+        // second "Date confirmed!".
+        if (payload.id) {
+          await clearDateRequestNotification(coupleId, payload.id);
+          io.to(`couple:${coupleId}`).emit('notification:new', { type: 'us_date_plan_cleared' });
+        }
         i18nKey = 'us.date.accept'; i18nParams = { name: senderName };
         await saveUsNotification({
           coupleId,
@@ -285,11 +369,54 @@ export const registerUsHandlers = (io: SocketIOServer, socket: Socket): void => 
           coupleId,
           senderUserId: userId,
           subtype: 'us_date_plan',
-          title: '😔 Date declined',
-          message: 'Maybe next time 🙏',
-          extraData: { kind: 'date_reject', ...i18nData(i18nKey, i18nParams) },
+          // Same warm register as the push — "😔 Date declined" read like a
+          // rejected form between two people who live together.
+          title: `${senderName} couldn't make it this time`,
+          message: 'Maybe another time 🤍',
+          // `id` is what lets the requester's device remove the refused plan
+          // from the calendar EVEN IF it was offline for the live relay —
+          // date_accept and date_edit already carried it; this branch dropped
+          // it, leaving a declined date sitting there looking confirmed.
+          extraData: { id: payload.id, kind: 'date_reject', ...i18nData(i18nKey, i18nParams) },
         });
         pushTitle = `${senderName} couldn't make it this time`;
+
+      } else if (payload.kind === 'date_edit') {
+        // Keep the ORIGINAL request row in sync — accept reads ITS data, so an
+        // edit that only wrote a new row let a later accept resurrect the
+        // pre-edit date/time on both calendars.
+        if (payload.id) {
+          await updateDateRequestNotificationData(coupleId, payload.id, {
+            date: payload.date,
+            rawDate: payload.rawDate,
+            activity: payload.activity,
+            time: payload.time,
+            note: payload.note,
+          });
+        }
+        const actLabel = payload.activity ? payload.activity : 'the plan';
+        const timeLabel = payload.time ? ` at ${payload.time}` : '';
+        i18nKey = 'us.date.edit'; i18nParams = { name: senderName, actLabel };
+        await saveUsNotification({
+          coupleId,
+          senderUserId: userId,
+          subtype: 'us_date_plan',
+          title: `${senderName} updated ${actLabel}`,
+          message: payload.date ? `Now on ${payload.date}${timeLabel}` : 'Tap to see the update',
+          extraData: { id: payload.id, date: payload.date, rawDate: payload.rawDate, activity: payload.activity, time: payload.time, note: payload.note, kind: 'date_edit', planBy: payload.planBy || senderName, ...i18nData(i18nKey, i18nParams) },
+        });
+        pushTitle = `${senderName} updated ${actLabel} ✏️`;
+
+      } else if (payload.kind === 'date_delete') {
+        // Deletion is housekeeping, not a moment: no new notification row and
+        // no push — but the ORIGINAL request row must die with the plan, or the
+        // partner's Accept button outlives the cancellation and accepting it
+        // resurrects the deleted date on both calendars.
+        if (payload.id) {
+          await clearDateRequestNotification(coupleId, payload.id);
+          io.to(`couple:${coupleId}`).emit('notification:new', { type: 'us_date_plan_cleared' });
+        }
+        return;
 
       } else if (payload.kind === 'date_plan') {
         // Legacy fallback
@@ -380,8 +507,10 @@ export const registerUsHandlers = (io: SocketIOServer, socket: Socket): void => 
           body: payload.message,
           data: {
             type: 'us_nudge',
+            subtype: NUDGE_SUBTYPE_BY_KIND[payload.kind] || 'us_nudge',
             kind: payload.kind,
             navigate: 'Notifications',
+            ...(savedNotifId ? { notificationId: savedNotifId } : {}),
             ...(senderPhoto ? { senderPhoto } : {}),  // couple profile photo for largeIcon
             ...i18nData(i18nKey, i18nParams),
           },
@@ -402,6 +531,7 @@ export const registerUsHandlers = (io: SocketIOServer, socket: Socket): void => 
     io.to(`couple:${coupleId}`).except(socket.id).emit('us:love', {
       from: senderName,
       at: payload.at,
+      senderUserId: userId,
     });
 
     // Save in-app notification (partner sees it; sender is filtered client-side).
@@ -424,7 +554,7 @@ export const registerUsHandlers = (io: SocketIOServer, socket: Socket): void => 
       pushToUser(lovePartnerId, {
         title: `${senderName} sent you love ❤️`,
         body: 'Tap to see it',
-        data: { type: 'us_love', navigate: 'Notifications', ...(loveSenderPhoto ? { senderPhoto: loveSenderPhoto } : {}), ...i18nData('us.nudge.love', { name: senderName }) },
+        data: { type: 'us_love', subtype: 'us_love', navigate: 'Notifications', ...(loveSenderPhoto ? { senderPhoto: loveSenderPhoto } : {}), ...i18nData('us.nudge.love', { name: senderName }) },
         collapseKey: 'us_love',
       }).catch(() => null);
     }
@@ -445,6 +575,10 @@ export const registerUsHandlers = (io: SocketIOServer, socket: Socket): void => 
         note: payload.note,
         at: payload.at,
         from: senderFirstName,
+        // Lets the sender's OTHER devices ignore the echo — .except(socket.id)
+        // only excludes the emitting socket, not the same user's second device,
+        // which used to render your own mood as your partner's.
+        senderUserId: userId,
       };
 
       // Persist so the partner can fetch it on any fresh login (7-day TTL)
@@ -486,8 +620,11 @@ export const registerUsHandlers = (io: SocketIOServer, socket: Socket): void => 
             : `${p.Be} feeling ${feelingLabel} right now`,
           data: {
             type: 'us_feeling',
+            // The row's subtype is us_mood while this push always said
+            // us_feeling — third name for the same event. subtype unifies it.
+            subtype: 'us_mood',
             feeling: payload.feeling,
-            navigate: 'Notifications',
+            navigate: 'UsSpace',
             ...(feelSenderPhoto ? { senderPhoto: feelSenderPhoto } : {}),
             ...i18nData('us.mood', { name: senderFirstName, feeling: feelingLabel, g }),
           },
@@ -497,6 +634,32 @@ export const registerUsHandlers = (io: SocketIOServer, socket: Socket): void => 
     },
   );
 
+  // ── us:presence:sync — on-demand partner presence snapshot ───────────────
+  // The connection-time broadcast only fires on TRANSITIONS, so the partner who
+  // connects (or refocuses the Us tab) second was never told the first is
+  // online — the presence glow was effectively unreachable. The client emits
+  // this on Us-tab focus; the reply reuses US_PARTNER_PRESENCE, which the
+  // client already consumes (and ignores for its own userId).
+  // fetchSockets() goes through the Redis adapter, so it sees every PM2
+  // worker; RemoteSocket exposes only `data`, hence the handshake mirror.
+  socket.on('us:presence:sync', async () => {
+    if (!userId || !coupleId) return;
+    try {
+      const sockets = await io.in(`couple:${coupleId}`).fetchSockets();
+      const partnerSocket = sockets.find(
+        (s) => s.data?.userId && s.data.userId !== userId,
+      );
+      if (partnerSocket) {
+        socket.emit(SOCKET_EVENTS.US_PARTNER_PRESENCE, {
+          userId: partnerSocket.data.userId,
+          online: true,
+        });
+      }
+    } catch (err: any) {
+      logger.warn(`[UsSocket] presence sync failed: ${err.message}`);
+    }
+  });
+
   // ═══ Tic-Tac-Toe — real-time couple game ═════════════════════════════════
   // The server is a thin, fast relay: moves are forwarded to the partner's
   // socket immediately. It also owns the persistent scoreboard in Redis and
@@ -504,7 +667,7 @@ export const registerUsHandlers = (io: SocketIOServer, socket: Socket): void => 
   // from their notification tray.
 
   // ── us:game:challenge — invite the partner to a match ──────────────────
-  socket.on('us:game:challenge', async (payload: { gameId: string; gameType?: GameType; state?: string }) => {
+  socket.on(SOCKET_EVENTS.US_GAME_CHALLENGE, async (payload: { gameId: string; gameType?: GameType; state?: string }) => {
     if (!userId || !coupleId || !payload?.gameId) return;
     const senderName = firstName(userName || 'Your partner');
     const gameType: GameType = payload.gameType || gameTypeOf(payload.gameId);
@@ -517,7 +680,38 @@ export const registerUsHandlers = (io: SocketIOServer, socket: Socket): void => 
         : emptyBoardFor(gameType);
     logger.info(`[UsSocket] game challenge ${payload.gameId} (${gameType}) from ${userId} in couple ${coupleId}`);
 
-    // 0. Persist a shared PENDING session so both partners can (re)join the same
+    // 0a. Single-session lock. The couple has exactly ONE shared game session;
+    //     letting a second challenge overwrite a live one is how the "both
+    //     players are X" corruption happened: two crossed challenges forked
+    //     the phones into parallel sessions, each partner the challenger of
+    //     their own. A challenge that collides with a live round is refused
+    //     and the sender gets the live session back (`us:game:busy`) so their
+    //     client can join it instead — the crossing becomes an accept.
+    //     Re-issuing MY OWN pending invite (or retrying the same gameId after
+    //     a reconnect) stays allowed; a DB error fails open like before.
+    try {
+      const existing = await prisma.coupleUsState.findUnique({ where: { coupleId } });
+      const ageMs = existing?.gameSessionAt
+        ? Date.now() - new Date(existing.gameSessionAt).getTime()
+        : Number.MAX_SAFE_INTEGER;
+      const live =
+        !!existing?.gameSessionId &&
+        !!existing.gameSessionStatus &&
+        ageMs < 3 * 60 * 60 * 1000;
+      const sameGame = live && existing!.gameSessionId === payload.gameId;
+      const myPendingReinvite =
+        live &&
+        existing!.gameSessionStatus === 'pending' &&
+        existing!.gameChallengerId === userId;
+      if (live && !sameGame && !myPendingReinvite) {
+        socket.emit('us:game:busy', { session: sessionSnapshotOf(existing!) });
+        return;
+      }
+    } catch (err: any) {
+      logger.warn(`[UsSocket] session lock check failed (open): ${err.message}`);
+    }
+
+    // 0b. Persist a shared PENDING session so both partners can (re)join the same
     //    challenge even after leaving the screen — this is what prevents the
     //    "stale challenge" where the requester left and the partner got stuck.
     try {
@@ -547,7 +741,7 @@ export const registerUsHandlers = (io: SocketIOServer, socket: Socket): void => 
 
     // 1. Instant relay so an online partner sees the invite immediately. The
     //    board `state` is included so state-based games render the shared layout.
-    io.to(`couple:${coupleId}`).except(socket.id).emit('us:game:challenge', {
+    io.to(`couple:${coupleId}`).except(socket.id).emit(SOCKET_EVENTS.US_GAME_CHALLENGE, {
       gameId: payload.gameId,
       gameType,
       state: isStateGame(gameType) ? emptyBoard : undefined,
@@ -575,9 +769,12 @@ export const registerUsHandlers = (io: SocketIOServer, socket: Socket): void => 
         body: `${gameName}! Tap to accept and play`,
         data: {
           type: 'us_game_challenge',
+          subtype: 'us_game_challenge',
           gameId: payload.gameId,
           gameType,
-          navigate: 'Notifications',
+          // The whole point of this push is the game — land the tap on the Us
+          // space so the accept sheet opens, not on the notification list.
+          navigate: 'UsSpace',
           ...(senderPhoto ? { senderPhoto } : {}),
           ...i18nData('us.game.challenge', { name: senderName, game: gameName }),
         },
@@ -592,25 +789,85 @@ export const registerUsHandlers = (io: SocketIOServer, socket: Socket): void => 
     const gameType = gameTypeOf(payload.gameId);
     // Flip the shared session to ACTIVE so a rejoining partner resumes the match.
     let board: string | null = null;
+    // Fail open on a DB error (start still emitted, as before); only a POSITIVE
+    // zero-row match suppresses the start.
+    let sessionLive = true;
+    let challengerIdForStart: string | null = null;
     try {
-      await prisma.coupleUsState.updateMany({
+      const updated = await prisma.coupleUsState.updateMany({
         where: { coupleId, gameSessionId: payload.gameId },
         data: { gameSessionStatus: 'active', gameSessionAt: new Date() },
       });
+      if (updated.count === 0) sessionLive = false;
       const st = await prisma.coupleUsState.findUnique({ where: { coupleId } });
-      if (st?.gameSessionId === payload.gameId) board = st.gameBoard || null;
+      if (st?.gameSessionId === payload.gameId) {
+        board = st.gameBoard || null;
+        challengerIdForStart = st.gameChallengerId || null;
+      }
     } catch (err: any) {
       logger.warn(`[UsSocket] persist accept failed: ${err.message}`);
     }
-    io.to(`couple:${coupleId}`).emit('us:game:start', {
+    // The challenge is answered — retire its "Tap to accept and play!" row so
+    // a stale invite can't outlive the session and dead-end a later tap.
+    await clearGameChallengeNotification(coupleId, payload.gameId);
+    io.to(`couple:${coupleId}`).emit('notification:new', { type: 'us_game_challenge_cleared' });
+    if (!sessionLive) {
+      // Accepting a dead session (quit/expired/superseded) used to emit
+      // us:game:start anyway — both clients then believed a game was live
+      // while the server row was empty and every move silently no-oped.
+      // If a NEWER round is live, hand it back (`us:game:busy`) so a client
+      // holding a stale invite popup joins the real round instead of hanging;
+      // clients without the handler simply ignore the event.
+      try {
+        const cur = await prisma.coupleUsState.findUnique({ where: { coupleId } });
+        if (cur?.gameSessionId && cur.gameSessionStatus) {
+          socket.emit('us:game:busy', { session: sessionSnapshotOf(cur) });
+        }
+      } catch {}
+      return;
+    }
+    io.to(`couple:${coupleId}`).emit(SOCKET_EVENTS.US_GAME_START, {
       gameId: payload.gameId,
       gameType,
       // Share the stored board so state-based games start from the same layout.
       state: isStateGame(gameType) ? board ?? undefined : undefined,
       accepterUserId: userId,
+      // Authoritative role assignment. Clients that key X/O off "did *I* send
+      // the accept" desync whenever starts race or arrive out of order across
+      // workers — the stored challenger is the one fact both phones agree on.
+      challengerId: challengerIdForStart,
       accepterName: firstName(userName || ''),
       at: new Date().toISOString(),
     });
+
+    // The challenger asked and then waited. us:game:start only reaches a live
+    // socket — lock the phone and they never learn the game began, which is
+    // how an accepted challenge died for long-distance couples. Push ONLY when
+    // they're genuinely offline so someone staring at the board isn't buzzed.
+    try {
+      const st2 = await prisma.coupleUsState.findUnique({ where: { coupleId } });
+      const challengerId = st2?.gameChallengerId || null;
+      if (challengerId && challengerId !== userId) {
+        const online = await isUserOnline(io, coupleId, challengerId);
+        if (!online) {
+          const accepterName = firstName(userName || 'Your partner');
+          const gameName = gameNameFor(gameType);
+          pushToUser(challengerId, {
+            title: `${accepterName} accepted 🎮`,
+            body: `Your ${gameName} game is on. Tap to play`,
+            data: {
+              type: 'us_game_challenge',
+              subtype: 'us_game_challenge',
+              gameId: payload.gameId,
+              gameType,
+              navigate: 'UsSpace',
+              ...i18nData('us.game.accepted', { name: accepterName, game: gameName }),
+            },
+            collapseKey: 'us_game',
+          }).catch(() => null);
+        }
+      }
+    } catch {}
   });
 
   // ── us:game:move — relay a board move to the partner (fast path) ───────
@@ -619,7 +876,7 @@ export const registerUsHandlers = (io: SocketIOServer, socket: Socket): void => 
   // mirroring how TTT win detection lives on the client). The server relays the
   // move verbatim and persists the resulting board for resume.
   socket.on(
-    'us:game:move',
+    SOCKET_EVENTS.US_GAME_MOVE,
     async (payload: {
       gameId: string;
       cell?: number;
@@ -632,7 +889,7 @@ export const registerUsHandlers = (io: SocketIOServer, socket: Socket): void => 
       const gameType = gameTypeOf(payload.gameId);
 
       // Relay first (fast path), then persist the board so both can resume.
-      io.to(`couple:${coupleId}`).except(socket.id).emit('us:game:move', {
+      io.to(`couple:${coupleId}`).except(socket.id).emit(SOCKET_EVENTS.US_GAME_MOVE, {
         gameId: payload.gameId,
         gameType,
         cell: payload.cell,
@@ -642,6 +899,36 @@ export const registerUsHandlers = (io: SocketIOServer, socket: Socket): void => 
         turn: payload.turn,
         byUserId: userId,
       });
+
+      // Long-distance turn: the relay above only reaches a live socket. When
+      // the partner is backgrounded, nudge their phone — capped to one buzz
+      // per game per 45s so a fast exchange never floods, and skipped entirely
+      // while they're actually looking at the board.
+      (async () => {
+        try {
+          const { partnerId } = await findPartnerIdAndPhoto(userId, coupleId);
+          if (!partnerId) return;
+          if (await isUserOnline(io, coupleId, partnerId)) return;
+          const throttleKey = `us:gameturn:${payload.gameId}:${partnerId}`;
+          const fresh = await cacheSetNX(throttleKey, '1', 45).catch(() => false);
+          if (!fresh) return;
+          const moverName = firstName(userName || 'Your partner');
+          const gameName = gameNameFor(gameType);
+          pushToUser(partnerId, {
+            title: `Your move 🎮`,
+            body: `${moverName} played — your turn at ${gameName}`,
+            data: {
+              type: 'us_game_challenge',
+              subtype: 'us_game_challenge',
+              gameId: payload.gameId,
+              gameType,
+              navigate: 'UsSpace',
+              ...i18nData('us.game.turn', { name: moverName, game: gameName }),
+            },
+            collapseKey: 'us_game',
+          }).catch(() => null);
+        } catch {}
+      })();
 
       try {
         const st = await prisma.coupleUsState.findUnique({ where: { coupleId } });
@@ -682,10 +969,32 @@ export const registerUsHandlers = (io: SocketIOServer, socket: Socket): void => 
     },
   );
 
-  // ── us:game:quit — one player leaves mid-game ──────────────────────────
-  socket.on('us:game:quit', async (payload: { gameId: string }) => {
+  // ── us:game:leave — SOFT exit: board closed, session kept ──────────────
+  // Blur/background during a live game lands here (the client used to send
+  // quit, which nulled the shared session the moment the FIRST partner
+  // backgrounded — the "we can't resume our game" bug). Stamp activity so the
+  // idle expiry counts from the walk-away, and tell the partner quietly.
+  socket.on(SOCKET_EVENTS.US_GAME_LEAVE, async (payload: { gameId: string }) => {
     if (!userId || !coupleId || !payload?.gameId) return;
-    io.to(`couple:${coupleId}`).except(socket.id).emit('us:game:quit', {
+    io.to(`couple:${coupleId}`).except(socket.id).emit(SOCKET_EVENTS.US_GAME_PARTNER_LEFT, {
+      gameId: payload.gameId,
+      byUserId: userId,
+      byName: firstName(userName || ''),
+    });
+    try {
+      await prisma.coupleUsState.updateMany({
+        where: { coupleId, gameSessionId: payload.gameId },
+        data: { gameSessionAt: new Date() },
+      });
+    } catch (err: any) {
+      logger.warn(`[UsSocket] stamp leave failed: ${err.message}`);
+    }
+  });
+
+  // ── us:game:quit — HARD exit: one player abandons; the session dies ────
+  socket.on(SOCKET_EVENTS.US_GAME_QUIT, async (payload: { gameId: string }) => {
+    if (!userId || !coupleId || !payload?.gameId) return;
+    io.to(`couple:${coupleId}`).except(socket.id).emit(SOCKET_EVENTS.US_GAME_QUIT, {
       gameId: payload.gameId,
       byUserId: userId,
       byName: firstName(userName || ''),
@@ -695,10 +1004,13 @@ export const registerUsHandlers = (io: SocketIOServer, socket: Socket): void => 
     } catch (err: any) {
       logger.warn(`[UsSocket] clear session on quit failed: ${err.message}`);
     }
+    // A quit round's invite is dead too — clear it and nudge open lists to refresh.
+    await clearGameChallengeNotification(coupleId, payload.gameId);
+    io.to(`couple:${coupleId}`).emit('notification:new', { type: 'us_game_challenge_cleared' });
   });
 
   // ── us:game:result — winner's client reports; server scores it once ────
-  socket.on('us:game:result', async (payload: { gameId: string; winnerUserId?: string; draw?: boolean }) => {
+  socket.on(SOCKET_EVENTS.US_GAME_RESULT, async (payload: { gameId: string; winnerUserId?: string; draw?: boolean }) => {
     if (!userId || !coupleId || !payload?.gameId) return;
     try {
       // The round is over — always clear the shared session (win, loss, or draw)
@@ -711,6 +1023,10 @@ export const registerUsHandlers = (io: SocketIOServer, socket: Socket): void => 
       const already = await cacheGet(scoredKey);
       if (already) return;
       await cacheSet(scoredKey, '1', 24 * 60 * 60);
+
+      // The winner's live streak after this game (0 on a draw) — used below so
+      // the result notification can celebrate a streak that is still alive.
+      let streakCount = 0;
 
       if (!payload.draw && payload.winnerUserId) {
         const winnerId = payload.winnerUserId;
@@ -732,6 +1048,7 @@ export const registerUsHandlers = (io: SocketIOServer, socket: Socket): void => 
           create: { coupleId, gameStreakUserId: winnerId, gameStreakCount: nextCount },
           update: { gameStreakUserId: winnerId, gameStreakCount: nextCount },
         });
+        streakCount = nextCount;
 
         // Read back the full scoreboard and broadcast to BOTH partners.
         const scores = await prisma.usGameScore.findMany({ where: { coupleId } });
@@ -739,7 +1056,68 @@ export const registerUsHandlers = (io: SocketIOServer, socket: Socket): void => 
         for (const s of scores) pts[s.userId] = s.wins;
         const streak = { userId: winnerId, count: nextCount };
 
-        io.to(`couple:${coupleId}`).emit('us:game:points', { points: pts, streak });
+        io.to(`couple:${coupleId}`).emit(SOCKET_EVENTS.US_GAME_POINTS, { points: pts, streak });
+      }
+
+      // ── Close the loop: tell the partner who did NOT report the result ────
+      // The reporter's client just rendered the ending locally; an offline
+      // partner otherwise never learns the game ended. Same Notification-row +
+      // notification:new + localized-push pattern as us:feeling / us:nudge
+      // above (idempotent: we are inside the scored-once guard). Copy is
+      // written from the RECIPIENT's perspective, "Rematch?" tone.
+      const gameType = gameTypeOf(payload.gameId);
+      const gameName = gameNameFor(gameType);
+      const senderName = firstName(userName || 'Your partner');
+      const { partnerId, senderPhoto } = await findPartnerIdAndPhoto(userId, coupleId);
+
+      const recipientWon =
+        !payload.draw && !!payload.winnerUserId && payload.winnerUserId === partnerId;
+      // A single win is not a streak yet — mention it from 2 consecutive wins.
+      const showStreak = !payload.draw && streakCount >= 2;
+      const resultKey = payload.draw
+        ? 'us.game.draw'
+        : recipientWon
+        ? (showStreak ? 'us.game.winStreak' : 'us.game.win')
+        : (showStreak ? 'us.game.lossStreak' : 'us.game.loss');
+      const resultParams: NotifParams = {
+        name: senderName,
+        game: gameName,
+        ...(showStreak ? { count: String(streakCount) } : {}),
+      };
+      const { title: resultTitle, body: resultBody } = renderNotif('en', resultKey, resultParams);
+
+      await saveUsNotification({
+        coupleId,
+        senderUserId: userId,
+        subtype: 'us_game_result',
+        title: resultTitle,
+        message: resultBody,
+        extraData: {
+          gameId: payload.gameId,
+          gameType,
+          draw: !!payload.draw,
+          ...(payload.winnerUserId ? { winnerUserId: payload.winnerUserId } : {}),
+          ...(showStreak ? { streakCount } : {}),
+          ...i18nData(resultKey, resultParams),
+        },
+      });
+      io.to(`couple:${coupleId}`).except(socket.id).emit('notification:new', { type: 'us_game_result' });
+
+      if (partnerId) {
+        pushToUser(partnerId, {
+          title: resultTitle,
+          body: resultBody,
+          data: {
+            type: 'us_game_result',
+            subtype: 'us_game_result',
+            gameId: payload.gameId,
+            gameType,
+            navigate: 'UsSpace',
+            ...(senderPhoto ? { senderPhoto } : {}),
+            ...i18nData(resultKey, resultParams),
+          },
+          collapseKey: 'us_game',
+        }).catch(() => null);
       }
     } catch (err: any) {
       logger.warn(`[UsSocket] game result failed: ${err.message}`);

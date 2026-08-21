@@ -7,6 +7,7 @@ import { createSocketServer } from './sockets/index';
 import { startCycleNotifier } from './jobs/cycleNotifier';
 import { startSubscriptionNotifier } from './jobs/subscriptionNotifier';
 import { startEventReminderNotifier } from './jobs/eventReminderNotifier';
+import { startCelebrationNotifier } from './jobs/celebrationNotifier';
 import { migrateUsRedisToPostgres } from './jobs/migrateUsToPg';
 import { env } from './config/env';
 import { logger } from './utils/logger';
@@ -32,11 +33,20 @@ const start = async (): Promise<void> => {
   const io = createSocketServer(httpServer);
   (global as any).io = io;
 
-  // 4b. Cycle nudges for the primary partner — one worker only.
+  // 4b. Background jobs — one worker only.
   if (!process.env.pm_id || process.env.pm_id === '0') {
-    startCycleNotifier();
-    startSubscriptionNotifier();
+    // Cycle nudges parked as a later feature (Arfam, 2026-08-20) — off until
+    // CYCLE_NOTIFIER_ENABLED; code retained. Pairs with mobile CYCLE_ENABLED.
+    if (env.CYCLE_NOTIFIER_ENABLED) {
+      startCycleNotifier();
+    }
+    // Gated: this job's only function is soliciting a Prime purchase the app
+    // cannot make (3.1.1). Off until Prime returns as compliant IAP.
+    if (env.SUBSCRIPTION_NOTIFIER_ENABLED) {
+      startSubscriptionNotifier();
+    }
     startEventReminderNotifier();
+    startCelebrationNotifier();
     // One-time backfill of Us-space data from Redis into Postgres.
     migrateUsRedisToPostgres().catch(() => null);
   }

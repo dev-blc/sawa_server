@@ -3,12 +3,37 @@ import { z } from 'zod';
 import { sendSuccess } from '../utils/response';
 import { AppError } from '../utils/AppError';
 import { prisma } from '../lib/prisma';
+import { env } from '../config/env';
 import { getCoupleCommunityColor } from '../utils/communityColors';
+import { encodeCursor, decodeCursor, clampLimit } from '../utils/cursor';
 import {
   createPresignedUpload,
   createPresignedDownload,
   isStorageConfigured,
 } from '../lib/storage';
+
+// Default chat history page size when the client sends no `?limit=`. Cursor
+// pagination lets the app load older messages on demand (RULES §5).
+// Default when the client sends no limit param. 100 = exact parity with the
+// pre-pagination behavior (`take: 100`), because the shipped store build sends
+// no params and cannot ask for older pages — halving its window was a
+// regression. Paginating clients request `limit=50` explicitly for a faster
+// first paint and walk older history via `cursor`.
+const PRIVATE_MESSAGES_DEFAULT_LIMIT = 100;
+
+/**
+ * Allowed upload content types per kind (v3 M6). The presigned PUT streams
+ * straight to object storage, bypassing the app's JSON body limit, so the type
+ * and size the client declares are the only gate. Verified against the mobile
+ * `uploadMedia.ts`: voice notes are recorded as `audio/aac` (.m4a); images are
+ * sent as the picker's mime — overwhelmingly `image/jpeg`, plus png/webp. An
+ * unlisted type is refused (415); the mobile client then falls back to its
+ * legacy base64 path, so the allowlist never hard-breaks a real upload.
+ */
+const ALLOWED_UPLOAD_CONTENT_TYPES: Record<'voice' | 'image', ReadonlySet<string>> = {
+  voice: new Set(['audio/aac', 'audio/mpeg', 'audio/m4a']),
+  image: new Set(['image/jpeg', 'image/png', 'image/webp']),
+};
 
 // ─── Authorization helpers (prevent chat IDOR) ────────────────────────────────
 // A couple may only read/write a private chat if it is one of the two matched
@@ -176,20 +201,46 @@ export const getPrivateMessages = async (req: Request, res: Response): Promise<v
   if (!coupleId) throw new AppError('Couple ID required', 400);
   await assertMatchParticipant(matchId, coupleId);
 
-  const messages = await prisma.message.findMany({
+  // Cursor pagination — additive and backward compatible. No params → the most
+  // recent PRIVATE_MESSAGES_DEFAULT_LIMIT messages, oldest→newest as before,
+  // plus a `nextCursor` for loading OLDER history. `?cursor=<opaque>&limit=<n>`
+  // (limit capped at 100) walks backwards in time. The shipped mobile client
+  // sends neither and keeps reading `data.messages`; `data.nextCursor` is new.
+  const limit = clampLimit(req.query.limit, PRIVATE_MESSAGES_DEFAULT_LIMIT);
+  const decoded = decodeCursor(req.query.cursor);
+
+  const rows = await prisma.message.findMany({
     where: {
       chatType: 'private',
       matchId: matchId,
+      ...(decoded
+        ? {
+            OR: [
+              { createdAt: { lt: new Date(decoded.key) } },
+              { createdAt: new Date(decoded.key), id: { lt: decoded.id } },
+            ],
+          }
+        : {}),
     },
     include: {
       sender: { select: { coupleId: true, profileName: true } },
       senderUser: { select: { role: true, name: true } },
     },
-    orderBy: { createdAt: 'desc' },
-    take: 100,
+    // Total order (createdAt + id tie-break) so the cursor is stable when two
+    // messages share a timestamp.
+    orderBy: [{ createdAt: 'desc' }, { id: 'desc' }],
+    take: limit + 1,
   });
 
-  const finalMessages = messages.reverse().map((m: any) => {
+  // Peek one extra row to know whether an older page exists.
+  const hasMore = rows.length > limit;
+  const pageRows = hasMore ? rows.slice(0, limit) : rows;
+  // Oldest row in this desc page is the cursor into the next (older) page.
+  const oldest = pageRows[pageRows.length - 1];
+  const nextCursor =
+    hasMore && oldest ? encodeCursor(oldest.createdAt.toISOString(), oldest.id) : null;
+
+  const finalMessages = pageRows.reverse().map((m: any) => {
     // Derive a human-readable first name. Priority order:
     // 1. Stored senderIndividualName on the message row (set at send time)
     // 2. User.name from the individual user record
@@ -220,7 +271,7 @@ export const getPrivateMessages = async (req: Request, res: Response): Promise<v
     };
   });
 
-  sendSuccess({ res, data: { matchId, messages: finalMessages } });
+  sendSuccess({ res, data: { matchId, messages: finalMessages, nextCursor } });
 };
 
 export const sendPrivateMessage = async (req: Request, res: Response): Promise<void> => {
@@ -482,17 +533,36 @@ export const createChatUploadUrl = async (req: Request, res: Response): Promise<
     kind: z.enum(['voice', 'image']).default('voice'),
     contentType: z.string().min(3).max(100).optional(),
     ext: z.string().max(8).optional(),
+    // Optional declared upload size (bytes). When present it is validated
+    // against the per-kind cap and signed onto the presigned PUT (hard bound).
+    contentLength: z.number().int().positive().optional(),
   });
-  const { kind, contentType, ext } = schema.parse(req.body ?? {});
+  const { kind, contentType, ext, contentLength } = schema.parse(req.body ?? {});
 
   const resolvedContentType =
     contentType || (kind === 'voice' ? 'audio/aac' : 'image/jpeg');
+  // Normalize before the allowlist check: drop any `; charset=`/`; codecs=`
+  // parameter and lowercase. This exact string is what the URL is signed with,
+  // so the client must echo it back as the PUT Content-Type header.
+  const normalizedContentType = resolvedContentType.split(';')[0].trim().toLowerCase();
+
+  if (!ALLOWED_UPLOAD_CONTENT_TYPES[kind].has(normalizedContentType)) {
+    throw new AppError('Unsupported media type', 415, 'UNSUPPORTED_MEDIA_TYPE');
+  }
+
+  // Size cap (v3 M6): reject an oversize DECLARED length up front; when declared
+  // it is also signed onto the PUT so storage rejects a mismatched body.
+  const maxBytes = kind === 'voice' ? env.S3_MAX_VOICE_BYTES : env.S3_MAX_IMAGE_BYTES;
+  if (contentLength !== undefined && contentLength > maxBytes) {
+    throw new AppError('Media exceeds the maximum allowed size', 413, 'MEDIA_TOO_LARGE');
+  }
 
   const { uploadUrl, publicUrl, key } = await createPresignedUpload({
     folder: kind,
-    contentType: resolvedContentType,
+    contentType: normalizedContentType,
     ext,
     coupleId,
+    contentLength,
   });
 
   // The bucket is private; the message stores this stable reference and playback
@@ -501,7 +571,7 @@ export const createChatUploadUrl = async (req: Request, res: Response): Promise<
 
   sendSuccess({
     res,
-    data: { uploadUrl, publicUrl, key, ref, contentType: resolvedContentType },
+    data: { uploadUrl, publicUrl, key, ref, contentType: normalizedContentType },
   });
 };
 

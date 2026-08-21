@@ -6,14 +6,64 @@ import { i18nData } from '../i18n/notif';
 import {
   upsertMatchConnectedNotification,
   upsertMatchPendingNotification,
+  clearNotificationsForMatch,
 } from './notification.service';
 import { distanceLabelBetween } from '../utils/geo';
+import { evaluateMatch, Q3_TITLES } from './matchScore';
 
 const COUPLE_GEO_SELECT = {
   locationCity: true,
   locationLatitude: true,
   locationLongitude: true,
 } as const;
+
+/** Onboarding answers slice needed by the match scorer (see matchScore.ts). */
+const SCORING_ANSWERS_SELECT = {
+  answers: { select: { questionId: true, selectedOptionIds: true } },
+} as const;
+
+/** How many couples one discovery response returns (unchanged contract). */
+const DISCOVERY_PAGE_SIZE = 10;
+/**
+ * How many candidates are fetched and scored before the page is cut. The feed
+ * is ranked by real match score, so we score a bounded pool and return the
+ * best DISCOVERY_PAGE_SIZE — a bare `take: 10` would rank an arbitrary ten.
+ */
+const DISCOVERY_POOL_SIZE = 50;
+
+/**
+ * Canonical orientation for NEW Match rows: lexicographically lower coupleId
+ * first. `@@unique([couple1Id, couple2Id])` is order-sensitive, so two
+ * simultaneous opposite-direction hellos used to slip past it as (A,B)+(B,A)
+ * duplicates. Writing new rows in one canonical orientation turns that race
+ * into a P2002 the caller resolves. Reads stay bidirectional everywhere
+ * (legacy rows exist in both orientations — no migration, no backfill), and
+ * existing rows are never re-oriented (an update into the canonical slot
+ * could collide with a legacy duplicate). Row orientation carries no meaning:
+ * every consumer resolves direction via `actionById`.
+ */
+const canonicalMatchPair = (
+  coupleIdA: string,
+  coupleIdB: string,
+): { couple1Id: string; couple2Id: string } =>
+  coupleIdA <= coupleIdB
+    ? { couple1Id: coupleIdA, couple2Id: coupleIdB }
+    : { couple1Id: coupleIdB, couple2Id: coupleIdA };
+
+/** Shape a stored notification row into the realtime emit payload. */
+const toRealtimePayload = (n: {
+  id: string;
+  type: string;
+  title: string;
+  message: string;
+  data: unknown;
+}) => ({
+  notificationId: n.id,
+  type: n.type,
+  title: n.title,
+  message: n.message,
+  data: n.data,
+});
 
 export class MatchService {
   /**
@@ -23,6 +73,9 @@ export class MatchService {
     const meSelect = {
       id: true, coupleId: true, partner1Id: true, partner2Id: true,
       blocked: true, locationCity: true, locationLatitude: true, locationLongitude: true,
+      // Scoring inputs (never returned to the client — see matchScore.ts):
+      activities: true, socialVibes: true, matchCriteria: true,
+      ...SCORING_ANSWERS_SELECT,
     } as const;
     let me;
     if (coupleMongoId) {
@@ -71,6 +124,13 @@ export class MatchService {
       coupleId: { notIn: [...selfIds, ...interactedIds, ...blockedIds] },
       isProfileComplete: true,
       isOpenToMeeting: true,
+      // Bidirectional block (v3 M2): `blockedIds` above only hides couples WE
+      // blocked. A couple that blocked US must also disappear from our feed, or
+      // they keep receiving our "say hello". Exclude any couple whose `blocked[]`
+      // array contains our canonical coupleId. `has` compiles to the array
+      // contains operator (`@>`), served by the GIN index on Couple.blocked
+      // (schema.prisma @@index([blocked], type: Gin)) — no sequential scan.
+      NOT: { blocked: { has: me.coupleId } },
     };
 
     if (cityFilter && cityFilter !== 'All City' && cityFilter !== 'All Cities' && cityFilter !== 'Unknown') {
@@ -80,19 +140,11 @@ export class MatchService {
        }
     }
 
-    const Q3_TITLES: Record<string, string> = {
-      'q3-dinners-home': 'Dinners at home',
-      'q3-dinner': 'Dinner at home',
-      'q3-restaurants': 'Exploring restaurants',
-      'q3-outdoor': 'Outdoor activities',
-      'q3-cultural': 'Cultural events',
-      'q3-drinks': 'Casual drinks',
-      'q3-trips': 'Weekend trips',
-    };
-
+    // Fetch a bounded candidate pool (same filters/exclusions as always), score
+    // every candidate against the requesting couple, and return the best page.
     const potentialCouples = await prisma.couple.findMany({
       where,
-      take: 10,
+      take: DISCOVERY_POOL_SIZE,
       select: {
         id: true,
         coupleId: true,
@@ -102,21 +154,25 @@ export class MatchService {
         bio: true,
         matchCriteria: true,
         relationshipStatus: true,
-        answers: {
-          where: { questionId: 'q3' },
-          select: { selectedOptionIds: true },
-        },
+        // Scoring inputs (never returned to the client):
+        activities: true,
+        socialVibes: true,
+        ...SCORING_ANSWERS_SELECT,
       },
     });
 
     return potentialCouples.map((c: any) => {
-      const q3Answer = c.answers?.[0];
+      const q3Answer = c.answers?.find((a: any) => a.questionId === 'q3');
       const tags: string[] = q3Answer
         ? (q3Answer.selectedOptionIds as string[])
             // Resolve ID → title; if value is already a title (no key match) keep it as-is
             .map((id: string) => Q3_TITLES[id] || id)
             .filter((v: string) => Boolean(v) && v.trim().length > 0)
         : [];
+
+      // Deterministic score + insights from real overlaps (matchScore.ts).
+      // insights is [] when nothing genuine is shared — never invented copy.
+      const { matchScore, insights } = evaluateMatch(me, c);
 
       return {
         _id: c.id,
@@ -129,13 +185,13 @@ export class MatchService {
         relationshipStatus: c.relationshipStatus || undefined,
         distance: distanceLabelBetween(me, c),
         tags,
-        matchScore: Math.floor(Math.random() * 20) + 80,
-        insights: [
-          'Both career-focused and socially intentional',
-          'Similar pace - you both prefer meeting once or twice a month',
-        ],
+        matchScore,
+        insights,
       };
-    });
+    })
+      // Best matches first; coupleId tiebreak keeps the order stable.
+      .sort((a, b) => b.matchScore - a.matchScore || a.coupleId.localeCompare(b.coupleId))
+      .slice(0, DISCOVERY_PAGE_SIZE);
   }
 
   /**
@@ -145,6 +201,9 @@ export class MatchService {
     const sayHelloSelect = {
       id: true, coupleId: true, profileName: true, primaryPhoto: true,
       locationCity: true, bio: true, activities: true, socialVibes: true, matchCriteria: true,
+      // `blocked` is needed for the bidirectional-block guard below (v3 M2).
+      blocked: true,
+      ...SCORING_ANSWERS_SELECT,
     } as const;
     let me;
     if (coupleMongoId) {
@@ -152,21 +211,31 @@ export class MatchService {
     } else {
       me = await prisma.couple.findUnique({ where: { coupleId: requestingCoupleId }, select: sayHelloSelect });
     }
-    
+
     if (!me) throw new AppError('Profile not found', 404);
 
     let targetCouple = await prisma.couple.findFirst({
       where: { OR: [{ id: targetCoupleIdStr }, { coupleId: targetCoupleIdStr }] },
-      select: {
-        id: true, coupleId: true, profileName: true, primaryPhoto: true,
-        locationCity: true, bio: true, activities: true, socialVibes: true, matchCriteria: true,
-      },
+      select: sayHelloSelect,
     });
 
     if (!targetCouple) {
        logger.info(`[MatchService] Say Hello for unknown couple ${targetCoupleIdStr} - success (no DB)`);
        return { isMatch: false };
     }
+
+    // Bidirectional block (v3 M2): refuse the hello when EITHER side has blocked
+    // the other. Covers every sayHello outcome below (new hello, skipped→pending
+    // reset, and the inline mutual-like accept). One neutral error — never leak
+    // which direction the block runs (a harassment vector in a couples app).
+    const iBlockedTarget = Array.isArray(me.blocked) && me.blocked.includes(targetCouple.coupleId);
+    const targetBlockedMe = Array.isArray(targetCouple.blocked) && targetCouple.blocked.includes(me.coupleId);
+    if (iBlockedTarget || targetBlockedMe) {
+      throw new AppError('This connection is not available', 403, 'BLOCKED');
+    }
+
+    // Deterministic compatibility for this pair — persisted on the Match row.
+    const { matchScore, insights } = evaluateMatch(me, targetCouple);
 
     // Fetch ALL rows between these two couples and pick in priority order:
     // accepted > incoming-pending > my-pending > skipped
@@ -195,14 +264,17 @@ export class MatchService {
     if (existingMatch) {
       // The other person sent us a hello — accept it
       if (existingMatch.status === 'skipped') {
-        // Reset skipped to pending; ensure initiator (me) is couple1 so getIncomingRequests finds it
+        // Reset skipped to pending. The row's orientation is left untouched:
+        // getIncomingRequests resolves direction via actionById (not column
+        // order), and re-orienting could collide with a legacy duplicate row
+        // in the opposite orientation under @@unique([couple1Id, couple2Id]).
         const updatedMatch = await prisma.match.update({
           where: { id: existingMatch.id },
           data: {
             status: 'pending',
             actionById: me.coupleId,
-            couple1Id: me.coupleId,
-            couple2Id: targetCouple.coupleId,
+            matchScore,
+            insights,
           }
         });
 
@@ -236,41 +308,53 @@ export class MatchService {
       }
 
       if (existingMatch.status === 'pending' && existingMatch.actionById !== me.coupleId) {
-          // Mutual like
-          await prisma.match.update({
-            where: { id: existingMatch.id },
-            data: { status: 'accepted', actionById: me.coupleId }
+          // Mutual like. Accept + both "You've Connected!" notification rows
+          // commit atomically: a crash mid-way could otherwise leave the
+          // couples connected with the stale "Say Hello Back" notifications
+          // still standing (or notified without the accept persisted).
+          // The pending→connected notification swap lives inside
+          // upsertMatchConnectedNotification and rolls back with the rest.
+          const [myNotif, theirNotif] = await prisma.$transaction(async (tx) => {
+            await tx.match.update({
+              where: { id: existingMatch.id },
+              data: { status: 'accepted', actionById: me.coupleId }
+            });
+
+            const mine = await upsertMatchConnectedNotification({
+              recipientId: me.coupleId,
+              senderId: targetCouple.coupleId,
+              matchId: existingMatch.id,
+              coupleId: targetCouple.coupleId,
+              profileName: targetCouple.profileName || 'Couple',
+              primaryPhoto: targetCouple.primaryPhoto,
+              location: targetCouple.locationCity,
+              bio: targetCouple.bio,
+              tags: targetCouple.activities,
+              vibes: targetCouple.socialVibes,
+              matchCriteria: targetCouple.matchCriteria,
+              emitRealtime: false, // emitted after commit below
+            }, tx);
+            const theirs = await upsertMatchConnectedNotification({
+              recipientId: targetCouple.coupleId,
+              senderId: me.coupleId,
+              matchId: existingMatch.id,
+              coupleId: me.coupleId,
+              profileName: me.profileName || 'Couple',
+              primaryPhoto: me.primaryPhoto,
+              location: me.locationCity,
+              bio: me.bio,
+              tags: me.activities,
+              vibes: me.socialVibes,
+              matchCriteria: me.matchCriteria,
+              emitRealtime: false, // emitted after commit below
+            }, tx);
+            return [mine, theirs];
           });
 
-          // Delete the original "New Connection Request" pending notifications for this match
-          // so they no longer show "Say Hello Back" after accepting.
-          // The new "You've Connected!" notifications created below replace them.
-          await upsertMatchConnectedNotification({
-            recipientId: me.coupleId,
-            senderId: targetCouple.coupleId,
-            matchId: existingMatch.id,
-            coupleId: targetCouple.coupleId,
-            profileName: targetCouple.profileName || 'Couple',
-            primaryPhoto: targetCouple.primaryPhoto,
-            location: targetCouple.locationCity,
-            bio: targetCouple.bio,
-            tags: targetCouple.activities,
-            vibes: targetCouple.socialVibes,
-            matchCriteria: targetCouple.matchCriteria,
-          });
-          await upsertMatchConnectedNotification({
-            recipientId: targetCouple.coupleId,
-            senderId: me.coupleId,
-            matchId: existingMatch.id,
-            coupleId: me.coupleId,
-            profileName: me.profileName || 'Couple',
-            primaryPhoto: me.primaryPhoto,
-            location: me.locationCity,
-            bio: me.bio,
-            tags: me.activities,
-            vibes: me.socialVibes,
-            matchCriteria: me.matchCriteria,
-          });
+          // Sockets/push fire only after the transaction committed — a
+          // notification for a rolled-back accept must never reach a phone.
+          emitRealtimeNotification(me.coupleId, toRealtimePayload(myNotif));
+          emitRealtimeNotification(targetCouple.coupleId, toRealtimePayload(theirNotif));
 
           // Emit match:accepted so both couples' PrivateChatScreen lists refresh instantly
           const io = (global as any).io;
@@ -290,14 +374,52 @@ export class MatchService {
       return { isMatch: false };
     }
 
-    const newMatch = await prisma.match.create({
-      data: {
-        couple1Id: me.coupleId,
-        couple2Id: targetCouple.coupleId,
-        status: 'pending',
-        actionById: me.coupleId,
+    let newMatch;
+    try {
+      newMatch = await prisma.match.create({
+        data: {
+          // Canonical orientation (lower coupleId first) so two simultaneous
+          // opposite-direction hellos collide on @@unique([couple1Id, couple2Id])
+          // instead of creating a duplicate (A,B)+(B,A) pair. Direction is
+          // carried by actionById, never by column order.
+          ...canonicalMatchPair(me.coupleId, targetCouple.coupleId),
+          status: 'pending',
+          actionById: me.coupleId,
+          matchScore,
+          insights,
+        }
+      });
+    } catch (err: any) {
+      // Concurrent duplicate hello: the @@unique([couple1Id, couple2Id])
+      // constraint fired because another request won the check-then-create
+      // race. The row exists — resolve it instead of surfacing a 500.
+      if (err?.code === 'P2002') {
+        // Re-query BOTH orientations: the winner may be a canonical row from
+        // this code or a legacy row written the other way around.
+        const existing = await prisma.match.findFirst({
+          where: {
+            OR: [
+              { couple1Id: me.coupleId, couple2Id: targetCouple.coupleId },
+              { couple1Id: targetCouple.coupleId, couple2Id: me.coupleId },
+            ],
+          },
+          orderBy: { createdAt: 'asc' },
+        });
+        if (existing) {
+          if (existing.status === 'accepted') {
+            return { isMatch: true, matchId: existing.id };
+          }
+          if (existing.status === 'pending' && existing.actionById !== me.coupleId) {
+            // Both couples said hello at the same moment and the other side's
+            // create won. Their row is an incoming pending for us — this is a
+            // mutual like, so accept it exactly like the non-race path would.
+            return this.acceptPendingMatchRecord(existing, me);
+          }
+          return { isMatch: false };
+        }
       }
-    });
+      throw err;
+    }
 
     (async () => {
       try {
@@ -351,14 +473,21 @@ export class MatchService {
     });
 
     if (!existing) {
-      await prisma.match.create({
-        data: { 
-            couple1Id: me.coupleId, 
-            couple2Id: target.coupleId, 
-            status: 'skipped', 
-            actionById: me.coupleId 
-        }
-      });
+      try {
+        await prisma.match.create({
+          data: {
+            // Canonical orientation — see canonicalMatchPair. Keeps two
+            // simultaneous mutual skips from creating an (A,B)+(B,A) pair.
+            ...canonicalMatchPair(me.coupleId, target.coupleId),
+            status: 'skipped',
+            actionById: me.coupleId
+          }
+        });
+      } catch (err: any) {
+        // Concurrent interaction won the check-then-create race — the pair row
+        // already exists, which is exactly the end state a skip wants.
+        if (err?.code !== 'P2002') throw err;
+      }
     }
     // If already accepted, leave it alone; if already skipped, no need to duplicate
 
@@ -422,6 +551,132 @@ export class MatchService {
     }).filter(Boolean);
   }
 
+  /**
+   * Hellos WE sent that the other couple has not answered yet — the exact
+   * mirror of getIncomingRequests (actionById = me instead of ≠ me), so the
+   * app can finally show "you said hello, they haven't replied" instead of
+   * the request vanishing into nowhere. Same card shape as incoming/matches.
+   * Blocked couples are filtered like getMatches does (the legacy
+   * /couples/blocks path never deleted match rows).
+   */
+  async getSentRequests(requestingCoupleId: string, coupleMongoId?: string) {
+    let meId: string;
+    let meGeo: { locationCity?: string | null; locationLatitude?: number | null; locationLongitude?: number | null };
+    if (coupleMongoId) {
+      const meProfile = await prisma.couple.findUnique({
+        where: { id: coupleMongoId },
+        select: { coupleId: true, ...COUPLE_GEO_SELECT },
+      });
+      if (!meProfile) throw new AppError('Profile not found', 404);
+      meId = meProfile.coupleId;
+      meGeo = meProfile;
+    } else {
+      const me = await prisma.couple.findUnique({
+        where: { coupleId: requestingCoupleId },
+        select: { id: true, coupleId: true, ...COUPLE_GEO_SELECT },
+      });
+      if (!me) throw new AppError('Profile not found', 404);
+      meId = me.coupleId;
+      meGeo = me;
+    }
+
+    const meBlockedRow = await prisma.couple.findUnique({
+      where: { coupleId: meId },
+      select: { blocked: true },
+    });
+    const blockedSet = new Set(meBlockedRow?.blocked ?? []);
+
+    const COUPLE_CARD_SELECT = {
+      id: true, coupleId: true, profileName: true, primaryPhoto: true, locationCity: true,
+      locationLatitude: true, locationLongitude: true,
+    } as const;
+    const pending = await prisma.match.findMany({
+      where: {
+        status: 'pending',
+        actionById: meId,
+        OR: [{ couple1Id: meId }, { couple2Id: meId }],
+      },
+      orderBy: { createdAt: 'desc' },
+      select: {
+        id: true, couple1Id: true, couple2Id: true, createdAt: true,
+        couple1: { select: COUPLE_CARD_SELECT },
+        couple2: { select: COUPLE_CARD_SELECT },
+      },
+    });
+
+    return pending.map((m: any) => {
+      const otherCouple = m.couple1Id === meId ? m.couple2 : m.couple1;
+      if (!otherCouple) return null;
+      if (blockedSet.has(otherCouple.coupleId) || blockedSet.has(otherCouple.id)) return null;
+
+      return {
+        _id: m.id,
+        id: m.id,
+        coupleId: otherCouple.coupleId,
+        profileName: otherCouple.profileName || 'Someone',
+        primaryPhoto: otherCouple.primaryPhoto,
+        location: otherCouple.locationCity || 'Unknown',
+        distance: distanceLabelBetween(meGeo, otherCouple),
+        status: 'pending',
+        createdAt: m.createdAt
+      };
+    }).filter(Boolean);
+  }
+
+  /**
+   * One cheap call for the Couples-tab entry card: how many couples are
+   * waiting on OUR answer, how many hellos WE have pending, how many couples
+   * we're connected with. Counted with the same blocked filter the list
+   * endpoints apply, so a badge can never disagree with the list behind it.
+   */
+  async getConnectionsSummary(requestingCoupleId: string, coupleMongoId?: string) {
+    let meId: string;
+    if (coupleMongoId) {
+      const meProfile = await prisma.couple.findUnique({
+        where: { id: coupleMongoId },
+        select: { coupleId: true },
+      });
+      if (!meProfile) throw new AppError('Profile not found', 404);
+      meId = meProfile.coupleId;
+    } else {
+      const me = await prisma.couple.findUnique({
+        where: { coupleId: requestingCoupleId },
+        select: { coupleId: true },
+      });
+      if (!me) throw new AppError('Profile not found', 404);
+      meId = me.coupleId;
+    }
+
+    const meBlockedRow = await prisma.couple.findUnique({
+      where: { coupleId: meId },
+      select: { blocked: true },
+    });
+    const blockedSet = new Set(meBlockedRow?.blocked ?? []);
+
+    const rows = await prisma.match.findMany({
+      where: {
+        OR: [{ couple1Id: meId }, { couple2Id: meId }],
+        status: { in: ['pending', 'accepted'] },
+      },
+      select: {
+        couple1Id: true, couple2Id: true, actionById: true, status: true,
+        couple1: { select: { id: true, coupleId: true } },
+        couple2: { select: { id: true, coupleId: true } },
+      },
+    });
+
+    let incoming = 0, sent = 0, connected = 0;
+    for (const m of rows) {
+      const other = m.couple1Id === meId ? m.couple2 : m.couple1;
+      if (!other) continue;
+      if (blockedSet.has(other.coupleId) || blockedSet.has(other.id)) continue;
+      if (m.status === 'accepted') connected++;
+      else if (m.actionById === meId) sent++;
+      else incoming++;
+    }
+    return { incoming, sent, connected };
+  }
+
   async getMatches(requestingCoupleId: string, coupleMongoId?: string) {
     let meId: string;
     let meGeo: { locationCity?: string | null; locationLatitude?: number | null; locationLongitude?: number | null };
@@ -442,6 +697,12 @@ export class MatchService {
       meId = me.coupleId;
       meGeo = me;
     }
+
+    const meBlocked = await prisma.couple.findUnique({
+      where: { coupleId: meId },
+      select: { blocked: true },
+    });
+    const blockedSet = new Set(meBlocked?.blocked ?? []);
 
     const matches = await prisma.match.findMany({ 
       where: { OR: [{ couple1Id: meId }, { couple2Id: meId }], status: 'accepted' },
@@ -475,6 +736,9 @@ export class MatchService {
     return matches.map((m: any) => {
         const otherCouple = m.couple1Id === meId ? m.couple2 : m.couple1;
         if (!otherCouple) return null;
+        // Safety net: a couple blocked through the legacy /couples/blocks path
+        // (which never deleted match rows) must not resurface in Connections.
+        if (blockedSet.has(otherCouple.coupleId) || blockedSet.has(otherCouple.id)) return null;
 
         return {
           _id: m.id,
@@ -499,46 +763,73 @@ export class MatchService {
     const otherCoupleId =
       match.couple1Id === me.coupleId ? match.couple2Id : match.couple1Id;
 
-    // Batch: update the match row + fetch both couple profiles in parallel.
-    const [, targetCouple, meFull] = await Promise.all([
-      prisma.match.update({
-        where: { id: match.id },
-        data: { status: 'accepted', actionById: me.coupleId },
-      }),
+    // Profile reads carry no write risk — fetch both in parallel up front.
+    const [targetCouple, meFull] = await Promise.all([
       prisma.couple.findUnique({ where: { coupleId: initiatorCoupleId } }),
       prisma.couple.findUnique({ where: { coupleId: me.coupleId } }),
     ]);
 
+    // Bidirectional block (v3 M2): never connect a pair where either side has
+    // blocked the other. Same neutral, direction-agnostic refusal as sayHello —
+    // this is the choke point for the accept endpoint + the mutual-like race
+    // path, so an accept can't slip a block. (When a profile row is missing we
+    // can't evaluate blocks; the legacy tolerate-missing-profile behavior below
+    // still applies.)
     if (targetCouple && meFull) {
-      // Fire both connected notifications in parallel.
-      await Promise.all([
-        upsertMatchConnectedNotification({
-          recipientId: me.coupleId,
-          senderId: targetCouple.coupleId,
-          matchId: match.id,
-          coupleId: targetCouple.coupleId,
-          profileName: targetCouple.profileName || 'Couple',
-          primaryPhoto: targetCouple.primaryPhoto,
-          location: targetCouple.locationCity,
-          bio: targetCouple.bio,
-          tags: targetCouple.activities,
-          vibes: targetCouple.socialVibes,
-          matchCriteria: targetCouple.matchCriteria,
-        }),
-        upsertMatchConnectedNotification({
-          recipientId: targetCouple.coupleId,
-          senderId: me.coupleId,
-          matchId: match.id,
-          coupleId: me.coupleId,
-          profileName: meFull.profileName || 'Couple',
-          primaryPhoto: meFull.primaryPhoto,
-          location: meFull.locationCity,
-          bio: meFull.bio,
-          tags: meFull.activities,
-          vibes: meFull.socialVibes,
-          matchCriteria: meFull.matchCriteria,
-        }),
-      ]);
+      const meBlockedThem = Array.isArray(meFull.blocked) && meFull.blocked.includes(targetCouple.coupleId);
+      const themBlockedMe = Array.isArray(targetCouple.blocked) && targetCouple.blocked.includes(meFull.coupleId);
+      if (meBlockedThem || themBlockedMe) {
+        throw new AppError('This connection is not available', 403, 'BLOCKED');
+      }
+    }
+
+    // Accept + both "You've Connected!" rows commit atomically (same rationale
+    // as the sayHello mutual-like path: no connected-but-unnotified half state).
+    // When a profile is missing the accept still persists, matching the old
+    // behavior — only the notifications are skipped.
+    const notifRows = await prisma.$transaction(async (tx) => {
+      await tx.match.update({
+        where: { id: match.id },
+        data: { status: 'accepted', actionById: me.coupleId },
+      });
+
+      if (!targetCouple || !meFull) return null;
+
+      const mine = await upsertMatchConnectedNotification({
+        recipientId: me.coupleId,
+        senderId: targetCouple.coupleId,
+        matchId: match.id,
+        coupleId: targetCouple.coupleId,
+        profileName: targetCouple.profileName || 'Couple',
+        primaryPhoto: targetCouple.primaryPhoto,
+        location: targetCouple.locationCity,
+        bio: targetCouple.bio,
+        tags: targetCouple.activities,
+        vibes: targetCouple.socialVibes,
+        matchCriteria: targetCouple.matchCriteria,
+        emitRealtime: false, // emitted after commit below
+      }, tx);
+      const theirs = await upsertMatchConnectedNotification({
+        recipientId: targetCouple.coupleId,
+        senderId: me.coupleId,
+        matchId: match.id,
+        coupleId: me.coupleId,
+        profileName: meFull.profileName || 'Couple',
+        primaryPhoto: meFull.primaryPhoto,
+        location: meFull.locationCity,
+        bio: meFull.bio,
+        tags: meFull.activities,
+        vibes: meFull.socialVibes,
+        matchCriteria: meFull.matchCriteria,
+        emitRealtime: false, // emitted after commit below
+      }, tx);
+      return { mine, theirs };
+    });
+
+    if (notifRows && targetCouple) {
+      // Post-commit only: sockets/push must never announce a rolled-back accept.
+      emitRealtimeNotification(me.coupleId, toRealtimePayload(notifRows.mine));
+      emitRealtimeNotification(targetCouple.coupleId, toRealtimePayload(notifRows.theirs));
 
       const io = (global as any).io;
       if (io) {
@@ -630,31 +921,27 @@ export class MatchService {
     });
     if (!target) throw new AppError('Target profile not found', 404);
 
-    await prisma.match.deleteMany({
-      where: {
-        OR: [{ couple1Id: me.coupleId, couple2Id: target.coupleId }, { couple1Id: target.coupleId, couple2Id: me.coupleId }],
-        status: 'pending'
-      }
-    });
+    const rejectWhere = {
+      OR: [{ couple1Id: me.coupleId, couple2Id: target.coupleId }, { couple1Id: target.coupleId, couple2Id: me.coupleId }],
+      status: 'pending' as const,
+    };
+    // Capture the ids first: the deleted matches' notifications must die with
+    // them. A surviving "New Connection Request!" row for a deleted match is a
+    // trap — tapping it later falls through acceptMatch → sayHello and silently
+    // re-sends a hello to the couple that was just rejected.
+    const rejectedMatches = await prisma.match.findMany({ where: rejectWhere, select: { id: true } });
+    await prisma.match.deleteMany({ where: rejectWhere });
+    for (const m of rejectedMatches) {
+      await clearNotificationsForMatch(m.id).catch(() => {});
+    }
 
-    const notification = await prisma.notification.create({
-        data: {
-          recipientId: target.coupleId,
-          senderId: me.coupleId,
-          type: 'system',
-          title: "Connection Update",
-          message: "A couple decided not to connect at this time.",
-          data: { ...i18nData('match.rejected') },
-        }
-    });
-
-    emitRealtimeNotification(target.coupleId, {
-      notificationId: notification.id,
-      type: notification.type,
-      title: notification.title,
-      message: notification.message,
-      data: notification.data,
-    });
+    // NO rejection notification. Deliberate product change (2026-08-21,
+    // re-audit "emotional misfires"): there is no reason to tell a couple
+    // they were turned down — the request simply, quietly stops being pending
+    // on their side, the same way every considerate social product handles it.
+    // A double-tapped decline also used to send the row TWICE (the create was
+    // unconditional even when deleteMany matched zero rows). Reversible: the
+    // old block lives in git history at this commit^.
 
     return { success: true };
   }
@@ -731,6 +1018,11 @@ export class MatchService {
       prisma.message.deleteMany({ where: { matchId: { in: blockedMatchIds } } }),
       prisma.match.deleteMany({ where: blockWhere }),
     ]);
+    // Retire both sides' match/message notifications for the dead matches —
+    // they point at rows that no longer exist and would dead-end any tap.
+    for (const mid of blockedMatchIds) {
+      await clearNotificationsForMatch(mid).catch(() => {});
+    }
 
     // 3. Emit event to trigger UI refresh for blocker
     const io = (global as any).io;
@@ -739,6 +1031,10 @@ export class MatchService {
         targetCoupleId: target.coupleId, 
         action: 'blocked' 
       });
+    // The BLOCKED side must learn too — their open thread pointed at a match
+    // row that no longer exists; without this they could keep typing into a
+    // void. The client treats it like an unfriend exit.
+    io.to(`couple:${target.coupleId}`).emit('match:accepted', { targetCoupleId: me.coupleId, action: 'blocked' });
     }
 
     return { success: true };
@@ -772,6 +1068,10 @@ export class MatchService {
       prisma.message.deleteMany({ where: { matchId: { in: unfriendMatchIds } } }),
       prisma.match.deleteMany({ where: unfriendWhere }),
     ]);
+    // Same cleanup as block: no notification may outlive its match.
+    for (const mid of unfriendMatchIds) {
+      await clearNotificationsForMatch(mid).catch(() => {});
+    }
 
     // Notify both sides so UI updates immediately
     const io = (global as any).io;

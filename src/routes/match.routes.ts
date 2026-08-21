@@ -11,6 +11,8 @@ import {
   validateMatchAction,
   refreshDiscovery,
   getIncomingRequests,
+  getSentRequests,
+  getConnectionsSummary,
   acceptMatch,
   rejectMatch,
   blockCouple,
@@ -48,6 +50,13 @@ router.get('/', asyncHandler(getMatches));
 
 // GET /api/v1/matches/incoming -> gets pending requests
 router.get('/incoming', asyncHandler(getIncomingRequests));
+
+// GET /api/v1/matches/sent -> pending hellos WE sent (mirror of /incoming)
+router.get('/sent', asyncHandler(getSentRequests));
+
+// GET /api/v1/matches/summary -> {incoming, sent, connected} counts for the
+// Couples-tab connections card
+router.get('/summary', asyncHandler(getConnectionsSummary));
 
 // POST /api/v1/matches/accept -> accept a pending request
 router.post('/accept', validateMatchAction, asyncHandler(acceptMatch));

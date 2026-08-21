@@ -582,6 +582,11 @@ export class CommunityService {
       data: updateData,
     });
 
+    // A renamed/re-covered group used to keep its old identity in every
+    // member's list for up to ~45s (30s server cache + 15s client cache) —
+    // join/leave/create all invalidate; edit was the one writer that didn't.
+    await this.invalidateCommListCache(requestingCoupleId);
+
     return community;
   }
 

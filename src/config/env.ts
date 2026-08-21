@@ -9,11 +9,21 @@ const envSchema = z.object({
   DATABASE_URL: z.string().min(1, 'DATABASE_URL is required'),
   JWT_ACCESS_SECRET: z.string().min(32, 'JWT_ACCESS_SECRET must be at least 32 characters'),
   JWT_REFRESH_SECRET: z.string().min(32, 'JWT_REFRESH_SECRET must be at least 32 characters'),
+  // Access-token lifetime. DELIBERATELY unchanged at 7d (H4 decision): the
+  // admin panel authenticates with these same access tokens and has NO refresh
+  // flow, so a shorter default would silently log admins out mid-session.
+  // Logout containment comes from Redis-side revocation instead — the jti
+  // denylist (utils/jwt.ts) plus the per-user watermark
+  // (services/tokenDenylist.ts), both enforced in middleware/authenticate.ts
+  // and the socket handshake. Shortening this later (once the admin panel has
+  // a refresh flow) is a product/security decision that goes through PLAN.md
+  // (RULES.md §3), not a silent edit.
   JWT_ACCESS_EXPIRES_IN: z.string().default('7d'),
   JWT_REFRESH_EXPIRES_IN: z.string().default('90d'),
   CORS_ORIGINS: z.string().default('http://localhost:8081'),
   RATE_LIMIT_WINDOW_MS: z.string().default('900000').transform(Number),
   RATE_LIMIT_MAX: z.string().default('10').transform(Number),
+
   // Optional — only required if features are enabled
   REDIS_URL: z.string().optional(),
   CLOUDINARY_CLOUD_NAME: z.string().optional(),
@@ -32,6 +42,14 @@ const envSchema = z.object({
   // S3_BUCKET when unset (dev), but production should set a public bucket.
   S3_IMAGE_BUCKET: z.string().optional(),
   S3_IMAGE_PUBLIC_BASE_URL: z.string().optional(),
+  // Hard size caps (bytes) for direct-to-storage presigned uploads. The
+  // presigned PUT bypasses the app's 10mb JSON body limit and streams straight
+  // to the bucket, so without a cap a leaked token could push an arbitrarily
+  // large object. Defaults: 10 MiB images, 25 MiB voice notes. Enforced in
+  // chat.controller.createChatUploadUrl and bound onto the presigned PUT when
+  // the client declares its length (src/lib/storage.ts).
+  S3_MAX_IMAGE_BYTES: z.string().default(String(10 * 1024 * 1024)).transform(Number),
+  S3_MAX_VOICE_BYTES: z.string().default(String(25 * 1024 * 1024)).transform(Number),
   RENDER_EXTERNAL_URL: z.string().optional(),
   APP_URL: z.string().optional(),
   RAILWAY_PUBLIC_DOMAIN: z.string().optional(),
@@ -42,10 +60,45 @@ const envSchema = z.object({
   TWILIO_AUTH_TOKEN: z.string().optional(),
   TWILIO_PHONE_NUMBER: z.string().optional(),
 
+  // ─── SMS abuse guard (src/services/abuseGuard.ts) ────────────────────────────
+  // Layered spend protection for every OTP/invite SMS — the unauthenticated
+  // /auth/send-otp and /auth/invite-partner endpoints spend real Twilio money.
+  // All optional with safe defaults: existing deployments boot unchanged.
+  //
+  // Comma-separated E.164 prefixes SMS may be sent to (the app is India-market).
+  // Destinations outside these corridors are refused outright — classic SMS
+  // pumping targets foreign premium-rate ranges.
+  SMS_ALLOWED_PREFIXES: z.string().default('+91'),
+  // Daily caps (UTC day), each its own Redis counter:
+  //  - per destination phone: the legit ceiling for OTP retry pain;
+  SMS_PHONE_DAILY_CAP: z.string().default('6').transform(Number),
+  //  - per 8-digit E.164 prefix (one 10k-number block): catches
+  //    sequential-range pumping that stays under the per-phone cap;
+  SMS_PREFIX_DAILY_CAP: z.string().default('30').transform(Number),
+  //  - per caller IP, on top of the 15-minute per-IP burst limiter;
+  SMS_IP_DAILY_CAP: z.string().default('20').transform(Number),
+  //  - global kill-switch across ALL guarded SMS: when exceeded, sends answer
+  //    503 until the UTC day rolls over. Incremented only after every other
+  //    check passes. Set to 0 to halt all OTP/invite SMS immediately.
+  SMS_DAILY_GLOBAL_CAP: z.string().default('2000').transform(Number),
+  // Optional ops webhook: POSTed (fire-and-forget, never blocks a request) the
+  // first time any SMS guard layer trips per UTC day.
+  ALERT_WEBHOOK_URL: z.string().optional(),
+
   // ─── WhatsApp notifications (Twilio) ─────────────────────────────────────────
   // Master switch. Keep 'false' until a WhatsApp sender + template are approved,
   // otherwise every notification attempts a (failing) WhatsApp send.
   WHATSAPP_NOTIFICATIONS_ENABLED: z.string().default('false').transform((v) => v === 'true'),
+  // Cycle nudges are parked as a later feature (Arfam, 2026-08-20): default OFF
+  // until the copy is rewritten to be inclusive. The notifier code is retained;
+  // flip to 'true' to re-enable. The mobile cycle surface is gated in step
+  // behind CYCLE_ENABLED in sawa/src/Utils/featureFlags.ts.
+  CYCLE_NOTIFIER_ENABLED: z.string().default('false').transform((v) => v === 'true'),
+  // The subscription/trial notifier solicits a Prime purchase the app cannot
+  // make (IAP surface removed for App Store 3.1.1) — OFF until Prime ships as
+  // compliant IAP. Residual subscription rows from rejected-era builds would
+  // otherwise trigger 'Subscribe to Sawa Prime' pushes on iPhones.
+  SUBSCRIPTION_NOTIFIER_ENABLED: z.string().default('false').transform((v) => v === 'true'),
   // The WhatsApp-enabled sender in Twilio, e.g. 'whatsapp:+14155238886' (sandbox)
   // or 'whatsapp:+<your approved business number>'.
   TWILIO_WHATSAPP_FROM: z.string().optional(),
@@ -65,6 +118,14 @@ const envSchema = z.object({
   // bootstrapAdmin.ts). Set both in Railway env vars to enable admin login.
   ADMIN_EMAIL: z.string().optional(),
   ADMIN_PASSWORD: z.string().optional(),
+
+  // ─── Destructive-operation guard ─────────────────────────────────────────────
+  // POST /admin/flush-database TRUNCATEs every table. Default posture is REFUSE
+  // in production: the flush endpoint hard-refuses unless this is explicitly
+  // 'true' AND the caller supplies the exact ?confirm=<phrase> (see
+  // admin.controller.flushDatabase). Keeps a leaked admin token or a fat-finger
+  // from wiping prod. Never set this in a real production environment.
+  ALLOW_PROD_DB_FLUSH: z.string().default('false').transform((v) => v === 'true'),
 
   // ─── Subscriptions ──────────────────────────────────────────────────────────
   // Master switch for entitlement ENFORCEMENT. Keep 'false' until the paywall +

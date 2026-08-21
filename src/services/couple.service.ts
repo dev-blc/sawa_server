@@ -3,7 +3,9 @@ import { AppError } from '../utils/AppError';
 import { logger } from '../utils/logger';
 import { emitRealtimeNotification } from '../utils/realtime';
 import { i18nData } from '../i18n/notif';
-import { materializeImage, materializeImages } from '../lib/storage';
+import { materializeImageLoose, deleteCoupleMedia } from '../lib/storage';
+import { cacheInvalidatePattern } from '../lib/cache';
+import { ageFromDobString } from '../utils/age';
 
 export class CoupleService {
   /**
@@ -28,123 +30,154 @@ export class CoupleService {
         logger.warn(`[CoupleService.setupProfile] Partners attempted to use same email: ${data.yourEmail}`);
     }
 
-    let partner = null;
-    
-    // 1. Update primary user's details (Non-blocking on email conflict)
-    try {
-      await prisma.user.update({
+    // All writes (both user rows + the couple row) commit atomically: a crash
+    // mid-way used to be able to leave a renamed primary user with no couple
+    // row, or a couple pointing at a partner that was never created.
+    //
+    // Email-conflict semantics are preserved but implemented as an in-tx
+    // pre-check instead of the old catch-P2002-and-retry: a failed statement
+    // aborts a Postgres transaction, so catching inside one can't work. The
+    // residual check-then-write race (someone commits the same email between
+    // our check and our write) still raises P2002 — the transaction rolls
+    // back untouched and runTransaction() is retried once below, where the
+    // pre-check now sees the committed winner and skips the email.
+    const runTransaction = () => prisma.$transaction(async (tx) => {
+      /** True when `email` can be written to `excludeUserId` without violating
+       *  the unique constraint (unset emails are never "available"). */
+      const emailAvailable = async (
+        email: string | undefined,
+        excludeUserId?: string,
+      ): Promise<boolean> => {
+        if (!email) return false;
+        const owner = await tx.user.findFirst({ where: { email }, select: { id: true } });
+        return !owner || owner.id === excludeUserId;
+      };
+
+      // ── Caller-aware, role-preserving ────────────────────────────────────
+      // "yourName" always means THE CALLER's own name — but the caller is not
+      // always the primary. When partner2 finishes onboarding on her own phone
+      // (the default two-phones-on-one-sofa day-one path), the old code
+      // stomped role:'primary' onto her, then looked for a role:'partner' row
+      // (none — SHE was it), and CREATED A THIRD, PHONE-LESS GHOST USER from
+      // partnerName. partner2Id then pointed at the ghost: every partner
+      // lookup for the couple resolved to a token-less row and every Us-space
+      // push for that couple died silently, forever.
+      const caller = await tx.user.findUnique({ where: { id: primaryUserId } });
+      const callerRole: 'primary' | 'partner' =
+        caller?.role === 'partner' ? 'partner' : 'primary';
+
+      // 1. Update the CALLER with their own details. Role is preserved, only
+      // defaulted for a legacy row that never had one.
+      const canUseYourEmail = await emailAvailable(data.yourEmail, primaryUserId);
+      if (data.yourEmail && !canUseYourEmail) {
+        logger.warn(`[CoupleService.setupProfile] Caller email already exists, skipping email update.`);
+      }
+      await tx.user.update({
         where: { id: primaryUserId },
         data: {
           name: data.yourName,
           dob: data.yourDob || undefined,
-          email: data.yourEmail || undefined,
-          role: 'primary'
+          email: canUseYourEmail ? data.yourEmail : undefined,
+          role: callerRole,
         }
       });
+
+      // 2. The OTHER half is whoever else is in the couple — found by id, not
+      // by role, so a caller who IS the partner finds the primary (and never
+      // manufactures a ghost).
+      let partner = await tx.user.findFirst({
+          where: { coupleId, NOT: { id: primaryUserId } }
+      });
+
+      if (partner) {
+          const canUsePartnerEmail = await emailAvailable(data.partnerEmail, partner.id);
+          if (data.partnerEmail && !canUsePartnerEmail) {
+            logger.warn(`[CoupleService.setupProfile] Partner email already exists, skipping email update.`);
+          }
+          await tx.user.update({
+              where: { id: partner.id },
+              data: {
+                  name: data.partnerName,
+                  dob: data.partnerDob || undefined,
+                  email: canUsePartnerEmail ? data.partnerEmail : undefined,
+              }
+          });
+      } else if (data.partnerName) {
+          // Solo signup (partner never verified): create the placeholder with
+          // the role OPPOSITE the caller so the pair stays consistent.
+          const canUsePartnerEmail = await emailAvailable(data.partnerEmail);
+          if (data.partnerEmail && !canUsePartnerEmail) {
+            logger.warn(`[CoupleService.setupProfile] Partner email already exists during create, skipping email.`);
+          }
+          partner = await tx.user.create({
+              data: {
+                  name: data.partnerName,
+                  dob: data.partnerDob || undefined,
+                  email: canUsePartnerEmail ? data.partnerEmail : undefined,
+                  role: callerRole === 'primary' ? 'partner' : 'primary',
+                  coupleId: coupleId
+              }
+          });
+      }
+
+      // 3. partner1 = primary, partner2 = partner — from ACTUAL roles, with
+      // the caller/other pair as the authoritative fallback.
+      const users = await tx.user.findMany({ where: { coupleId } });
+      const primaryUser = users.find(u => u.role === 'primary');
+      const partnerUser = users.find(u => u.role === 'partner' && u.id !== primaryUser?.id);
+
+      const partner1Id =
+        primaryUser?.id ?? (callerRole === 'primary' ? primaryUserId : partner?.id ?? null);
+      const partner2Id =
+        partnerUser?.id ?? (callerRole === 'primary' ? partner?.id ?? null : primaryUserId);
+
+      // profileName always reads primary-first, regardless of who submitted.
+      const primaryName = callerRole === 'primary' ? data.yourName : data.partnerName;
+      const secondaryName = callerRole === 'primary' ? data.partnerName : data.yourName;
+
+      // 4. Upsert the Couple document
+      const existingCouple = await tx.couple.findUnique({ where: { coupleId } });
+
+      if (!existingCouple) {
+        await tx.couple.create({
+          data: {
+            coupleId,
+            partner1Id,
+            partner2Id,
+            profileName: `${primaryName} & ${secondaryName}`,
+            relationshipStatus: data.relationshipStatus,
+            locationCity: data.location?.city || 'Unknown',
+            locationCountry: data.location?.country || 'India',
+            isProfileComplete: false,
+          }
+        });
+      } else {
+        await tx.couple.update({
+          where: { id: existingCouple.id },
+          data: {
+            partner1Id: partner1Id || existingCouple.partner1Id,
+            partner2Id: partner2Id || existingCouple.partner2Id,
+            profileName: `${primaryName} & ${secondaryName}`,
+            relationshipStatus: data.relationshipStatus,
+            locationCity: data.location?.city || undefined,
+            locationCountry: data.location?.country || undefined,
+          }
+        });
+      }
+    }, { timeout: 10000 });
+
+    try {
+      await runTransaction();
     } catch (err: any) {
-        if (err.code === 'P2002' && err.meta?.target?.includes('email')) {
-            logger.warn(`[CoupleService.setupProfile] Primary email already exists, skipping email update.`);
-            // Update just the name/dob
-            await prisma.user.update({
-                where: { id: primaryUserId },
-                data: { name: data.yourName, dob: data.yourDob || undefined, role: 'primary' }
-            });
-        } else {
-            throw err;
-        }
-    }
-
-    // 2. Find and update the partner user (Non-blocking on email conflict)
-    partner = await prisma.user.findFirst({
-        where: { coupleId, role: 'partner' }
-    });
-    
-    if (partner) {
-        try {
-            await prisma.user.update({
-                where: { id: partner.id },
-                data: {
-                    name: data.partnerName,
-                    dob: data.partnerDob || undefined,
-                    email: data.partnerEmail || undefined,
-                }
-            });
-        } catch (err: any) {
-            if (err.code === 'P2002' && err.meta?.target?.includes('email')) {
-                logger.warn(`[CoupleService.setupProfile] Partner email already exists, skipping email update.`);
-                await prisma.user.update({
-                    where: { id: partner.id },
-                    data: { name: data.partnerName, dob: data.partnerDob || undefined }
-                });
-            } else {
-                throw err;
-            }
-        }
-    } else if (data.partnerName) {
-        try {
-            partner = await prisma.user.create({
-                data: {
-                    name: data.partnerName,
-                    dob: data.partnerDob || undefined,
-                    email: data.partnerEmail || undefined,
-                    role: 'partner',
-                    coupleId: coupleId
-                }
-            });
-        } catch (err: any) {
-            if (err.code === 'P2002' && err.meta?.target?.includes('email')) {
-                logger.warn(`[CoupleService.setupProfile] Partner email already exists during create, skipping email.`);
-                partner = await prisma.user.create({
-                    data: {
-                        name: data.partnerName,
-                        dob: data.partnerDob || undefined,
-                        role: 'partner',
-                        coupleId: coupleId
-                    }
-                });
-            } else {
-                throw err;
-            }
-        }
-    }
-
-    // 3. Ensure role-based assignment for partner1/partner2 IDs
-    // We should always keep the 'primary' user as partner1 and 'partner' user as partner2
-    const users = await prisma.user.findMany({ where: { coupleId } });
-    const primaryUser = users.find(u => u.role === 'primary');
-    const partnerUser = users.find(u => u.role === 'partner');
-
-    const partner1Id = primaryUser?.id || primaryUserId; 
-    const partner2Id = partnerUser?.id || partner?.id || null;
-
-    // 4. Upsert the Couple document
-    const existingCouple = await prisma.couple.findUnique({ where: { coupleId } });
-    
-    if (!existingCouple) {
-      await prisma.couple.create({
-        data: {
-          coupleId,
-          partner1Id,
-          partner2Id,
-          profileName: `${data.yourName} & ${data.partnerName}`,
-          relationshipStatus: data.relationshipStatus,
-          locationCity: data.location?.city || 'Unknown',
-          locationCountry: data.location?.country || 'India',
-          isProfileComplete: false,
-        }
-      });
-    } else {
-      await prisma.couple.update({
-        where: { id: existingCouple.id },
-        data: {
-          partner1Id: partner1Id || existingCouple.partner1Id,
-          partner2Id: partner2Id || existingCouple.partner2Id,
-          profileName: `${data.yourName} & ${data.partnerName}`,
-          relationshipStatus: data.relationshipStatus,
-          locationCity: data.location?.city || undefined,
-          locationCountry: data.location?.country || undefined,
-        }
-      });
+      if (err?.code === 'P2002') {
+        // A concurrent writer won a unique race (email, or the couple row)
+        // mid-transaction. Nothing was committed — retry once so the in-tx
+        // pre-checks observe the winner and degrade gracefully, exactly like
+        // the old catch-P2002 path did. A second P2002 propagates.
+        await runTransaction();
+        return;
+      }
+      throw err;
     }
   }
 
@@ -157,25 +190,34 @@ export class CoupleService {
       primaryPhotoBase64?: string; 
       secondaryPhotosBase64?: string[]; 
       keepSecondaryPhotoUrls?: string[];
+      removePrimaryPhoto?: boolean;
     }
   ) {
     const updateData: any = {};
-    
+
+    // Deletion has to be explicit: an absent primaryPhotoBase64 means "keep",
+    // so removing the photo client-side and saving used to change nothing
+    // while the UI said "Profile updated".
+    if (data.removePrimaryPhoto && !data.primaryPhotoBase64) {
+      updateData.primaryPhoto = null;
+    }
+
     if (data.primaryPhotoBase64 && data.primaryPhotoBase64.length > 10) {
-      const dataUri = data.primaryPhotoBase64.startsWith('data:')
-        ? data.primaryPhotoBase64
-        : 'data:image/jpeg;base64,' + data.primaryPhotoBase64;
-      // Store an S3 URL (falls back to base64 if storage is unavailable).
-      updateData.primaryPhoto = await materializeImage(dataUri, coupleId);
+      // materializeImageLoose handles raw base64, data: URIs AND already-hosted
+      // URLs (the presigned-upload pipeline sends public /img/ URLs — the old
+      // blind `data:image/jpeg;base64,<value>` wrap corrupted those).
+      // Stores an S3 URL; falls back to the input if storage is unavailable.
+      updateData.primaryPhoto = await materializeImageLoose(data.primaryPhotoBase64, coupleId);
     }
 
     const existingToKeep = data.keepSecondaryPhotoUrls || [];
-    const newPhotos = await materializeImages(
-      (data.secondaryPhotosBase64 || [])
-        .filter(b64 => b64 && b64.length > 10)
-        .map(b64 => (b64.startsWith('data:') ? b64 : 'data:image/jpeg;base64,' + b64)),
-      coupleId,
-    );
+    const newPhotos = (
+      await Promise.all(
+        (data.secondaryPhotosBase64 || [])
+          .filter(b64 => b64 && b64.length > 10)
+          .map(b64 => materializeImageLoose(b64, coupleId)),
+      )
+    ).filter((v): v is string => Boolean(v));
 
     if (data.keepSecondaryPhotoUrls !== undefined || data.secondaryPhotosBase64 !== undefined) {
       updateData.secondaryPhotos = [...existingToKeep, ...newPhotos].slice(0, 3);
@@ -236,6 +278,13 @@ export class CoupleService {
           q4: 'Meeting Frequency', q5: 'What makes a good match', q6: 'Things to avoid',
         };
         const optionLabelMap: Record<string, string> = {
+      // Current client option ids (QuestionScreen drifted from the legacy set;
+      // unmapped ids leaked raw slugs like "q4-similar" into the AI bio prompt):
+      'q2-yes': "The 'yes' couple",
+      'q3-dinner': 'Dinner at home',
+      'q4-similar': 'Similar rhythms',
+      'q4-balanced': 'A balanced mix',
+      'q4-diverse': 'Wide-ranging tastes',
           'q1-career': 'Building careers', 'q1-family': 'Family first', 'q1-settled': 'Newly settled', 'q1-living': 'Living it up',
           'q1-growing': 'Growing together', 'q1-adventure': 'Always exploring',
           'q2-hosts': "The Hosts", 'q2-yes-couple': "The 'yes' couple", 'q2-planners': 'The Planners', 'q2-explorers': 'The Explorers',
@@ -327,21 +376,22 @@ export class CoupleService {
 
     // 1. Photos processing — convert incoming base64 to S3 URLs (keeps ~0.5 MB
     // blobs out of Postgres). Falls back to base64 if storage is unavailable.
+    // materializeImageLoose also passes hosted URLs through unchanged (the
+    // presigned-upload pipeline sends public /img/ URLs — the old blind
+    // base64 wrap corrupted those).
     if (data.primaryPhotoBase64 && data.primaryPhotoBase64.length > 10) {
-      const dataUri = data.primaryPhotoBase64.startsWith('data:')
-        ? data.primaryPhotoBase64
-        : 'data:image/jpeg;base64,' + data.primaryPhotoBase64;
-      updateData.primaryPhoto = await materializeImage(dataUri, coupleId);
+      updateData.primaryPhoto = await materializeImageLoose(data.primaryPhotoBase64, coupleId);
     }
 
     if (data.secondaryPhotosBase64 !== undefined || data.keepSecondaryPhotoUrls !== undefined) {
       const existingToKeep = data.keepSecondaryPhotoUrls || [];
-      const newPhotos = await materializeImages(
-        (data.secondaryPhotosBase64 || [])
-          .filter(b64 => b64 && b64.length > 10)
-          .map(b64 => b64.startsWith('data:') ? b64 : 'data:image/jpeg;base64,' + b64),
-        coupleId,
-      );
+      const newPhotos = (
+        await Promise.all(
+          (data.secondaryPhotosBase64 || [])
+            .filter(b64 => b64 && b64.length > 10)
+            .map(b64 => materializeImageLoose(b64, coupleId)),
+        )
+      ).filter((v): v is string => Boolean(v));
       updateData.secondaryPhotos = [...existingToKeep, ...newPhotos].slice(0, 3);
     }
 
@@ -388,6 +438,7 @@ export class CoupleService {
     await prisma.couple.update({ where: { coupleId }, data: updateData });
 
     // 4. Update individual Users
+    let emailConflict = false;
     if (myId && (data.yourName || data.yourDob || data.yourEmail)) {
       try {
         await prisma.user.update({
@@ -401,10 +452,15 @@ export class CoupleService {
       } catch (err: any) {
         if (err.code === 'P2002' && err.meta?.target?.includes('email')) {
              logger.warn(`[CoupleService.updateProfile] Email conflict for myId ${myId}, skipping email update.`);
+             emailConflict = true;
              await prisma.user.update({
                 where: { id: myId },
                 data: { name: data.yourName || undefined, dob: data.yourDob || undefined }
              });
+        } else {
+             // Anything else must SURFACE — this catch used to swallow every
+             // failure here and the endpoint still answered "Profile updated".
+             throw err;
         }
       }
     }
@@ -422,16 +478,19 @@ export class CoupleService {
       } catch (err: any) {
         if (err.code === 'P2002' && err.meta?.target?.includes('email')) {
              logger.warn(`[CoupleService.updateProfile] Email conflict for partnerId ${partnerId}, skipping email update.`);
+             emailConflict = true;
              await prisma.user.update({
                 where: { id: partnerId },
                 data: { name: data.partnerName || undefined, dob: data.partnerDob || undefined }
              });
+        } else {
+             throw err;
         }
       }
     }
 
     const updated = await prisma.couple.findUnique({ where: { coupleId }, include: { partner1: true, partner2: true } });
-    return this._formatCouple(updated);
+    return { couple: this._formatCouple(updated), emailConflict };
   }
 
   // Fields on the User model that must NEVER be serialized to a client.
@@ -498,18 +557,29 @@ export class CoupleService {
       where: { coupleId },
       include: {
         // Public profile card — never expose partner email addresses here.
+        // `dob` is fetched only to derive AGE below; the raw DOB is dropped.
         partner1: { select: { id: true, name: true, dob: true } },
         partner2: { select: { id: true, name: true, dob: true } },
       }
     });
     if (!couple) return null;
+    // Privacy: a stranger's public card needs AGE, never a full date of birth.
+    // Leaking day/month/year to any other couple is a needless PII disclosure
+    // (India DPDP / the-floor.md S8: return only what the client needs), so map
+    // each partner's `dob` → a computed integer `age` and drop the raw value.
+    const toPublicPartner = (p: any) =>
+      p ? { id: p.id, name: p.name, age: ageFromDobString(p.dob) } : p;
     // Strip couple-level fields that must never leak to another couple viewing a
     // public profile card:
     //  • blocked / bannedAt / banReason — moderation internals.
     //  • locationLatitude / locationLongitude — EXACT home coordinates. Discovery
     //    only ever exposes a coarse `distance` label; leaking raw lat/lng here is
     //    a stalking/safety risk, so it must never appear on a profile card.
-    const publicCouple: any = { ...couple };
+    const publicCouple: any = {
+      ...couple,
+      partner1: toPublicPartner(couple.partner1),
+      partner2: toPublicPartner(couple.partner2),
+    };
     delete publicCouple.blocked;
     delete publicCouple.bannedAt;
     delete publicCouple.banReason;
@@ -526,9 +596,15 @@ export class CoupleService {
   }
 
   async blockCouple(meId: string, targetId: string) {
-    // meId and targetId may be Mongo id or coupleId UUID — resolve both
-    const me = await prisma.couple.findUnique({ where: { id: meId }, select: { id: true, coupleId: true, blocked: true } });
-    if (!me) return null;
+    // meId and targetId may be Mongo id or coupleId UUID — resolve both.
+    // The self-lookup previously keyed ONLY on the Mongo id (which is optional
+    // in the token) and returned null on a miss — the controller then answered
+    // 200 "Couple blocked" for a block that wrote NOTHING. Fail loudly instead.
+    const me = await prisma.couple.findFirst({
+      where: { OR: [{ id: meId }, { coupleId: meId }] },
+      select: { id: true, coupleId: true, blocked: true },
+    });
+    if (!me) throw new AppError('Profile not found', 404);
 
     // Find target by either Mongo id or coupleId
     const target = await (prisma.couple as any).findFirst({
@@ -540,10 +616,14 @@ export class CoupleService {
     const blocked = me.blocked || [];
     if (!blocked.includes(resolvedTargetId)) {
       await Promise.all([
-        prisma.couple.update({
-          where: { id: meId },
-          data: { blocked: { set: [...blocked, resolvedTargetId] } },
-        }),
+        // Atomic in-DB append (deduped by the ANY guard). The old
+        // read-modify-write with `set:` lost one block when two arrived
+        // concurrently — unacceptable for a safety feature.
+        prisma.$executeRaw`
+          UPDATE "couples"
+          SET "blocked" = array_append("blocked", ${resolvedTargetId})
+          WHERE "id" = ${meId} AND NOT (${resolvedTargetId} = ANY("blocked"))
+        `,
         // Always create a report so the admin can see blocks from all sources
         me.coupleId
           ? prisma.report.create({
@@ -562,29 +642,30 @@ export class CoupleService {
   }
 
   async unblockCouple(meId: string, targetId: string) {
-    const me = await prisma.couple.findUnique({ where: { id: meId } });
-    if (!me) return null;
+    const me = await prisma.couple.findFirst({ where: { OR: [{ id: meId }, { coupleId: meId }] } });
+    if (!me) throw new AppError('Profile not found', 404);
 
     // Resolve all IDs for the target so we can remove whichever format is stored
     const target = await (prisma.couple as any).findFirst({
       where: { OR: [{ id: targetId }, { coupleId: targetId }] },
       select: { id: true, coupleId: true },
     });
-    const idsToRemove = new Set([targetId, target?.id, target?.coupleId].filter(Boolean));
-
-    const blocked = (me.blocked || []).filter((id: string) => !idsToRemove.has(id));
-    return prisma.couple.update({
-      where: { id: meId },
-      data: { blocked: { set: blocked } },
-    });
+    // Atomic in-DB removal of every id form the block may be stored under —
+    // no read-modify-write window. Passing the same value twice is harmless.
+    await prisma.$executeRaw`
+      UPDATE "couples"
+      SET "blocked" = array_remove(array_remove(array_remove("blocked", ${targetId}), ${target?.id ?? targetId}), ${target?.coupleId ?? targetId})
+      WHERE "id" = ${meId}
+    `;
+    return prisma.couple.findUnique({ where: { id: meId } });
   }
 
   async getBlockedCouples(meId: string) {
-    const me = await prisma.couple.findUnique({ where: { id: meId } });
+    const me = await prisma.couple.findFirst({ where: { OR: [{ id: meId }, { coupleId: meId }] } });
     if (!me?.blocked.length) return [];
     // blocked[] may contain either Mongo id OR coupleId (UUID) depending on which
     // block path was used — match both so all blocks are always shown
-    return prisma.couple.findMany({
+    const rows = await prisma.couple.findMany({
         where: {
           OR: [
             { id: { in: me.blocked } },
@@ -593,6 +674,8 @@ export class CoupleService {
         },
         select: { id: true, profileName: true, primaryPhoto: true, locationCity: true, coupleId: true }
     });
+    // Legacy alias the client's list type declares as required.
+    return rows.map((r) => ({ ...r, _id: r.id }));
   }
 
   async getBlockedCommunities(meId: string) {
@@ -607,12 +690,13 @@ export class CoupleService {
   }
 
   async unblockCommunity(meId: string, communityId: string) {
-    const me = await prisma.couple.findUnique({ where: { id: meId } });
-    const blocked = (me?.blocked || []).filter((id: string) => id !== communityId);
-    return prisma.couple.update({
-      where: { id: meId },
-      data: { blocked: { set: blocked } },
-    });
+    // Atomic removal — same lost-update reasoning as unblockCouple.
+    await prisma.$executeRaw`
+      UPDATE "couples"
+      SET "blocked" = array_remove("blocked", ${communityId})
+      WHERE "id" = ${meId}
+    `;
+    return prisma.couple.findUnique({ where: { id: meId } });
   }
 
   /**
@@ -687,6 +771,72 @@ export class CoupleService {
     });
     const matchIds = myMatches.map((m) => m.id);
 
+    // Hand over (or tear down) every community this couple administers BEFORE
+    // the row deletes below. leaveCommunity does this correctly; this path just
+    // dropped the admin rows, leaving zombie groups — publicly listed, joinable,
+    // with a request queue nobody could ever answer.
+    const myAdminRows = await prisma.communityAdmin.findMany({
+      where: { coupleId },
+      select: { communityId: true },
+    });
+    for (const { communityId } of myAdminRows) {
+      const [otherAdmins, otherMembers] = await Promise.all([
+        prisma.communityAdmin.count({ where: { communityId, NOT: { coupleId } } }),
+        prisma.communityMember.findMany({
+          where: { communityId, NOT: { coupleId } },
+          select: { coupleId: true },
+          take: 1,
+        }),
+      ]);
+      if (otherAdmins > 0) continue; // group keeps a working admin
+      if (otherMembers.length > 0) {
+        // Promote the longest-standing remaining member, like leaveCommunity —
+        // and TELL them: a silent handover left the new host discovering their
+        // role only by wandering into the detail screen.
+        const promotedId = otherMembers[0].coupleId;
+        await prisma.communityAdmin.create({
+          data: { communityId, coupleId: promotedId },
+        });
+        try {
+          const comm = await prisma.community.findUnique({
+            where: { id: communityId },
+            select: { name: true },
+          });
+          const row = await prisma.notification.create({
+            data: {
+              recipientId: promotedId,
+              type: 'community',
+              title: "You're now the host",
+              message: `You're now hosting "${comm?.name ?? 'your group'}" on Sawa.`,
+              data: {
+                communityId,
+                ...i18nData('community.promotedHost', { community: comm?.name ?? '' }),
+              },
+            },
+          });
+          emitRealtimeNotification(promotedId, {
+            notificationId: row.id,
+            type: row.type,
+            title: row.title,
+            message: row.message,
+            data: row.data,
+          });
+          await cacheInvalidatePattern('communities:*');
+        } catch (e: any) {
+          logger.warn(`[CoupleService] promotion notice failed: ${e.message}`);
+        }
+      } else {
+        // Sole member AND sole admin — the group dies with the account.
+        await prisma.$transaction([
+          prisma.message.deleteMany({ where: { communityId } }),
+          prisma.communityAdmin.deleteMany({ where: { communityId } }),
+          prisma.communityMember.deleteMany({ where: { communityId } }),
+          prisma.communityJoinRequest.deleteMany({ where: { communityId } }),
+          prisma.community.delete({ where: { id: communityId } }),
+        ]);
+      }
+    }
+
     // Run the whole deletion in ONE transaction so a mid-way failure can never
     // leave a half-deleted account (privacy/GDPR: no dangling personal data).
     // Order deletes children-before-parents to satisfy foreign keys. Includes
@@ -716,6 +866,26 @@ export class CoupleService {
       prisma.user.deleteMany({ where: { coupleId } }),
       prisma.couple.delete({ where: { coupleId } }),
     ]);
+
+    // Best-effort, POST-COMMIT cleanup of side-channel data the SQL transaction
+    // cannot reach: the couple's S3 media (profile photos + chat voice notes)
+    // and its Redis Us-state keys (`us:feeling:*` snapshots + `us:ask_feeling:*`
+    // throttles). Fire-and-forget — the account is already deleted, so a cleanup
+    // failure must NEVER fail or block the deletion; it only reclaims orphaned
+    // blobs/keys (LOW residual noted in the audit). Each step logs its own error.
+    void (async () => {
+      try {
+        await deleteCoupleMedia(coupleId);
+      } catch (err: any) {
+        logger.warn(`[CoupleService.deleteMyCouple] S3 media cleanup failed for ${coupleId}: ${err?.message}`);
+      }
+      try {
+        await cacheInvalidatePattern(`us:feeling:${coupleId}:*`);
+        await cacheInvalidatePattern(`us:ask_feeling:${coupleId}:*`);
+      } catch (err: any) {
+        logger.warn(`[CoupleService.deleteMyCouple] Redis Us-state cleanup failed for ${coupleId}: ${err?.message}`);
+      }
+    })();
 
     return { success: true };
   }
