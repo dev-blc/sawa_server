@@ -4,6 +4,25 @@
 
 ---
 
+## [2026-08-21] — Feature: sent-hello history + connections summary
+
+**Why**: a sent "say hello" vanished — no endpoint listed pending requests BY
+us (only `/matches/incoming` toward us), so the app could never show request
+history. The Couples tab also needed one cheap call for its "My Connections"
+entry card.
+
+**Changed** (`match.service.ts`, `match.controller.ts`, `match.routes.ts`)
+- **`GET /matches/sent`** — mirror of `/incoming` (`status:'pending',
+  actionById:me`), identical card shape, with the same blocked-couples filter
+  `getMatches` applies (legacy `/couples/blocks` rows never deleted matches).
+- **`GET /matches/summary`** — `{incoming, sent, connected}` counts in one
+  query, filtered identically so a badge can never disagree with its list.
+- Withdraw needs no new endpoint: `/matches/reject` already deletes a pending
+  row in either direction and clears its notifications — the client uses it.
+- Tests: `match.sent.test.ts` (4) — direction split, shape, blocked filtering.
+
+---
+
 ## [2026-08-21] — Fix: couple-game session fork ("both players are X")
 
 **Why**: a real two-phone test corrupted every game: both partners played as X,

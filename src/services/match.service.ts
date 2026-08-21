@@ -551,6 +551,132 @@ export class MatchService {
     }).filter(Boolean);
   }
 
+  /**
+   * Hellos WE sent that the other couple has not answered yet — the exact
+   * mirror of getIncomingRequests (actionById = me instead of ≠ me), so the
+   * app can finally show "you said hello, they haven't replied" instead of
+   * the request vanishing into nowhere. Same card shape as incoming/matches.
+   * Blocked couples are filtered like getMatches does (the legacy
+   * /couples/blocks path never deleted match rows).
+   */
+  async getSentRequests(requestingCoupleId: string, coupleMongoId?: string) {
+    let meId: string;
+    let meGeo: { locationCity?: string | null; locationLatitude?: number | null; locationLongitude?: number | null };
+    if (coupleMongoId) {
+      const meProfile = await prisma.couple.findUnique({
+        where: { id: coupleMongoId },
+        select: { coupleId: true, ...COUPLE_GEO_SELECT },
+      });
+      if (!meProfile) throw new AppError('Profile not found', 404);
+      meId = meProfile.coupleId;
+      meGeo = meProfile;
+    } else {
+      const me = await prisma.couple.findUnique({
+        where: { coupleId: requestingCoupleId },
+        select: { id: true, coupleId: true, ...COUPLE_GEO_SELECT },
+      });
+      if (!me) throw new AppError('Profile not found', 404);
+      meId = me.coupleId;
+      meGeo = me;
+    }
+
+    const meBlockedRow = await prisma.couple.findUnique({
+      where: { coupleId: meId },
+      select: { blocked: true },
+    });
+    const blockedSet = new Set(meBlockedRow?.blocked ?? []);
+
+    const COUPLE_CARD_SELECT = {
+      id: true, coupleId: true, profileName: true, primaryPhoto: true, locationCity: true,
+      locationLatitude: true, locationLongitude: true,
+    } as const;
+    const pending = await prisma.match.findMany({
+      where: {
+        status: 'pending',
+        actionById: meId,
+        OR: [{ couple1Id: meId }, { couple2Id: meId }],
+      },
+      orderBy: { createdAt: 'desc' },
+      select: {
+        id: true, couple1Id: true, couple2Id: true, createdAt: true,
+        couple1: { select: COUPLE_CARD_SELECT },
+        couple2: { select: COUPLE_CARD_SELECT },
+      },
+    });
+
+    return pending.map((m: any) => {
+      const otherCouple = m.couple1Id === meId ? m.couple2 : m.couple1;
+      if (!otherCouple) return null;
+      if (blockedSet.has(otherCouple.coupleId) || blockedSet.has(otherCouple.id)) return null;
+
+      return {
+        _id: m.id,
+        id: m.id,
+        coupleId: otherCouple.coupleId,
+        profileName: otherCouple.profileName || 'Someone',
+        primaryPhoto: otherCouple.primaryPhoto,
+        location: otherCouple.locationCity || 'Unknown',
+        distance: distanceLabelBetween(meGeo, otherCouple),
+        status: 'pending',
+        createdAt: m.createdAt
+      };
+    }).filter(Boolean);
+  }
+
+  /**
+   * One cheap call for the Couples-tab entry card: how many couples are
+   * waiting on OUR answer, how many hellos WE have pending, how many couples
+   * we're connected with. Counted with the same blocked filter the list
+   * endpoints apply, so a badge can never disagree with the list behind it.
+   */
+  async getConnectionsSummary(requestingCoupleId: string, coupleMongoId?: string) {
+    let meId: string;
+    if (coupleMongoId) {
+      const meProfile = await prisma.couple.findUnique({
+        where: { id: coupleMongoId },
+        select: { coupleId: true },
+      });
+      if (!meProfile) throw new AppError('Profile not found', 404);
+      meId = meProfile.coupleId;
+    } else {
+      const me = await prisma.couple.findUnique({
+        where: { coupleId: requestingCoupleId },
+        select: { coupleId: true },
+      });
+      if (!me) throw new AppError('Profile not found', 404);
+      meId = me.coupleId;
+    }
+
+    const meBlockedRow = await prisma.couple.findUnique({
+      where: { coupleId: meId },
+      select: { blocked: true },
+    });
+    const blockedSet = new Set(meBlockedRow?.blocked ?? []);
+
+    const rows = await prisma.match.findMany({
+      where: {
+        OR: [{ couple1Id: meId }, { couple2Id: meId }],
+        status: { in: ['pending', 'accepted'] },
+      },
+      select: {
+        couple1Id: true, couple2Id: true, actionById: true, status: true,
+        couple1: { select: { id: true, coupleId: true } },
+        couple2: { select: { id: true, coupleId: true } },
+      },
+    });
+
+    let incoming = 0, sent = 0, connected = 0;
+    for (const m of rows) {
+      const other = m.couple1Id === meId ? m.couple2 : m.couple1;
+      if (!other) continue;
+      if (blockedSet.has(other.coupleId) || blockedSet.has(other.id)) continue;
+      if (m.status === 'accepted') connected++;
+      else if (m.actionById === meId) sent++;
+      else incoming++;
+    }
+    return { incoming, sent, connected };
+  }
+
   async getMatches(requestingCoupleId: string, coupleMongoId?: string) {
     let meId: string;
     let meGeo: { locationCity?: string | null; locationLatitude?: number | null; locationLongitude?: number | null };
