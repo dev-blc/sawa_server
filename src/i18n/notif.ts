@@ -161,6 +161,20 @@ const T: Record<string, Entry> = {
       mr: '{name} सामील होऊ इच्छितात.',
     },
   },
+  'community.promotedHost': {
+    title: {
+      en: "You're now the host",
+      hi: 'अब आप होस्ट हैं',
+      kn: 'ಈಗ ನೀವು ಹೋಸ್ಟ್',
+      mr: 'आता तुम्ही होस्ट आहात',
+    },
+    body: {
+      en: 'You\'re now hosting "{community}" on Sawa.',
+      hi: 'अब आप Sawa पर "{community}" होस्ट कर रहे हैं।',
+      kn: 'ಈಗ ನೀವು Sawa ನಲ್ಲಿ "{community}" ಹೋಸ್ಟ್ ಮಾಡುತ್ತಿದ್ದೀರಿ.',
+      mr: 'आता तुम्ही Sawa वर "{community}" होस्ट करत आहात.',
+    },
+  },
   'community.requestAccepted': {
     title: { en: 'Request Accepted!', hi: 'अनुरोध स्वीकृत!', kn: 'ವಿನಂತಿ ಸ್ವೀಕರಿಸಲಾಗಿದೆ!', mr: 'विनंती स्वीकारली!' },
     body: {
@@ -450,6 +464,36 @@ const T: Record<string, Entry> = {
       hi: '{game}! स्वीकार करने और खेलने के लिए टैप करें',
       kn: '{game}! ಸ್ವೀಕರಿಸಲು ಮತ್ತು ಆಡಲು ಟ್ಯಾಪ್ ಮಾಡಿ',
       mr: '{game}! स्वीकारण्यासाठी आणि खेळण्यासाठी टॅप करा',
+    },
+  },
+  // Sent to the CHALLENGER when the partner accepts while they're offline.
+  'us.game.accepted': {
+    title: {
+      en: '{name} accepted 🎮',
+      hi: '{name} ने स्वीकार किया 🎮',
+      kn: '{name} ಸ್ವೀಕರಿಸಿದ್ದಾರೆ 🎮',
+      mr: '{name} ने स्वीकारले 🎮',
+    },
+    body: {
+      en: 'Your {game} game is on. Tap to play',
+      hi: 'आपका {game} शुरू हो गया है। खेलने के लिए टैप करें',
+      kn: 'ನಿಮ್ಮ {game} ಆಟ ಶುರುವಾಗಿದೆ. ಆಡಲು ಟ್ಯಾಪ್ ಮಾಡಿ',
+      mr: 'तुमचा {game} खेळ सुरू झाला आहे. खेळण्यासाठी टॅप करा',
+    },
+  },
+  // Sent to an OFFLINE partner when a move lands (45s/game throttle).
+  'us.game.turn': {
+    title: {
+      en: 'Your move 🎮',
+      hi: 'आपकी चाल 🎮',
+      kn: 'ನಿಮ್ಮ ಸರದಿ 🎮',
+      mr: 'तुमची खेळी 🎮',
+    },
+    body: {
+      en: '{name} played — your turn at {game}',
+      hi: '{name} ने चाल चली — {game} में अब आपकी बारी',
+      kn: '{name} ಆಡಿದ್ದಾರೆ — {game} ನಲ್ಲಿ ಈಗ ನಿಮ್ಮ ಸರದಿ',
+      mr: '{name} ने खेळी केली — {game} मध्ये आता तुमची पाळी',
     },
   },
   // Game results are written from the RECIPIENT's perspective (the partner who

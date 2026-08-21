@@ -2,10 +2,10 @@ import { Server as SocketIOServer, Socket } from 'socket.io';
 import { prisma } from '../lib/prisma';
 import { logger } from '../utils/logger';
 import { pushToUser } from '../services/push.service';
-import { clearGameChallengeNotification, clearDateRequestNotification } from '../services/notification.service';
+import { clearGameChallengeNotification, clearDateRequestNotification, updateDateRequestNotificationData } from '../services/notification.service';
 import { SOCKET_EVENTS } from '../constants/socketEvents';
 import { i18nData, renderNotif, NotifParams } from '../i18n/notif';
-import { invalidateNotifUnreadCount, cacheSet, cacheGet } from '../lib/cache';
+import { invalidateNotifUnreadCount, cacheSet, cacheGet, cacheSetNX } from '../lib/cache';
 
 /**
  * The push data's `subtype` mirrors the DB row's data.subtype so the app's tap
@@ -206,6 +206,27 @@ async function findPartnerIdAndPhoto(
   }
 }
 
+/**
+ * Is this user holding a live socket in their couple room right now?
+ * Cluster-correct: fetchSockets() goes through the Redis adapter and sees
+ * every PM2 worker; RemoteSocket exposes only `data`, hence the handshake
+ * mirror in sockets/index.ts. Fails OPEN (reports offline) — for someone
+ * actively waiting on a game, a redundant buzz beats silence.
+ */
+async function isUserOnline(
+  io: SocketIOServer,
+  coupleId: string,
+  targetUserId: string,
+): Promise<boolean> {
+  try {
+    const sockets = await io.in(`couple:${coupleId}`).fetchSockets();
+    return sockets.some((s) => s.data?.userId === targetUserId);
+  } catch (err: any) {
+    logger.warn(`[UsSocket] presence check failed (assuming offline): ${err.message}`);
+    return false;
+  }
+}
+
 export const registerUsHandlers = (io: SocketIOServer, socket: Socket): void => {
   const { userId, coupleId, userName, userRole } = socket;
   // Pronouns for the SENDER (the socket user) — used in all "from partner" copy.
@@ -291,6 +312,13 @@ export const registerUsHandlers = (io: SocketIOServer, socket: Socket): void => 
         pushTitle = `${senderName} wants to plan ${actLabel} 📅`;
 
       } else if (payload.kind === 'date_accept') {
+        // The request is answered — retire its row so the couple's OTHER
+        // device (or a reinstall) can't accept it again and resurrect a
+        // second "Date confirmed!".
+        if (payload.id) {
+          await clearDateRequestNotification(coupleId, payload.id);
+          io.to(`couple:${coupleId}`).emit('notification:new', { type: 'us_date_plan_cleared' });
+        }
         i18nKey = 'us.date.accept'; i18nParams = { name: senderName };
         await saveUsNotification({
           coupleId,
@@ -308,13 +336,31 @@ export const registerUsHandlers = (io: SocketIOServer, socket: Socket): void => 
           coupleId,
           senderUserId: userId,
           subtype: 'us_date_plan',
-          title: '😔 Date declined',
-          message: 'Maybe next time 🙏',
-          extraData: { kind: 'date_reject', ...i18nData(i18nKey, i18nParams) },
+          // Same warm register as the push — "😔 Date declined" read like a
+          // rejected form between two people who live together.
+          title: `${senderName} couldn't make it this time`,
+          message: 'Maybe another time 🤍',
+          // `id` is what lets the requester's device remove the refused plan
+          // from the calendar EVEN IF it was offline for the live relay —
+          // date_accept and date_edit already carried it; this branch dropped
+          // it, leaving a declined date sitting there looking confirmed.
+          extraData: { id: payload.id, kind: 'date_reject', ...i18nData(i18nKey, i18nParams) },
         });
         pushTitle = `${senderName} couldn't make it this time`;
 
       } else if (payload.kind === 'date_edit') {
+        // Keep the ORIGINAL request row in sync — accept reads ITS data, so an
+        // edit that only wrote a new row let a later accept resurrect the
+        // pre-edit date/time on both calendars.
+        if (payload.id) {
+          await updateDateRequestNotificationData(coupleId, payload.id, {
+            date: payload.date,
+            rawDate: payload.rawDate,
+            activity: payload.activity,
+            time: payload.time,
+            note: payload.note,
+          });
+        }
         const actLabel = payload.activity ? payload.activity : 'the plan';
         const timeLabel = payload.time ? ` at ${payload.time}` : '';
         i18nKey = 'us.date.edit'; i18nParams = { name: senderName, actLabel };
@@ -711,6 +757,35 @@ export const registerUsHandlers = (io: SocketIOServer, socket: Socket): void => 
       accepterName: firstName(userName || ''),
       at: new Date().toISOString(),
     });
+
+    // The challenger asked and then waited. us:game:start only reaches a live
+    // socket — lock the phone and they never learn the game began, which is
+    // how an accepted challenge died for long-distance couples. Push ONLY when
+    // they're genuinely offline so someone staring at the board isn't buzzed.
+    try {
+      const st2 = await prisma.coupleUsState.findUnique({ where: { coupleId } });
+      const challengerId = st2?.gameChallengerId || null;
+      if (challengerId && challengerId !== userId) {
+        const online = await isUserOnline(io, coupleId, challengerId);
+        if (!online) {
+          const accepterName = firstName(userName || 'Your partner');
+          const gameName = gameNameFor(gameType);
+          pushToUser(challengerId, {
+            title: `${accepterName} accepted 🎮`,
+            body: `Your ${gameName} game is on. Tap to play`,
+            data: {
+              type: 'us_game_challenge',
+              subtype: 'us_game_challenge',
+              gameId: payload.gameId,
+              gameType,
+              navigate: 'UsSpace',
+              ...i18nData('us.game.accepted', { name: accepterName, game: gameName }),
+            },
+            collapseKey: 'us_game',
+          }).catch(() => null);
+        }
+      }
+    } catch {}
   });
 
   // ── us:game:move — relay a board move to the partner (fast path) ───────
@@ -742,6 +817,36 @@ export const registerUsHandlers = (io: SocketIOServer, socket: Socket): void => 
         turn: payload.turn,
         byUserId: userId,
       });
+
+      // Long-distance turn: the relay above only reaches a live socket. When
+      // the partner is backgrounded, nudge their phone — capped to one buzz
+      // per game per 45s so a fast exchange never floods, and skipped entirely
+      // while they're actually looking at the board.
+      (async () => {
+        try {
+          const { partnerId } = await findPartnerIdAndPhoto(userId, coupleId);
+          if (!partnerId) return;
+          if (await isUserOnline(io, coupleId, partnerId)) return;
+          const throttleKey = `us:gameturn:${payload.gameId}:${partnerId}`;
+          const fresh = await cacheSetNX(throttleKey, '1', 45).catch(() => false);
+          if (!fresh) return;
+          const moverName = firstName(userName || 'Your partner');
+          const gameName = gameNameFor(gameType);
+          pushToUser(partnerId, {
+            title: `Your move 🎮`,
+            body: `${moverName} played — your turn at ${gameName}`,
+            data: {
+              type: 'us_game_challenge',
+              subtype: 'us_game_challenge',
+              gameId: payload.gameId,
+              gameType,
+              navigate: 'UsSpace',
+              ...i18nData('us.game.turn', { name: moverName, game: gameName }),
+            },
+            collapseKey: 'us_game',
+          }).catch(() => null);
+        } catch {}
+      })();
 
       try {
         const st = await prisma.coupleUsState.findUnique({ where: { coupleId } });

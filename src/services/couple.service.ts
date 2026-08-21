@@ -53,10 +53,24 @@ export class CoupleService {
         return !owner || owner.id === excludeUserId;
       };
 
-      // 1. Update primary user's details (email stays non-blocking on conflict)
+      // ── Caller-aware, role-preserving ────────────────────────────────────
+      // "yourName" always means THE CALLER's own name — but the caller is not
+      // always the primary. When partner2 finishes onboarding on her own phone
+      // (the default two-phones-on-one-sofa day-one path), the old code
+      // stomped role:'primary' onto her, then looked for a role:'partner' row
+      // (none — SHE was it), and CREATED A THIRD, PHONE-LESS GHOST USER from
+      // partnerName. partner2Id then pointed at the ghost: every partner
+      // lookup for the couple resolved to a token-less row and every Us-space
+      // push for that couple died silently, forever.
+      const caller = await tx.user.findUnique({ where: { id: primaryUserId } });
+      const callerRole: 'primary' | 'partner' =
+        caller?.role === 'partner' ? 'partner' : 'primary';
+
+      // 1. Update the CALLER with their own details. Role is preserved, only
+      // defaulted for a legacy row that never had one.
       const canUseYourEmail = await emailAvailable(data.yourEmail, primaryUserId);
       if (data.yourEmail && !canUseYourEmail) {
-        logger.warn(`[CoupleService.setupProfile] Primary email already exists, skipping email update.`);
+        logger.warn(`[CoupleService.setupProfile] Caller email already exists, skipping email update.`);
       }
       await tx.user.update({
         where: { id: primaryUserId },
@@ -64,13 +78,15 @@ export class CoupleService {
           name: data.yourName,
           dob: data.yourDob || undefined,
           email: canUseYourEmail ? data.yourEmail : undefined,
-          role: 'primary'
+          role: callerRole,
         }
       });
 
-      // 2. Find and update the partner user (email stays non-blocking on conflict)
+      // 2. The OTHER half is whoever else is in the couple — found by id, not
+      // by role, so a caller who IS the partner finds the primary (and never
+      // manufactures a ghost).
       let partner = await tx.user.findFirst({
-          where: { coupleId, role: 'partner' }
+          where: { coupleId, NOT: { id: primaryUserId } }
       });
 
       if (partner) {
@@ -87,6 +103,8 @@ export class CoupleService {
               }
           });
       } else if (data.partnerName) {
+          // Solo signup (partner never verified): create the placeholder with
+          // the role OPPOSITE the caller so the pair stays consistent.
           const canUsePartnerEmail = await emailAvailable(data.partnerEmail);
           if (data.partnerEmail && !canUsePartnerEmail) {
             logger.warn(`[CoupleService.setupProfile] Partner email already exists during create, skipping email.`);
@@ -96,20 +114,26 @@ export class CoupleService {
                   name: data.partnerName,
                   dob: data.partnerDob || undefined,
                   email: canUsePartnerEmail ? data.partnerEmail : undefined,
-                  role: 'partner',
+                  role: callerRole === 'primary' ? 'partner' : 'primary',
                   coupleId: coupleId
               }
           });
       }
 
-      // 3. Ensure role-based assignment for partner1/partner2 IDs
-      // We should always keep the 'primary' user as partner1 and 'partner' user as partner2
+      // 3. partner1 = primary, partner2 = partner — from ACTUAL roles, with
+      // the caller/other pair as the authoritative fallback.
       const users = await tx.user.findMany({ where: { coupleId } });
       const primaryUser = users.find(u => u.role === 'primary');
-      const partnerUser = users.find(u => u.role === 'partner');
+      const partnerUser = users.find(u => u.role === 'partner' && u.id !== primaryUser?.id);
 
-      const partner1Id = primaryUser?.id || primaryUserId;
-      const partner2Id = partnerUser?.id || partner?.id || null;
+      const partner1Id =
+        primaryUser?.id ?? (callerRole === 'primary' ? primaryUserId : partner?.id ?? null);
+      const partner2Id =
+        partnerUser?.id ?? (callerRole === 'primary' ? partner?.id ?? null : primaryUserId);
+
+      // profileName always reads primary-first, regardless of who submitted.
+      const primaryName = callerRole === 'primary' ? data.yourName : data.partnerName;
+      const secondaryName = callerRole === 'primary' ? data.partnerName : data.yourName;
 
       // 4. Upsert the Couple document
       const existingCouple = await tx.couple.findUnique({ where: { coupleId } });
@@ -120,7 +144,7 @@ export class CoupleService {
             coupleId,
             partner1Id,
             partner2Id,
-            profileName: `${data.yourName} & ${data.partnerName}`,
+            profileName: `${primaryName} & ${secondaryName}`,
             relationshipStatus: data.relationshipStatus,
             locationCity: data.location?.city || 'Unknown',
             locationCountry: data.location?.country || 'India',
@@ -133,7 +157,7 @@ export class CoupleService {
           data: {
             partner1Id: partner1Id || existingCouple.partner1Id,
             partner2Id: partner2Id || existingCouple.partner2Id,
-            profileName: `${data.yourName} & ${data.partnerName}`,
+            profileName: `${primaryName} & ${secondaryName}`,
             relationshipStatus: data.relationshipStatus,
             locationCity: data.location?.city || undefined,
             locationCountry: data.location?.country || undefined,
@@ -254,6 +278,13 @@ export class CoupleService {
           q4: 'Meeting Frequency', q5: 'What makes a good match', q6: 'Things to avoid',
         };
         const optionLabelMap: Record<string, string> = {
+      // Current client option ids (QuestionScreen drifted from the legacy set;
+      // unmapped ids leaked raw slugs like "q4-similar" into the AI bio prompt):
+      'q2-yes': "The 'yes' couple",
+      'q3-dinner': 'Dinner at home',
+      'q4-similar': 'Similar rhythms',
+      'q4-balanced': 'A balanced mix',
+      'q4-diverse': 'Wide-ranging tastes',
           'q1-career': 'Building careers', 'q1-family': 'Family first', 'q1-settled': 'Newly settled', 'q1-living': 'Living it up',
           'q1-growing': 'Growing together', 'q1-adventure': 'Always exploring',
           'q2-hosts': "The Hosts", 'q2-yes-couple': "The 'yes' couple", 'q2-planners': 'The Planners', 'q2-explorers': 'The Explorers',
@@ -565,9 +596,15 @@ export class CoupleService {
   }
 
   async blockCouple(meId: string, targetId: string) {
-    // meId and targetId may be Mongo id or coupleId UUID — resolve both
-    const me = await prisma.couple.findUnique({ where: { id: meId }, select: { id: true, coupleId: true, blocked: true } });
-    if (!me) return null;
+    // meId and targetId may be Mongo id or coupleId UUID — resolve both.
+    // The self-lookup previously keyed ONLY on the Mongo id (which is optional
+    // in the token) and returned null on a miss — the controller then answered
+    // 200 "Couple blocked" for a block that wrote NOTHING. Fail loudly instead.
+    const me = await prisma.couple.findFirst({
+      where: { OR: [{ id: meId }, { coupleId: meId }] },
+      select: { id: true, coupleId: true, blocked: true },
+    });
+    if (!me) throw new AppError('Profile not found', 404);
 
     // Find target by either Mongo id or coupleId
     const target = await (prisma.couple as any).findFirst({
@@ -605,8 +642,8 @@ export class CoupleService {
   }
 
   async unblockCouple(meId: string, targetId: string) {
-    const me = await prisma.couple.findUnique({ where: { id: meId } });
-    if (!me) return null;
+    const me = await prisma.couple.findFirst({ where: { OR: [{ id: meId }, { coupleId: meId }] } });
+    if (!me) throw new AppError('Profile not found', 404);
 
     // Resolve all IDs for the target so we can remove whichever format is stored
     const target = await (prisma.couple as any).findFirst({
@@ -624,11 +661,11 @@ export class CoupleService {
   }
 
   async getBlockedCouples(meId: string) {
-    const me = await prisma.couple.findUnique({ where: { id: meId } });
+    const me = await prisma.couple.findFirst({ where: { OR: [{ id: meId }, { coupleId: meId }] } });
     if (!me?.blocked.length) return [];
     // blocked[] may contain either Mongo id OR coupleId (UUID) depending on which
     // block path was used — match both so all blocks are always shown
-    return prisma.couple.findMany({
+    const rows = await prisma.couple.findMany({
         where: {
           OR: [
             { id: { in: me.blocked } },
@@ -637,6 +674,8 @@ export class CoupleService {
         },
         select: { id: true, profileName: true, primaryPhoto: true, locationCity: true, coupleId: true }
     });
+    // Legacy alias the client's list type declares as required.
+    return rows.map((r) => ({ ...r, _id: r.id }));
   }
 
   async getBlockedCommunities(meId: string) {
@@ -751,10 +790,41 @@ export class CoupleService {
       ]);
       if (otherAdmins > 0) continue; // group keeps a working admin
       if (otherMembers.length > 0) {
-        // Promote the longest-standing remaining member, like leaveCommunity.
+        // Promote the longest-standing remaining member, like leaveCommunity —
+        // and TELL them: a silent handover left the new host discovering their
+        // role only by wandering into the detail screen.
+        const promotedId = otherMembers[0].coupleId;
         await prisma.communityAdmin.create({
-          data: { communityId, coupleId: otherMembers[0].coupleId },
+          data: { communityId, coupleId: promotedId },
         });
+        try {
+          const comm = await prisma.community.findUnique({
+            where: { id: communityId },
+            select: { name: true },
+          });
+          const row = await prisma.notification.create({
+            data: {
+              recipientId: promotedId,
+              type: 'community',
+              title: "You're now the host",
+              message: `You're now hosting "${comm?.name ?? 'your group'}" on Sawa.`,
+              data: {
+                communityId,
+                ...i18nData('community.promotedHost', { community: comm?.name ?? '' }),
+              },
+            },
+          });
+          emitRealtimeNotification(promotedId, {
+            notificationId: row.id,
+            type: row.type,
+            title: row.title,
+            message: row.message,
+            data: row.data,
+          });
+          await cacheInvalidatePattern('communities:*');
+        } catch (e: any) {
+          logger.warn(`[CoupleService] promotion notice failed: ${e.message}`);
+        }
       } else {
         // Sole member AND sole admin — the group dies with the account.
         await prisma.$transaction([

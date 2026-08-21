@@ -415,21 +415,21 @@ export const deleteMyAccount = async (req: Request, res: Response): Promise<void
  
 export const getBlockList = async (req: Request, res: Response): Promise<void> => {
    const { coupleMongoId } = req.user!;
-   const blocked = await coupleService.getBlockedCouples(coupleMongoId!);
+   const blocked = await coupleService.getBlockedCouples(coupleMongoId ?? req.user!.coupleId!);
    sendSuccess({ res, statusCode: 200, data: { blocked } });
 };
  
 export const blockCouple = async (req: Request, res: Response): Promise<void> => {
    const { coupleMongoId } = req.user!;
    const { targetCoupleId } = req.body; // target couple's MONGO _id
-   await coupleService.blockCouple(coupleMongoId!, targetCoupleId);
+   await coupleService.blockCouple(coupleMongoId ?? req.user!.coupleId!, targetCoupleId);
    sendSuccess({ res, statusCode: 200, message: 'Couple blocked' });
 };
  
 export const unblockCouple = async (req: Request, res: Response): Promise<void> => {
    const { coupleMongoId } = req.user!;
    const { targetCoupleId } = req.body; // target couple's MONGO _id
-   await coupleService.unblockCouple(coupleMongoId!, targetCoupleId);
+   await coupleService.unblockCouple(coupleMongoId ?? req.user!.coupleId!, targetCoupleId);
    sendSuccess({ res, statusCode: 200, message: 'Couple unblocked' });
 };
 

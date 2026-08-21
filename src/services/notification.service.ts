@@ -306,6 +306,41 @@ export async function clearDateRequestNotification(coupleId: string, planId: str
   }
 }
 
+/**
+ * Merge fresh fields into the ORIGINAL planned-date REQUEST row after an edit.
+ * Accept reads that row's data verbatim — without this, editing a request
+ * before it was accepted meant both calendars landed on the PRE-edit values.
+ */
+export async function updateDateRequestNotificationData(
+  coupleId: string,
+  planId: string,
+  patch: Record<string, unknown>,
+): Promise<void> {
+  try {
+    const rows = await prisma.notification.findMany({
+      where: {
+        recipientId: coupleId,
+        type: 'system',
+        clearedAt: null,
+        AND: [
+          { data: { path: ['subtype'], equals: 'us_date_plan' } },
+          { data: { path: ['kind'], equals: 'date_request' } },
+          { data: { path: ['id'], equals: planId } },
+        ],
+      } as any,
+      select: { id: true, data: true },
+    });
+    for (const row of rows) {
+      await prisma.notification.update({
+        where: { id: row.id },
+        data: { data: { ...(row.data as object), ...patch } as any },
+      });
+    }
+  } catch {
+    // Best-effort — the live relay still carries the fresh values.
+  }
+}
+
 /** One pending connection request per matchId (per recipient). */
 export async function upsertMatchPendingNotification(params: {
   recipientId: string;

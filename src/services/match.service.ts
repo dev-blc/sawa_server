@@ -572,6 +572,12 @@ export class MatchService {
       meGeo = me;
     }
 
+    const meBlocked = await prisma.couple.findUnique({
+      where: { coupleId: meId },
+      select: { blocked: true },
+    });
+    const blockedSet = new Set(meBlocked?.blocked ?? []);
+
     const matches = await prisma.match.findMany({ 
       where: { OR: [{ couple1Id: meId }, { couple2Id: meId }], status: 'accepted' },
       select: {
@@ -604,6 +610,9 @@ export class MatchService {
     return matches.map((m: any) => {
         const otherCouple = m.couple1Id === meId ? m.couple2 : m.couple1;
         if (!otherCouple) return null;
+        // Safety net: a couple blocked through the legacy /couples/blocks path
+        // (which never deleted match rows) must not resurface in Connections.
+        if (blockedSet.has(otherCouple.coupleId) || blockedSet.has(otherCouple.id)) return null;
 
         return {
           _id: m.id,
@@ -800,24 +809,13 @@ export class MatchService {
       await clearNotificationsForMatch(m.id).catch(() => {});
     }
 
-    const notification = await prisma.notification.create({
-        data: {
-          recipientId: target.coupleId,
-          senderId: me.coupleId,
-          type: 'system',
-          title: "Connection Update",
-          message: "A couple decided not to connect at this time.",
-          data: { ...i18nData('match.rejected') },
-        }
-    });
-
-    emitRealtimeNotification(target.coupleId, {
-      notificationId: notification.id,
-      type: notification.type,
-      title: notification.title,
-      message: notification.message,
-      data: notification.data,
-    });
+    // NO rejection notification. Deliberate product change (2026-08-21,
+    // re-audit "emotional misfires"): there is no reason to tell a couple
+    // they were turned down — the request simply, quietly stops being pending
+    // on their side, the same way every considerate social product handles it.
+    // A double-tapped decline also used to send the row TWICE (the create was
+    // unconditional even when deleteMany matched zero rows). Reversible: the
+    // old block lives in git history at this commit^.
 
     return { success: true };
   }
@@ -907,6 +905,10 @@ export class MatchService {
         targetCoupleId: target.coupleId, 
         action: 'blocked' 
       });
+    // The BLOCKED side must learn too — their open thread pointed at a match
+    // row that no longer exists; without this they could keep typing into a
+    // void. The client treats it like an unfriend exit.
+    io.to(`couple:${target.coupleId}`).emit('match:accepted', { targetCoupleId: me.coupleId, action: 'blocked' });
     }
 
     return { success: true };

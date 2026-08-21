@@ -101,7 +101,8 @@ export const registerChatHandlers = (io: SocketIOServer, socket: Socket): void =
               const existing = await prisma.message.findUnique({ where: { id: existingId } });
               if (existing) {
                 socket.emit(SOCKET_EVENTS.CHAT_MESSAGE, {
-                  _id: existing.id,
+                  _id: clientMessageId,
+                  realMessageId: existing.id,
                   clientMessageId,
                   chatId,
                   chatType,
@@ -174,10 +175,22 @@ export const registerChatHandlers = (io: SocketIOServer, socket: Socket): void =
           return;
         }
 
-        // 2. BROADCAST with the real id (clientMessageId kept for the sender's
-        // optimistic-bubble reconciliation).
+        // Record the saved id against the idempotency claim IMMEDIATELY — the
+        // narrower the 'pending' window, the fewer buffered duplicates return
+        // empty-handed while the winner is still mid-broadcast.
+        if (dedupeKey) await cacheSet(dedupeKey, savedMessage.id, 24 * 60 * 60).catch(() => {});
+
+        // 2. BROADCAST — _id carries the CLIENT message id, not the DB id.
+        // Version-skew law: the store build's group chat dedupes ONLY on
+        // `m.id === data._id` against an optimistic row keyed by the client id.
+        // Broadcasting the DB id (as 42bbf2c briefly did on this branch) makes
+        // every OLD client render its own community messages twice for the
+        // whole deploy-to-approval window. The real DB id travels via the
+        // room-wide chat:messageId sync below, which BOTH generations already
+        // consume to reconcile rows for edit/delete.
         const broadcastData = {
-          _id: savedMessage.id,
+          _id: clientMessageId,
+          realMessageId: savedMessage.id,
           clientMessageId,
           chatId,
           chatType,
@@ -212,6 +225,13 @@ export const registerChatHandlers = (io: SocketIOServer, socket: Socket): void =
                 const recipientId = match.couple1Id === socket.coupleId ? match.couple2Id : match.couple1Id;
                 logger.info(`📤 [Socket] Secondary broadcast to couple:${recipientId}`);
                 io.to(`couple:${recipientId}`).emit(SOCKET_EVENTS.CHAT_MESSAGE, broadcastData);
+                // The id-sync must reach this room too — a recipient with the
+                // thread open but the chat room not yet joined would otherwise
+                // keep the row keyed by clientMessageId and miss live edits.
+                io.to(`couple:${recipientId}`).emit('chat:messageId', {
+                  clientMessageId,
+                  realMessageId: savedMessage.id,
+                });
               }
             } catch (e) {
               logger.warn('[Socket] Private recipient broadcast failed', e);
@@ -219,14 +239,11 @@ export const registerChatHandlers = (io: SocketIOServer, socket: Socket): void =
           })();
         }
 
-        // Record the saved id against the idempotency claim so a later
-        // duplicate can re-send THIS row instead of creating another.
-        if (dedupeKey) await cacheSet(dedupeKey, savedMessage.id, 24 * 60 * 60).catch(() => {});
-
-        // Sync the real DB id back to the sender so edit/delete work immediately
-        // (kept for clients that reconcile via chat:messageId rather than the
-        // broadcast's _id).
-        socket.emit('chat:messageId', {
+        // Sync the real DB id to the WHOLE room (not just the sender): with the
+        // legacy-compatible broadcast above, every receiver initially keys the
+        // row by clientMessageId — this rewrite is what makes edit/delete (which
+        // address DB ids) work live on every device, old build included.
+        io.to(`chat:${chatId}`).emit('chat:messageId', {
           clientMessageId,
           realMessageId: savedMessage.id,
         });
