@@ -634,6 +634,95 @@ export const registerUsHandlers = (io: SocketIOServer, socket: Socket): void => 
     },
   );
 
+  // ── us:chat:send — the partner thread ("Just us two") ─────────────────────
+  // Intra-couple messages, stored as Message rows with chatType='partner' and
+  // senderId = the couple's own coupleId (no match, no community — the couple
+  // IS the room). Room-wide emit doubles as the sender's delivery ack.
+  // Idempotent per clientMessageId (reconnect replays re-emit the saved id).
+  socket.on(SOCKET_EVENTS.US_CHAT_SEND, async (payload: { clientMessageId?: string; text?: string }) => {
+    if (!userId || !coupleId) return;
+    const text = (payload?.text ?? '').trim();
+    if (!text || text.length > 1000) return;
+    const clientMessageId =
+      typeof payload?.clientMessageId === 'string' && payload.clientMessageId
+        ? payload.clientMessageId.slice(0, 64)
+        : null;
+
+    const dedupeKey = clientMessageId ? `us:pchat:${coupleId}:${clientMessageId}` : null;
+    if (dedupeKey) {
+      const claimed = await cacheSetNX(dedupeKey, 'pending', 24 * 60 * 60).catch(() => true);
+      if (!claimed) {
+        const existingId = await cacheGet(dedupeKey).catch(() => null);
+        if (existingId && existingId !== 'pending') {
+          socket.emit(SOCKET_EVENTS.US_CHAT_MESSAGE, {
+            id: existingId,
+            clientMessageId,
+            coupleId,
+            senderUserId: userId,
+            senderName: firstName(userName || ''),
+            text,
+            createdAt: new Date().toISOString(),
+          });
+        }
+        return;
+      }
+    }
+
+    let saved: { id: string; createdAt: Date } | null = null;
+    try {
+      saved = await prisma.message.create({
+        data: {
+          chatType: 'partner',
+          senderId: coupleId,
+          senderUserId: userId,
+          senderName: firstName(userName || ''),
+          content: text,
+          contentType: 'text',
+        },
+        select: { id: true, createdAt: true },
+      });
+    } catch (err: any) {
+      logger.warn(`[UsSocket] partner chat persist failed: ${err.message}`);
+      if (dedupeKey) await cacheSet(dedupeKey, '', 1).catch(() => {});
+      socket.emit(SOCKET_EVENTS.US_CHAT_FAILED, { clientMessageId });
+      return;
+    }
+    if (dedupeKey) await cacheSet(dedupeKey, saved.id, 24 * 60 * 60).catch(() => {});
+
+    io.to(`couple:${coupleId}`).emit(SOCKET_EVENTS.US_CHAT_MESSAGE, {
+      id: saved.id,
+      clientMessageId,
+      coupleId,
+      senderUserId: userId,
+      senderName: firstName(userName || ''),
+      text,
+      createdAt: saved.createdAt.toISOString(),
+    });
+
+    // Offline partner: one collapsing push per thread — the newest message
+    // replaces the last (never a pile), gated on real presence.
+    try {
+      const { partnerId } = await findPartnerIdAndPhoto(userId, coupleId);
+      if (partnerId) {
+        const online = await isUserOnline(io, coupleId, partnerId);
+        if (!online) {
+          const senderName = firstName(userName || 'Your partner');
+          pushToUser(partnerId, {
+            title: senderName,
+            body: text.length > 120 ? `${text.slice(0, 117)}…` : text,
+            data: {
+              type: 'us_partner_message',
+              subtype: 'us_partner_message',
+              navigate: 'PartnerChat',
+              ...i18nData('us.chat.message', { name: senderName }),
+            },
+            collapseKey: 'us_partner_chat',
+          }).catch(() => null);
+        }
+      }
+    } catch {}
+  });
+
   // ── us:presence:sync — on-demand partner presence snapshot ───────────────
   // The connection-time broadcast only fires on TRANSITIONS, so the partner who
   // connects (or refocuses the Us tab) second was never told the first is

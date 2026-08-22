@@ -307,6 +307,71 @@ export async function getPlannedDates(args: {
 }
 
 /**
+ * The couple's private partner thread ("Just us two"): Message rows with
+ * chatType='partner' where senderId is the couple's OWN coupleId. Keyset
+ * pagination (RULES §5) walking OLDER history; the page returns oldest→newest
+ * for direct list rendering.
+ */
+export async function listPartnerMessages(args: {
+  coupleId: string;
+  cursor?: unknown;
+  limit: number;
+}): Promise<{
+  messages: Array<{
+    id: string;
+    senderUserId: string | null;
+    senderName: string;
+    text: string;
+    createdAt: Date;
+  }>;
+  nextCursor: string | null;
+}> {
+  const { coupleId, cursor, limit } = args;
+  const decoded = decodeCursor(cursor);
+  const rows = await prisma.message.findMany({
+    where: {
+      chatType: 'partner',
+      senderId: coupleId,
+      ...(decoded
+        ? {
+            OR: [
+              { createdAt: { lt: new Date(decoded.key) } },
+              { createdAt: new Date(decoded.key), id: { lt: decoded.id } },
+            ],
+          }
+        : {}),
+    },
+    select: {
+      id: true,
+      senderUserId: true,
+      senderName: true,
+      content: true,
+      createdAt: true,
+    },
+    orderBy: [{ createdAt: 'desc' }, { id: 'desc' }],
+    take: limit + 1,
+  });
+  const hasMore = rows.length > limit;
+  const page = hasMore ? rows.slice(0, limit) : rows;
+  const oldest = page[page.length - 1];
+  const nextCursor =
+    hasMore && oldest ? encodeCursor(oldest.createdAt.toISOString(), oldest.id) : null;
+  return {
+    messages: page
+      .slice()
+      .reverse()
+      .map((m) => ({
+        id: m.id,
+        senderUserId: m.senderUserId,
+        senderName: m.senderName,
+        text: m.content,
+        createdAt: m.createdAt,
+      })),
+    nextCursor,
+  };
+}
+
+/**
  * Update an existing planned date — deliberately update-only, never upsert:
  * a date REQUEST the partner has not accepted yet exists only on the
  * creator's device, and an edit must not create the server row (that would

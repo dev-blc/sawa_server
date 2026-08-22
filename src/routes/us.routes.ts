@@ -43,6 +43,7 @@ import {
   getActiveGame,
   MAX_FRIDGE_NOTES,
   PLANNED_DATES_DEFAULT_LIMIT,
+  listPartnerMessages,
 } from '../services/us.service';
 
 const router = Router();
@@ -374,6 +375,28 @@ router.get('/game/points', authenticate, async (req: Request, res: Response): Pr
   } catch (err: any) {
     logger.warn(`[UsRoutes] game points GET error: ${err.message}`);
     res.json({ success: true, data: { points: {}, streak: null } });
+  }
+});
+
+/**
+ * GET /api/v1/us/partner-chat
+ * The couple's private partner thread ("Just us two"), keyset-paginated per
+ * RULES §5 (`?cursor=&limit=`, cap 100; `nextCursor` walks older history —
+ * the mobile load-more ships in the same change). Page arrives oldest→newest.
+ */
+router.get('/partner-chat', authenticate, async (req: Request, res: Response): Promise<void> => {
+  const coupleId = req.user?.coupleId;
+  if (!coupleId) { res.status(400).json({ success: false, error: 'Missing couple context' }); return; }
+  try {
+    const { messages, nextCursor } = await listPartnerMessages({
+      coupleId,
+      cursor: req.query.cursor,
+      limit: clampLimit(req.query.limit, 50),
+    });
+    res.json({ success: true, data: { messages, nextCursor } });
+  } catch (err: any) {
+    logger.warn(`[UsRoutes] partner-chat GET error: ${err.message}`);
+    res.status(500).json({ success: false, error: 'Failed to load messages' });
   }
 });
 

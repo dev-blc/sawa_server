@@ -26,6 +26,10 @@ export const SOCKET_EVENTS = {
   // { userId, online: boolean }. Socket-only by design: no Notification row, no
   // push (see src/sockets/index.ts).
   US_PARTNER_PRESENCE: 'us:partner:presence',
+  // Partner thread ("Just us two") — intra-couple chat.
+  US_CHAT_SEND: 'us:chat:send',
+  US_CHAT_MESSAGE: 'us:chat:message',
+  US_CHAT_FAILED: 'us:chat:failed',
 
   // Couple games (src/sockets/us.socket.ts). LEAVE is the soft exit — board
   // closed, session kept for resume; QUIT is the hard exit — session cleared.

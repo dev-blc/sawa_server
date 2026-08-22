@@ -386,7 +386,7 @@ export const createApp = (): Application => {
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <title>Get SAWA</title>
-  <meta property="og:title"       content="SAWA — Everything, Built Around Couples" />
+  <meta property="og:title"       content="SAWA — Everything, built around couples" />
   <meta property="og:description" content="A warm, family-friendly space for couples to connect with other couples." />
   <meta property="og:type"        content="website" />
   <meta name="apple-itunes-app"   content="app-id=${IOS_APP_ID}" />

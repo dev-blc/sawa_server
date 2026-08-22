@@ -218,6 +218,8 @@ model Message {
   @@index([communityId, senderId])
   // Used by the admin per-user message-count query (delete/inspect flows).
   @@index([senderUserId])
+  // Partner-thread history (chatType=partner scans by couple + time).
+  @@index([senderId, chatType, createdAt])
   @@map("messages")
 }
 
@@ -422,6 +424,9 @@ enum MatchStatus {
 enum ChatType {
   private
   group
+  /// Intra-couple thread ("Just us two"): senderId is the couple's own
+  /// coupleId, matchId/communityId stay null. Deployed via db:push.
+  partner
 }
 
 enum ContentType {

@@ -467,6 +467,20 @@ const T: Record<string, Entry> = {
     },
   },
   // Sent to the CHALLENGER when the partner accepts while they're offline.
+  'us.chat.message': {
+    title: {
+      en: '{name}',
+      hi: '{name}',
+      kn: '{name}',
+      mr: '{name}',
+    },
+    body: {
+      en: 'sent you a message 💬',
+      hi: 'ने आपको संदेश भेजा 💬',
+      kn: 'ನಿಮಗೆ ಸಂದೇಶ ಕಳುಹಿಸಿದ್ದಾರೆ 💬',
+      mr: 'ने तुम्हाला संदेश पाठवला 💬',
+    },
+  },
   'us.game.accepted': {
     title: {
       en: '{name} accepted 🎮',
