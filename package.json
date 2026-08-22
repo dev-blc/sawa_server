@@ -6,7 +6,7 @@
   "scripts": {
     "dev": "lsof -ti:3000 | xargs kill -9 || true; ts-node-dev --respawn --transpile-only src/server.ts",
     "build": "tsc",
-    "start": "pm2-runtime start ecosystem.config.js",
+    "start": "npm run db:deploy && pm2-runtime start ecosystem.config.js",
     "seed": "ts-node src/scripts/seed.ts",
     "db:flush": "ts-node src/scripts/flushDB.ts",
     "fix:locations": "ts-node src/scripts/fixCoupleLocations.ts",
@@ -16,7 +16,8 @@
     "test:watch": "jest --watch",
     "typecheck": "tsc --noEmit",
     "postinstall": "npx prisma generate && npm run build",
-    "db:push": "npx prisma db push --accept-data-loss"
+    "db:push": "npx prisma db push --accept-data-loss",
+    "db:deploy": "npx prisma db push --skip-generate"
   },
   "dependencies": {
     "@apple/app-store-server-library": "^3.1.0",

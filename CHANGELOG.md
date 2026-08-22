@@ -4,6 +4,21 @@
 
 ---
 
+## [2026-08-22] — Schema syncs itself on deploy (`start` runs `db:deploy`)
+
+**Why:** prod has no shell (Railway, no CLI in the team's flow), so "merge the
+schema change, then someone runs `npm run db:push`" failed twice — the partner
+thread shipped in code while prod's ChatType enum still lacked `partner`,
+making every partner-chat send fail at the Prisma layer. Kiran asked for the
+push to live in the script itself.
+
+**What:** new `db:deploy` script = `prisma db push --skip-generate` — no
+`--accept-data-loss`. `start` runs it before `pm2-runtime`. Additive changes
+(enums, indexes, columns) apply automatically on every deploy/restart; a LOSSY
+change fails the boot deliberately so destroying prod data always requires the
+explicit `npm run db:push` and a human. `prisma` is a runtime dependency, so
+the CLI is present at start. Documented in RULES.md §9.
+
 ## [2026-08-21] — Feature: the partner thread ("Just us two")
 
 **Why**: Arfam — "create a screen where we can talk with our partner, a
