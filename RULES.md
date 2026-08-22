@@ -191,6 +191,13 @@
   generated 1:1 from `env.ts`. Copy it to `.env` to set up. When you add or
   remove an env var in `env.ts`, update `.env.example` in the same commit;
   `env.ts` remains the authoritative validated list.
+- **Schema deploys itself:** `npm start` runs `db:deploy`
+  (`prisma db push --skip-generate`, NO `--accept-data-loss`) before
+  pm2-runtime. Additive schema changes apply on every deploy/restart
+  automatically (prod has no shell — Railway). A LOSSY change makes the boot
+  fail on purpose: that is the guardrail, not a bug — destructive pushes
+  happen only through the explicit `npm run db:push` with a human deciding.
+  This repo deliberately has no migrations folder; `db push` is the flow.
 
 ## 10. Documentation rules
 
